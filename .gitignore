@@ -1,0 +1,15 @@
+# IDE
+.idea/
+
+# bkit runtime state
+.bkit/runtime/
+.bkit/state/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+.env
+.env.local
