@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "til-manager": {
+      "source": "Get-bot/claude-toolkit",
+      "sourceType": "github",
+      "computedHash": "dcaa0c5e6788635645f2b5ada3a17482cec170177503fa2826e1d1df3a24a568"
+    }
+  }
+}
