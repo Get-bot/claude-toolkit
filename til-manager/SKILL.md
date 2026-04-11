@@ -213,6 +213,10 @@ type: reference
 3. **받은 정보로 기본 브랜치 자동 확인**:
    ```bash
    local_path="<local_path>"
+   # 방어적 틸드 확장 — "$local_path" 처럼 따옴표로 묶으면 bash 가 ~ 를 literal 로
+   # 해석하므로, 사용자가 ~/repos/TIL 을 입력한 경우 cd 가 실패한다. 파라미터 확장
+   # (#\~ 앵커)으로 앞머리 ~ 만 $HOME 으로 치환해 따옴표 안에서도 전개되게 한다.
+   local_path="${local_path/#\~/$HOME}"
    cd "$local_path" || { echo "경로를 찾을 수 없습니다: $local_path" >&2; exit 1; }
 
    ref=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
