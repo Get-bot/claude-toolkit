@@ -212,27 +212,36 @@ type: reference
    ```
 3. **받은 정보로 기본 브랜치 자동 확인**:
    ```bash
-   cd <local_path> || { echo "경로를 찾을 수 없습니다: <local_path>" >&2; exit 1; }
-
-   # 느린/끊긴 원격에서 스킬이 멈추지 않도록 git HTTP 타임아웃을 건다 (cross-platform).
-   export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10
+   local_path="<local_path>"
+   # 방어적 틸드 확장 — "$local_path" 처럼 따옴표로 묶으면 bash 가 ~ 를 literal 로
+   # 해석하므로, 사용자가 ~/repos/TIL 을 입력한 경우 cd 가 실패한다. 파라미터 확장
+   # (#\~ 앵커)으로 앞머리 ~ 만 $HOME 으로 치환해 따옴표 안에서도 전개되게 한다.
+   local_path="${local_path/#\~/$HOME}"
+   cd "$local_path" || { echo "경로를 찾을 수 없습니다: $local_path" >&2; exit 1; }
 
    ref=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
    default_branch="${ref#origin/}"
 
    # 폴백: origin/HEAD 미설정(fresh clone 등) 시 원격에 직접 질의.
    # ls-remote --symref 는 plumbing 출력이라 로케일 영향 없음.
+   # GIT_HTTP_LOW_SPEED_* 는 이 한 호출에만 적용 — export 로 전역 오염시키지 않는다
+   # (같은 스크립트 내 후속 git pull/push 가 의도치 않게 이 타임아웃에 걸리는 걸 방지).
    if [ -z "$default_branch" ]; then
-     default_branch=$(git ls-remote --symref origin HEAD 2>/dev/null \
+     default_branch=$(GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10 \
+       git ls-remote --symref origin HEAD 2>/dev/null \
        | awk '/^ref: refs\/heads\// { sub("refs/heads/", "", $2); print $2; exit }')
    fi
 
    if [ -z "$default_branch" ]; then
-     echo "기본 브랜치를 자동으로 확인하지 못했습니다. 직접 지정해 주세요 (예: main 또는 master)."
+     echo "기본 브랜치를 자동으로 확인하지 못했습니다. 직접 지정해 주세요 (예: main 또는 master)." >&2
+     exit 2
    fi
+
+   # 성공 시 결과값을 stdout 으로 내보내 다음 단계에서 파싱할 수 있게 한다.
+   printf 'default_branch=%s\n' "$default_branch"
    ```
 
-   - **tier 3 (자동 확인 실패) 도달 시**: 스크립트는 `exit` 하지 않는다. Claude 는 이 경고를 감지하면 bash 실행을 끝내고 사용자에게 브랜치명을 직접 질문한 뒤, 응답값을 `default_branch` 로 사용해 다음 단계(til_repo.md 저장)로 넘어간다. (tier 0 `cd` 실패는 복구 불가라 즉시 `exit 1`.)
+   - **tier 3 (자동 확인 실패) 도달 시**: 스크립트는 `exit 2` 로 종료한다. Claude 는 비영 exit code 와 stderr 경고를 보면 사용자에게 브랜치명을 직접 질문한 뒤, 응답값을 `default_branch` 로 사용해 다음 단계(til_repo.md 저장)로 넘어간다. (tier 0 `cd` 실패는 `exit 1`, tier 3 자동 확인 실패는 `exit 2` — Claude 는 exit code 로 두 실패를 구분한다.)
    - **private 레포 주의**: `ls-remote` 는 네트워크 호출이라 private 원격에서는 인증 프롬프트가 뜰 수 있다. 인증이 안 돼 있으면 폴백이 실패하고 tier 3 로 떨어진다.
 
    > **왜 파이프 한 줄 대신 변수 할당 + 빈 문자열 검사인가**: `git ... | awk ... || fallback`
