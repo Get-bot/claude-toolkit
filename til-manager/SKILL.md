@@ -152,9 +152,42 @@ Notion의 block 구조에 맞게 TIL 내용을 작성한다.
 
 ---
 
+## TIL 레포 설정 (최초 1회)
+
+TIL 푸시 대상 Git 레포는 **사용자별로 다르다**. 이 스킬은 특정 레포에 고정되어 있지 않다.
+
+### 레포 정보 확인 순서
+
+1. **자동 메모리 조회 먼저**: `~/.claude/projects/.../memory/MEMORY.md`에서 `TIL repo` 관련 reference 메모를 찾는다.
+   - 있으면 그 값을 그대로 사용한다. 사용자에게 다시 묻지 않는다.
+2. **없으면 사용자에게 한 번만 질문**:
+   ```
+   TIL을 푸시할 Git 레포를 알려주세요:
+   - 원격 URL (예: https://github.com/<user>/TIL)
+   - 로컬 클론 경로 (예: /d/repos/TIL 또는 ~/repos/TIL)
+   ```
+3. **받은 즉시 자동 메모리에 reference 타입으로 저장**한다:
+   - 파일명 예: `til_repo.md`
+   - 내용: 원격 URL + 로컬 경로 + "Phase 2 TIL 푸시 시 사용" 용도 메모
+   - `MEMORY.md` 인덱스에도 한 줄 추가
+4. 이후 세션부터는 Step 1(자동 메모리 조회)에서 바로 재사용된다.
+
+### 레포 구조 가정
+
+본 스킬은 대상 레포가 다음 구조를 **갖추고 있다고 가정**한다:
+- `posts/` 디렉토리가 존재 (없으면 생성)
+- 기본 브랜치가 `main` 또는 `master` (실제 값은 `git remote show origin`으로 확인)
+- 사용자가 push 권한을 가진 상태 (인증은 본 스킬의 책임이 아님)
+
+> 이 설정은 **Phase 2(푸시)에서만 필요**하다. Phase 1(Notion 저장)은 Git 레포 정보가 없어도 동작한다.
+
+---
+
 ## Phase 2: TIL 푸시 (Notion → Git)
 
 사용자가 Notion에서 TIL을 수정한 뒤 "푸시해줘"라고 요청하면 실행.
+
+> **사전 조건**: 위의 "TIL 레포 설정" 섹션에 따라 사용자의 TIL 레포 정보(원격 URL + 로컬 경로)가 자동 메모리에 저장되어 있어야 한다. 없으면 먼저 확인 단계를 수행한다.
 
 ### Step 1 — Notion에서 TIL fetch
 
@@ -169,8 +202,8 @@ Notion의 block 구조에 맞게 TIL 내용을 작성한다.
 
 `references/frontmatter-spec.md`를 참고하여 변환한다.
 
-**출력 파일 경로**: `posts/TIL-YYMMDD-slug.md`
-**Git 레포**: `https://github.com/Get-bot/TIL`
+**출력 파일 경로**: `posts/TIL-YYMMDD-slug.md` (대상 레포의 `posts/` 디렉토리 하위)
+**Git 레포**: 자동 메모리에 저장된 사용자별 TIL 레포 사용 (위 "TIL 레포 설정" 섹션 참조)
 
 slug 생성 규칙: 주제명에서 영어 키워드 추출 → 소문자 → 하이픈 연결
 - `[TIL-260409] Redis 캐시 전략` → `posts/TIL-260409-redis-cache.md`
@@ -212,12 +245,15 @@ description: "Cache-Aside 패턴 적용, TTL 기반 무효화 전략, @Cacheable
 - **이 규칙은 고정이다. 사용자에게 "어떤 커밋 메시지로 할까요?"라고 묻지 않는다.**
   사용자가 별도로 다른 메시지를 지정한 경우에만 그 지시를 따른다.
 
-**예시** (실제 레포 기준):
+**예시**:
 ```
 TIL: 2026-04-11 - PR 리뷰로 정리한 Spring Boot + Kotlin 관용 패턴
 TIL: 2026-04-10 - DDD 도메인 설계 3원칙
 TIL: 2026-04-09 - Kotlin JPA Entity 패턴 — 선착순 이벤트 도메인 설계
 ```
+
+> 참고: 주제명 내부에 하이픈(`-`)이나 em dash(`—`)가 포함돼도 괜찮다.
+> 커밋 메시지를 파싱할 때는 **첫 번째 ` - `(공백-하이픈-공백)** 만 날짜/주제 구분자로 해석한다.
 
 **하루 여러 TIL 푸시 시**: 각 TIL을 **개별 커밋**으로 나눈다. 하나의 커밋에 여러 주제를 묶지 않는다.
 주제별로 한 커밋 = 한 파일 원칙을 지켜야 나중에 `git log`로 주제 추적이 쉽다.
@@ -232,6 +268,7 @@ TIL: 2026-04-09 - Kotlin JPA Entity 패턴 — 선착순 이벤트 도메인 설
 
 #### Claude Code (CLI 환경)
 ```bash
+# <TIL_REPO_PATH>는 자동 메모리에 저장된 사용자의 TIL 레포 로컬 경로
 cd <TIL_REPO_PATH>
 git pull origin main
 cp <generated-file> posts/TIL-260409-redis-cache.md
@@ -239,6 +276,8 @@ git add posts/TIL-260409-redis-cache.md
 git commit -m "TIL: 2026-04-09 - Redis 캐시 전략"
 git push origin main
 ```
+
+> 기본 브랜치가 `main`이 아닌 경우(`master` 등) 자동 메모리에 같이 저장해두거나 `git symbolic-ref refs/remotes/origin/HEAD`로 확인 후 사용한다.
 
 #### Claude.ai (MCP 환경)
 Claude.ai에서는 직접 git push가 불가능하므로:
