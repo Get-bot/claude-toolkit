@@ -184,8 +184,9 @@ til-manager/
 └── references/
     ├── til-template.md         # TIL 4섹션 템플릿
     ├── human-writing-guide.md  # 자연스러운 문체 가이드
-    ├── frontmatter-spec.md     # Git push용 Markdown frontmatter 규격
-    └── notion-setup.md         # Notion DB 연결 설정
+    ├── frontmatter-spec.md     # slug/파일명 규칙, frontmatter 규격, 본문 변환
+    ├── notion-setup.md         # Notion DB 연결 설정
+    └── git-repo-setup.md       # TIL Git 레포 설정 (브랜치 감지, 메모리 저장)
 ```
 
 ## 커스터마이징
@@ -195,8 +196,8 @@ til-manager/
 | TIL 구조/섹션 | `references/til-template.md` |
 | 문체 규칙 | `references/human-writing-guide.md` |
 | Notion DB 설정 | `references/notion-setup.md` |
-| frontmatter 형식 | `references/frontmatter-spec.md` |
-| Git 레포 경로 | `SKILL.md` 내 레포 URL |
+| frontmatter/slug 규칙 | `references/frontmatter-spec.md` |
+| Git 레포 설정 | `references/git-repo-setup.md` |
 
 ## Git Push 결과물
 

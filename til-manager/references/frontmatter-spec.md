@@ -14,11 +14,23 @@ Hugo, Jekyll 같은 정적 사이트 생성기가 이 정보를 읽어서 글 �
 posts/TIL-YYMMDD-slug.md
 ```
 
-- 레포: `https://github.com/Get-bot/TIL`
+- 레포: 메모리에서 로드 (`git-repo-setup.md` 참조)
 - 디렉토리: `posts/`
 - 파일명: `TIL-YYMMDD-slug.md`
-- 예: `TIL-260409-redis-cache.md`, `TIL-260409-oauth2-kakao-login.md`
-- slug 규칙: 주제의 영어 키워드, 소문자, 하이픈 구분
+
+### slug 생성 규칙
+
+주제명에서 영어 키워드 추출 → 소문자 → 하이픈 연결 → 특수문자 제거.
+
+| TIL 제목 | slug | 파일명 |
+|----------|------|--------|
+| `[TIL-260409] Redis Cache-Aside 패턴 적용` | `redis-cache-aside` | `TIL-260409-redis-cache-aside.md` |
+| `[TIL-260409] OAuth2 카카오 로그인 구현` | `oauth2-kakao-login` | `TIL-260409-oauth2-kakao-login.md` |
+| `[TIL-260409] Redis 캐시 전략` | `redis-cache` | `TIL-260409-redis-cache.md` |
+
+- 한국어 키워드는 대응하는 영어로 변환 ("캐시 전략" → `cache`)
+- 관사, 조사, 접속사 등 불필요한 단어 제거
+- 연속 하이픈 금지 (`--` → `-`)
 
 ## Frontmatter 필드
 
