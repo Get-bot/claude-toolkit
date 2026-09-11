@@ -43,8 +43,21 @@ export interface TestEndpoint {
   /** `SHA256:...` of the server host key, for pinning in `hosts.json`. */
   hostKeyFingerprint: string;
   kind: EndpointKind;
-  /** Remote home directory: the sandbox for `fixture`, `$HOME` for `sshd`. */
+  /**
+   * Alias of {@link TestEndpoint.localSandboxDir}, kept for existing callers.
+   *
+   * It used to hold the *remote* `$HOME` on the sshd tier while every caller
+   * used it as a local path for `mkdirSync`/`mkdtempSync`, which could not work
+   * against a real server and pointed local writes at a path chosen by the
+   * remote host (CR-2). It now always names a local directory, so the worst a
+   * stale caller can do is write inside the sandbox. New code should say which
+   * side it means.
+   */
   homeDir: string;
+  /** A local temp directory, on both tiers. Use it for any local fs call. */
+  localSandboxDir: string;
+  /** Home directory ON THE REMOTE SIDE: the sandbox for `fixture`, `$HOME` for `sshd`. */
+  remoteHomeDir: string;
   close(): Promise<void>;
   /**
    * The in-process server, when there is one. Protocol-level assertions
@@ -161,6 +174,10 @@ export async function startEndpoint(options: StartEndpointOptions = {}): Promise
     const user = requiredEnv('SSH_MCP_SSHD_USER');
     const password = requiredEnv('SSH_MCP_SSHD_PASSWORD');
     const probe = await probeRealSshd(host, port, user, password);
+    // The remote home is a path on another machine. Local file operations get
+    // their own sandbox here so nothing in the suite can be steered into
+    // writing at a path the remote host chose (CR-2).
+    const localSandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-mcp-sshd-local-'));
     return {
       host,
       port,
@@ -168,8 +185,15 @@ export async function startEndpoint(options: StartEndpointOptions = {}): Promise
       password,
       hostKeyFingerprint: probe.fingerprint,
       kind,
-      homeDir: probe.homeDir,
+      homeDir: localSandboxDir,
+      localSandboxDir,
+      remoteHomeDir: probe.homeDir,
       close(): Promise<void> {
+        try {
+          fs.rmSync(localSandboxDir, { recursive: true, force: true });
+        } catch {
+          // A leftover temp directory is not worth failing a test over.
+        }
         return Promise.resolve();
       },
     };
@@ -205,7 +229,11 @@ export async function startEndpoint(options: StartEndpointOptions = {}): Promise
     password,
     hostKeyFingerprint: hostKey.fingerprint,
     kind,
+    // The in-process server runs on this machine, so both sides are the same
+    // directory here. Only the sshd tier has to tell them apart.
     homeDir,
+    localSandboxDir: homeDir,
+    remoteHomeDir: homeDir,
     fixture,
     async close(): Promise<void> {
       await fixture.close();
@@ -247,7 +275,7 @@ export function hostEntryFor(
     hostname: endpoint.host,
     port: endpoint.port,
     user: endpoint.user,
-    privateKeyPath: overrides.privateKeyPath ?? path.join(endpoint.homeDir, 'unused-key'),
+    privateKeyPath: overrides.privateKeyPath ?? path.join(endpoint.localSandboxDir, 'unused-key'),
     hostKey: {
       algo: 'ssh-ed25519',
       sha256: overrides.hostKeyFingerprint ?? endpoint.hostKeyFingerprint,
@@ -269,7 +297,17 @@ export function hostEntryFor(
 
 /** Write `publicKey` into the endpoint's `authorized_keys` (setup flow tests). */
 export function authorizeKey(endpoint: TestEndpoint, publicKey: string): void {
-  const dir = path.join(endpoint.homeDir, '.ssh');
+  if (endpoint.kind === 'sshd') {
+    // The remote home belongs to another machine; writing there with `fs`
+    // would silently create a lookalike directory on this one. Installing a
+    // key on the real-sshd tier has to go over SSH, which is what the setup
+    // flow itself does.
+    throw new Error(
+      'authorizeKey works on the in-process fixture only; ' +
+        'install the key over SSH for ENDPOINT=sshd'
+    );
+  }
+  const dir = path.join(endpoint.localSandboxDir, '.ssh');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'authorized_keys');
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';

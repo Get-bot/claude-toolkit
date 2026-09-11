@@ -13,8 +13,8 @@ import {
   buildCommandFrame,
   buildPingFrame,
   completionPattern,
-  createMarker,
   createMarkerScanner,
+  deriveMarker,
   stderrCompletionPattern,
 } from '../../src/ssh/session.js';
 
@@ -34,15 +34,34 @@ function feed(scanner: ReturnType<typeof createMarkerScanner>, pieces: Buffer[])
   return clean.toString('utf8');
 }
 
-describe('marker generation', () => {
-  it('produces a 40 character marker that is different every time', () => {
-    const first = createMarker();
-    const second = createMarker();
-    expect(first).toHaveLength(MARKER_LENGTH);
-    expect(second).toHaveLength(MARKER_LENGTH);
-    expect(first).not.toBe(second);
-    expect(first.startsWith('__SM_')).toBe(true);
-    expect(first.endsWith('__')).toBe(true);
+describe('marker derivation (F2)', () => {
+  const secret = Buffer.from('0123456789abcdef0123456789abcdef', 'utf8');
+
+  it('produces a 40 character marker of the expected shape', () => {
+    const marker = deriveMarker(secret, 1);
+    expect(marker).toHaveLength(MARKER_LENGTH);
+    expect(marker.startsWith('__SM_')).toBe(true);
+    expect(marker.endsWith('__')).toBe(true);
+  });
+
+  it('gives a different marker for every command in a session', () => {
+    const seen = new Set<string>();
+    for (let counter = 1; counter <= 200; counter += 1) seen.add(deriveMarker(secret, counter));
+    expect(seen.size).toBe(200);
+  });
+
+  it('is deterministic for one secret and counter, and unguessable without the secret', () => {
+    expect(deriveMarker(secret, 7)).toBe(deriveMarker(secret, 7));
+    const otherSecret = Buffer.from('fedcba9876543210fedcba9876543210', 'utf8');
+    expect(deriveMarker(otherSecret, 7)).not.toBe(deriveMarker(secret, 7));
+  });
+
+  it('does not reveal the next marker to anyone holding the current one', () => {
+    // The remote side can at best observe a spent marker; the next one is an
+    // HMAC under a secret that never leaves this process.
+    const current = deriveMarker(secret, 3);
+    const next = deriveMarker(secret, 4);
+    expect(next).not.toContain(current.slice(5, 20));
   });
 
   it('builds patterns that require the surrounding newlines', () => {

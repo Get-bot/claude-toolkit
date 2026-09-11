@@ -182,6 +182,64 @@ describe('minimum lines per side', () => {
   });
 });
 
+describe('tail window starting one byte in (CR-3)', () => {
+  /**
+   * Regression guard for a negative `lastIndexOf` offset.
+   *
+   * When the tail window happens to start at byte 1, asking for the newline
+   * "before byte -1" used to be read by Node as an offset from the END of the
+   * buffer, so it returned the LAST newline, moved the window forwards and
+   * dropped tail content. The window starts at byte 1 only for a narrow band
+   * of caps, where the 20-line floor of 160 KiB just exceeds the tail byte
+   * budget, so the cap here is chosen to land exactly on it.
+   */
+  const CR3_CAP = 273065;
+
+  /**
+   * Four tail lines, deliberately. The faulty walk oscillates through the
+   * newline positions, and with two lines it happens to land back where it
+   * started, so a two-line case passes either way. With four it stops on an
+   * empty window, which is what makes this a real regression guard.
+   */
+  function cr3Input(): Buffer {
+    const head = `${'a'.repeat(236160)}\n`; // one long line ending at byte 236160
+    const line = `${'x'.repeat(40959)}\n`; // 40 960 bytes
+    const last = `${'z'.repeat(40958)}\n`; // 40 959 bytes
+    return Buffer.from(head + line.repeat(3) + last, 'utf8');
+  }
+
+  it('keeps every tail line instead of walking the window forwards', () => {
+    const data = cr3Input();
+    expect(data.length).toBe(400000);
+
+    const result = excerpt(data, { cap: CR3_CAP });
+
+    expect(result.meta.truncated).toBe(true);
+    expect(result.meta.total_lines).toBe(5);
+    // The window holds four complete lines. The bug walked past all of them
+    // and returned an empty tail, so this count is the assertion that matters.
+    expect(result.meta.tail_lines).toBe(4);
+    expect(result.meta.tail_bytes).toBeGreaterThan(0);
+    expect(result.text).toContain('x'.repeat(200));
+    expect(result.text).toContain('z'.repeat(200));
+    // Every tail line is over 8 KiB, so each is cut to the per-line ceiling
+    // and annotated; the four newline terminators are kept on top of that.
+    expect(result.meta.tail_bytes).toBe(4 * MAX_LINE_BYTES + 4);
+  });
+
+  it('still reports counts that add up', () => {
+    const result = excerpt(cr3Input(), { cap: CR3_CAP });
+    expect(result.meta.omitted_bytes).toBe(
+      result.meta.total_bytes - result.meta.head_bytes - result.meta.tail_bytes
+    );
+    expect(result.meta.omitted_lines).toBe(
+      (result.meta.total_lines as number) -
+        (result.meta.head_lines as number) -
+        (result.meta.tail_lines as number)
+    );
+  });
+});
+
 describe('long lines', () => {
   it('cuts a line over 8 KiB and annotates it (AC12.8)', () => {
     // The long line has to land inside the head window to be cut rather than

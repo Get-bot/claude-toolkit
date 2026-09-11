@@ -3,7 +3,7 @@
  *
  * A session is one pty-less `shell` channel kept open on a pooled connection.
  * Commands are handed to it inside a fixed frame and completion is detected by
- * a per-session random marker, not by a quiet period:
+ * a marker that is rotated for every frame, not by a quiet period:
  *
  * ```
  * __SM_CMD=$(printf %s '<base64>' | base64 -d); eval "$__SM_CMD" </dev/null; \
@@ -26,14 +26,15 @@
  * - The marker is printed on *both* streams, with a leading and trailing
  *   newline, and matched as `\n<MARKER>(\d{1,3})\n`. Requiring the newlines is
  *   what keeps a command that echoes the marker mid-line from faking
- *   completion (F12/C4).
+ *   completion (F12/C4), and rotating it per command keeps a command that
+ *   *learns* the marker from faking one either (F2; see `deriveMarker`).
  *
  * The excerpt accumulators sit downstream of marker extraction, so our frame
  * bytes and handshake round trips never appear in `total_lines` or
  * `omitted_lines` (N3). Marker scanning itself continues on the raw stream
  * regardless of how full the excerpt buffers are.
  */
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import type { Client, ClientChannel } from 'ssh2';
 
 import { ERROR_CODES, isCodedError } from '../errors.js';
@@ -100,19 +101,32 @@ export function configureSessions(overrides: Partial<SessionConfig>): void {
   Object.assign(config, overrides);
 }
 
-/** Current timings, for assertions. */
-export function sessionConfig(): Readonly<SessionConfig> {
-  return { ...config };
-}
-
 // ---------------------------------------------------------------------------
 // Marker framing (pure; exercised directly by tests/unit/markerFraming.test.ts)
 // ---------------------------------------------------------------------------
 
-/** A fresh 40-character marker. Collisions with command text are impossible. */
-export function createMarker(): string {
-  const body = randomBytes(17).toString('hex').slice(0, 33);
-  return `__SM_${body}__`;
+/** Bytes of per-session secret the command markers are derived from. */
+const SESSION_SECRET_BYTES = 32;
+
+/**
+ * The marker for one command, derived from a per-session secret (F2).
+ *
+ * A marker that lasted for the whole session was reachable from inside the
+ * frame: `set -x`, a DEBUG trap or reading the shell's own stdin (the frame's
+ * `</dev/null` covers the eval, not the shell) all expose it, and a command
+ * that learns it can print `\n<marker>0\n` to report a completion that never
+ * happened, or swallow the next frame. Then the audit record and what actually
+ * ran stop matching, which is the property the audit exists to provide.
+ *
+ * Rotating per command closes that: by the time a command could observe its
+ * own marker, that marker is already spent, and the next one is an HMAC of a
+ * secret the remote side never sees.
+ */
+export function deriveMarker(secret: Buffer, counter: number): string {
+  const digest = createHmac('sha256', secret)
+    .update(`marker:${String(counter)}`)
+    .digest('hex');
+  return `__SM_${digest.slice(0, 33)}__`;
 }
 
 /** `\n<marker><rc>\n` — the stdout completion frame (OPT-2 step 5). */
@@ -293,7 +307,10 @@ interface SessionRecord {
   alias: string;
   conn: Client;
   channel: ClientChannel;
-  marker: string;
+  /** Never leaves this process; command markers are derived from it (F2). */
+  secret: Buffer;
+  /** Incremented for every frame, so no marker is ever reused. */
+  markerCounter: number;
   shell: PosixShell;
   shellVersion: string | null;
   shellFlags: string | null;
@@ -317,6 +334,12 @@ interface Tombstone {
 const sessions = new Map<string, SessionRecord>();
 const tombstones = new Map<string, Tombstone>();
 let reaper: NodeJS.Timeout | null = null;
+
+/** The next unused marker for this session. Never returns the same one twice. */
+function nextMarker(record: SessionRecord): string {
+  record.markerCounter += 1;
+  return deriveMarker(record.secret, record.markerCounter);
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -422,11 +445,6 @@ export function sessionCount(alias?: string): number {
   return count;
 }
 
-/** Session ids currently open. */
-export function sessionIds(): string[] {
-  return Array.from(sessions.keys());
-}
-
 /**
  * Close every session and forget every tombstone, then stop the reaper.
  * Used on shutdown and between tests.
@@ -521,13 +539,14 @@ interface FrameWaitResult {
  */
 function runFrame(
   record: SessionRecord,
+  marker: string,
   frame: string,
   timeoutMs: number,
   onClean?: { stdout(chunk: Buffer): void; stderr(chunk: Buffer): void }
 ): Promise<FrameWaitResult> {
   return new Promise<FrameWaitResult>((resolve, reject) => {
-    const stdoutScanner = createMarkerScanner(record.marker, { expectExitCode: true });
-    const stderrScanner = createMarkerScanner(record.marker);
+    const stdoutScanner = createMarkerScanner(marker, { expectExitCode: true });
+    const stderrScanner = createMarkerScanner(marker);
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let settled = false;
@@ -543,6 +562,21 @@ function runFrame(
       if (!stdoutScanner.complete || !stderrScanner.complete) return;
       settled = true;
       cleanup();
+
+      // Anything after the completion frame belongs to no command: a
+      // backgrounded job still writing, or output from a command we already
+      // gave up on. Draining it here keeps it from being attributed to the
+      // next frame (F3).
+      const strayStdout = stdoutScanner.residual().length;
+      const strayStderr = stderrScanner.residual().length;
+      if (strayStdout > 0 || strayStderr > 0) {
+        logger.debug('discarding output that arrived after the completion marker', {
+          session_id: record.id,
+          stdout_bytes: strayStdout,
+          stderr_bytes: strayStderr,
+        });
+      }
+
       resolve({
         stdout: Buffer.concat(stdoutChunks),
         stderr: Buffer.concat(stderrChunks),
@@ -693,13 +727,13 @@ export async function openSession(host: PoolHost, conn: Client): Promise<OpenSes
     });
   }
 
-  const marker = createMarker();
   const record: SessionRecord = {
     id: `sess_${randomBytes(12).toString('hex')}`,
     alias: host.alias,
     conn,
     channel,
-    marker,
+    secret: randomBytes(SESSION_SECRET_BYTES),
+    markerCounter: 0,
     shell: verdict.shell,
     shellVersion: null,
     shellFlags: null,
@@ -728,7 +762,13 @@ export async function openSession(host: PoolHost, conn: Client): Promise<OpenSes
 
   let capability;
   try {
-    const result = await runFrame(record, buildCapabilityProbe(marker), config.handshakeMs);
+    const probeMarker = nextMarker(record);
+    const result = await runFrame(
+      record,
+      probeMarker,
+      buildCapabilityProbe(probeMarker),
+      config.handshakeMs
+    );
     capability = parseCapabilityProbe(result.stdout.toString('utf8'));
   } catch (err) {
     discard();
@@ -834,8 +874,9 @@ async function runCommand(
   const started = Date.now();
   const stdout = createExcerptAccumulator({ cap: options.maxOutputBytes });
   const stderr = createExcerptAccumulator({ cap: options.maxOutputBytes });
+  const marker = nextMarker(record);
   const frame = buildCommandFrame(command, {
-    marker: record.marker,
+    marker,
     base64Flag: record.base64Flag,
     stdinGuard: record.stdinGuard,
   });
@@ -845,7 +886,7 @@ async function runCommand(
 
   let result: FrameWaitResult;
   try {
-    result = await runFrame(record, frame, options.timeoutMs, {
+    result = await runFrame(record, marker, frame, options.timeoutMs, {
       stdout: (chunk) => stdout.push(chunk),
       stderr: (chunk) => stderr.push(chunk),
     });
@@ -868,7 +909,10 @@ async function runCommand(
     }
 
     try {
-      await runFrame(record, buildPingFrame(record.marker), config.pingMs);
+      // A fresh marker, so a marker printed by the command we just reaped
+      // cannot answer the liveness ping on its behalf (F3).
+      const pingMarker = nextMarker(record);
+      await runFrame(record, pingMarker, buildPingFrame(pingMarker), config.pingMs);
     } catch {
       destroySession(record, 'terminated');
       throw new SshOperationError(
@@ -974,19 +1018,4 @@ export function lookupSession(sessionId: string): SessionLookup {
   if (tombstone === undefined) return { state: 'unknown' };
   if (tombstone.reason === 'expired') return { state: 'expired' };
   return { state: 'unknown', reason: tombstone.reason };
-}
-
-/** Read-only view of a live session, for `doctor` and tests. */
-export function describeSession(sessionId: string): OpenSessionResult | null {
-  const record = sessions.get(sessionId);
-  if (record === undefined || record.closed) return null;
-  return {
-    session_id: record.id,
-    host: record.alias,
-    detected_shell: record.shell,
-    shell_version: record.shellVersion,
-    shell_flags: record.shellFlags,
-    stdin_guard: record.stdinGuard,
-    base64_mode: record.base64Flag === null ? 'literal' : 'base64',
-  };
 }

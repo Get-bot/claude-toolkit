@@ -32,9 +32,26 @@ function sha256(file: string): string {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-/** Remote paths use forward slashes on both endpoints. */
+/**
+ * Whether this machine can create symlinks at all. Decided at collection time,
+ * because `runIf` is evaluated before `beforeAll`, and Windows refuses without
+ * developer mode.
+ */
+const SYMLINKS_SUPPORTED = ((): boolean => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-mcp-symcheck-'));
+  try {
+    fs.symlinkSync(path.join(probeDir, 'target'), path.join(probeDir, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
+/** Remote paths use forward slashes on both endpoints (CR-2: remote side). */
 function remotePath(name: string): string {
-  return `${endpoint.homeDir.replace(/\\/g, '/')}/${name}`;
+  return `${endpoint.remoteHomeDir.replace(/\\/g, '/')}/${name}`;
 }
 
 beforeAll(async () => {
@@ -105,8 +122,70 @@ describe('overwrite protection (AC13.2)', () => {
     const target = path.join(localDir, `${name}.overwritten`);
     fs.writeFileSync(target, 'local content\n');
 
-    await download(conn, remotePath(`${name}.bin`), target, { overwrite: true });
+    const result = await download(conn, remotePath(`${name}.bin`), target, { overwrite: true });
     expect(fs.readFileSync(target, 'utf8')).toBe('remote content\n');
+    expect(result.overwritten).toBe(true);
+  });
+
+  it('reports overwritten false when nothing was there to replace (CR-4)', async () => {
+    const target = path.join(localDir, `${name}.fresh`);
+    const result = await download(conn, remotePath(`${name}.bin`), target, { overwrite: true });
+    expect(result.overwritten).toBe(false);
+    expect(fs.existsSync(target)).toBe(true);
+  });
+});
+
+describe('local path safety (F16)', () => {
+  const name = 'symlink-guard';
+
+  beforeAll(async () => {
+    const source = path.join(localDir, `${name}.src`);
+    fs.writeFileSync(source, 'remote content\n');
+    await upload(conn, source, remotePath(`${name}.bin`));
+  });
+
+  /**
+   * `existsSync`/`statSync` follow links, so without an `lstat` check a link
+   * planted at `local_path` makes the overwrite guard inspect the target while
+   * the transfer writes through the link somewhere else entirely.
+   *
+   * WINDOWS-GAP: creating a symlink needs developer mode, so these two cases
+   * skip on a stock Windows host and are covered by the ubuntu CI legs.
+   */
+  it.runIf(SYMLINKS_SUPPORTED)('refuses to write through a symlink', async () => {
+    const outside = path.join(localDir, 'link-target.txt');
+    fs.writeFileSync(outside, 'must not change\n');
+    const link = path.join(localDir, `${name}.link`);
+    fs.symlinkSync(outside, link);
+
+    await expect(
+      download(conn, remotePath(`${name}.bin`), link, { overwrite: true })
+    ).rejects.toMatchObject({ code: 'sftp_failed' });
+    expect(fs.readFileSync(outside, 'utf8')).toBe('must not change\n');
+  });
+
+  it.runIf(SYMLINKS_SUPPORTED)('refuses a dangling symlink even without overwrite', async () => {
+    const link = path.join(localDir, `${name}.dangling`);
+    fs.symlinkSync(path.join(localDir, 'no-such-target'), link);
+
+    await expect(download(conn, remotePath(`${name}.bin`), link)).rejects.toMatchObject({
+      code: 'sftp_failed',
+    });
+  });
+
+  it('refuses a remote file larger than the cap', async () => {
+    const target = path.join(localDir, 'too-big.bin');
+    await expect(
+      download(conn, remotePath(`${name}.bin`), target, { maxBytes: 4 })
+    ).rejects.toMatchObject({ code: 'sftp_failed' });
+    // Nothing was written, so the cap is enforced before the transfer starts.
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('allows a remote file within the cap', async () => {
+    const target = path.join(localDir, 'within-cap.bin');
+    const result = await download(conn, remotePath(`${name}.bin`), target, { maxBytes: 4096 });
+    expect(result.bytes).toBe('remote content\n'.length);
   });
 });
 

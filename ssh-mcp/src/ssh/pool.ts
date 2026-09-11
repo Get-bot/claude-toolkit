@@ -33,6 +33,13 @@ interface PoolEntry {
   client: Client;
   idleTimer: NodeJS.Timeout | null;
   closed: boolean;
+  /** Fingerprint this connection was actually verified against (F14). */
+  pinnedFingerprint: string;
+}
+
+interface PendingConnect {
+  promise: Promise<Client>;
+  pinnedFingerprint: string;
 }
 
 interface PoolConfig {
@@ -46,7 +53,7 @@ const config: PoolConfig = {
 };
 
 const entries = new Map<string, PoolEntry>();
-const pending = new Map<string, Promise<Client>>();
+const pending = new Map<string, PendingConnect>();
 
 /** Override timings. Tests inject short values; production uses the defaults. */
 export function configurePool(overrides: Partial<PoolConfig>): void {
@@ -204,18 +211,35 @@ function connect(host: PoolHost, privateKey: Buffer): Promise<Client> {
  * never stored beyond the ssh2 client that needs it.
  */
 export async function getConnection(host: PoolHost, privateKey: Buffer): Promise<Client> {
+  const pinnedFingerprint = host.hostKey.sha256;
+
   const existing = entries.get(host.alias);
   if (existing !== undefined && !existing.closed) {
-    armIdleTimer(existing);
-    return existing.client;
+    // A re-pinned host must take effect at once. Reusing a connection opened
+    // against the old fingerprint would keep talking to the very server the
+    // operator just stopped trusting, for up to the idle timeout (F14).
+    if (existing.pinnedFingerprint === pinnedFingerprint) {
+      armIdleTimer(existing);
+      return existing.client;
+    }
+    logger.info('host key pin changed; reconnecting', { alias: host.alias });
+    dropEntry(existing, 'pin changed');
   }
 
   const inFlight = pending.get(host.alias);
-  if (inFlight !== undefined) return inFlight;
+  if (inFlight !== undefined && inFlight.pinnedFingerprint === pinnedFingerprint) {
+    return inFlight.promise;
+  }
 
   const attempt = connect(host, privateKey)
     .then((client) => {
-      const entry: PoolEntry = { alias: host.alias, client, idleTimer: null, closed: false };
+      const entry: PoolEntry = {
+        alias: host.alias,
+        client,
+        idleTimer: null,
+        closed: false,
+        pinnedFingerprint,
+      };
       entries.set(host.alias, entry);
       armIdleTimer(entry);
       client.on('close', () => {
@@ -231,10 +255,11 @@ export async function getConnection(host: PoolHost, privateKey: Buffer): Promise
       return client;
     })
     .finally(() => {
-      pending.delete(host.alias);
+      const current = pending.get(host.alias);
+      if (current !== undefined && current.promise === attempt) pending.delete(host.alias);
     });
 
-  pending.set(host.alias, attempt);
+  pending.set(host.alias, { promise: attempt, pinnedFingerprint });
   return attempt;
 }
 
@@ -256,9 +281,4 @@ export function closeAll(): void {
     dropEntry(entry, 'close all');
   }
   entries.clear();
-}
-
-/** Number of open pooled connections. For leak assertions in tests. */
-export function connectionCount(): number {
-  return entries.size;
 }

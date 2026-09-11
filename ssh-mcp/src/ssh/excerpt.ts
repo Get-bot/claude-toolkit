@@ -39,11 +39,6 @@ export const MIN_SIDE_LINES = 20;
 /** Per-line ceiling; a longer line is cut and annotated (AC12.8). */
 export const MAX_LINE_BYTES = 8192;
 /**
- * Worst case of the minimum-line guarantee: both sides keeping
- * `MIN_SIDE_LINES` lines of `MAX_LINE_BYTES` each.
- */
-export const CEILING_SLACK_BYTES = 2 * MIN_SIDE_LINES * MAX_LINE_BYTES;
-/**
  * Upper bound on the omission marker line, newlines included. The fixed text
  * is 65 bytes and the two grouped numbers cannot exceed 26 bytes each.
  */
@@ -496,7 +491,11 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
       let tailLines = countTailLines(tail.subarray(tailStart));
       while (tailLines < minSideLines && tailStart > 0) {
         // The previous line starts just after the LF before `tailStart - 1`.
-        const previousLf = tail.lastIndexOf(LF, tailStart - 2);
+        // `tailStart === 1` must ask about no earlier byte at all: passing the
+        // resulting -1 to lastIndexOf would be read as an offset from the END
+        // of the buffer and would return the LAST newline, moving the window
+        // forwards and silently dropping tail content.
+        const previousLf = tailStart >= 2 ? tail.lastIndexOf(LF, tailStart - 2) : -1;
         // No earlier LF means the window starts mid-line, unless the window
         // reaches the start of the stream, where the first line really begins.
         if (previousLf === -1 && tailOffset > 0) break;

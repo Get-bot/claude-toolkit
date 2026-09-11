@@ -251,6 +251,43 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     expect(result.background_job).toBe(true);
   });
 
+  /**
+   * F2: a command that learns a marker must not be able to spend it.
+   *
+   * `set -x` genuinely leaks the marker of the frame it runs in, which the
+   * first half of this test confirms rather than assumes. The second half
+   * replays that marker from inside the next command. Under a per-session
+   * marker the replay would be read as completion and everything printed
+   * afterwards would be lost; with per-command markers it is just output.
+   */
+  it('ignores a completion marker replayed by a later command', async () => {
+    const { endpoint, conn, alias } = await connect({ shell: SHELL });
+    const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
+
+    // Tracing has to stay on past the eval, because the marker only appears
+    // in the frame's own printf, which runs after the user's command.
+    const traced = await runInSession(session.session_id, 'set -x; echo one', budget);
+    const leaked = /__SM_[0-9a-f]{33}__/.exec(traced.stderr);
+    const why = 'set -x should expose the frame marker, or this test proves nothing';
+    expect(leaked, why).not.toBeNull();
+    const stolen = leaked?.[0] as string;
+
+    const replay = await runInSession(
+      session.session_id,
+      `set +x; printf '\\n%s0\\n' '${stolen}'; echo real-output`,
+      budget
+    );
+
+    // Everything after the replayed marker still arrives, so completion was
+    // decided by this command's own marker.
+    expect(replay.stdout).toContain('real-output');
+    expect(replay.stdout).toContain(stolen);
+    expect(replay.exit_code).toBe(0);
+
+    const after = await runInSession(session.session_id, 'echo still-in-sync', budget);
+    expect(after.stdout).toBe('still-in-sync\n');
+  });
+
   it('excerpts a 2 MiB burst and keeps working afterwards (AC12.7)', async () => {
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
