@@ -19,6 +19,7 @@ import { PassThrough } from 'node:stream';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  homePath,
   hostsFilePath,
   keysDirPath,
   privateKeyPath,
@@ -30,6 +31,7 @@ import { installAuthorizedKey } from '../../src/setup/install.js';
 import { createPrompter } from '../../src/setup/prompt.js';
 import type { Prompter } from '../../src/setup/prompt.js';
 import { defaultConnector, parseSetupArgs, parseTarget, runSetup } from '../../src/setup/cli.js';
+import { currentWindowsPrincipal } from '../../src/setup/winacl.js';
 import type { IcaclsRunner } from '../../src/setup/winacl.js';
 import { startEndpoint } from '../fixtures/endpoints.js';
 import type { TestEndpoint } from '../fixtures/endpoints.js';
@@ -75,8 +77,41 @@ function failingIcacls(): IcaclsRunner {
   return () => ({ status: 1, stdout: '', stderr: 'Access is denied.' });
 }
 
+/**
+ * An `icacls` runner reporting an already-restricted directory.
+ *
+ * The sandbox home is a fresh temp directory, so on Windows it still inherits
+ * `BUILTIN\Administrators`. Real hardening would succeed here, but these tests
+ * are about ordering rather than about the ACL itself, so the reader is fed a
+ * clean answer and the assertions stay on which directory was hardened when.
+ */
+function stubIcacls(): IcaclsRunner {
+  return (args) => {
+    const target = args[0] ?? '';
+    const crlf = String.fromCharCode(13, 10);
+    return {
+      status: 0,
+      stdout:
+        `${target} ${currentWindowsPrincipal()}:(OI)(CI)(F)` +
+        crlf +
+        crlf +
+        'Successfully processed 1 files; Failed processing 0 files' +
+        crlf,
+      stderr: '',
+    };
+  };
+}
+
+/**
+ * Where `setup` installs the public key: the REMOTE side.
+ *
+ * `remoteHomeDir` rather than the older `homeDir`, which now aliases the local
+ * sandbox. On the fixture tier the two are the same directory, so the
+ * distinction only bites under `ENDPOINT=sshd`, where this would otherwise
+ * count lines in a local temp directory the server never touched.
+ */
 function authorizedKeysPath(endpoint: TestEndpoint): string {
-  return path.join(endpoint.homeDir, '.ssh', 'authorized_keys');
+  return path.join(endpoint.remoteHomeDir, '.ssh', 'authorized_keys');
 }
 
 function countKeyLine(endpoint: TestEndpoint, line: string): number {
@@ -394,6 +429,54 @@ describe('setup against a live endpoint', () => {
       expect(fs.existsSync(publicKeyPath('acl'))).toBe(false);
       expect(loadEntry('acl')).toBeUndefined();
       expect(script.output()).toContain('ACL 하드닝에 실패');
+    }
+  );
+
+  it.skipIf(process.platform !== 'win32')(
+    'hardens the key directory before the private key exists (F12)',
+    async () => {
+      // Every icacls invocation records whether a key was on disk at that
+      // moment. Hardening after the write left an unencrypted key under
+      // inherited NTFS ACLs across two network round trips and a human prompt.
+      const keyPresentAt: boolean[] = [];
+      const icacls: IcaclsRunner = (args) => {
+        keyPresentAt.push(fs.existsSync(privateKeyPath('ordered')));
+        return stubIcacls()(args);
+      };
+
+      const script = scripted([endpoint.password, 'yes', 'fail-closed']);
+      const code = await runSetup(['ordered', target()], { prompter: script.prompter, icacls });
+
+      expect(code).toBe(0);
+      // The run really did harden, and never while a key was lying there.
+      expect(keyPresentAt.length).toBeGreaterThan(0);
+      expect(keyPresentAt).not.toContain(true);
+      // The key exists now, so the assertion above is about ordering rather
+      // than about a key that was never written at all.
+      expect(fs.existsSync(privateKeyPath('ordered'))).toBe(true);
+    }
+  );
+
+  it.skipIf(process.platform !== 'win32')(
+    'hardens a home the server created before setup ever ran (F12)',
+    async () => {
+      // The server makes ~/.ssh-mcp for audit.jsonl, which carries command
+      // strings. If no setup run ever follows, nothing used to restrict it.
+      fs.rmSync(homePath(), { recursive: true, force: true });
+      const hardened: string[] = [];
+      const icacls: IcaclsRunner = (args) => {
+        const [dir, ...flags] = args;
+        if (flags.includes('/inheritance:r')) hardened.push(dir ?? '');
+        return stubIcacls()(args);
+      };
+
+      const script = scripted([endpoint.password, 'yes', 'fail-closed']);
+      const code = await runSetup(['fresh', target()], { prompter: script.prompter, icacls });
+
+      expect(code).toBe(0);
+      // Both the state directory and the key directory were restricted.
+      expect(hardened).toContain(homePath());
+      expect(hardened).toContain(keysDirPath());
     }
   );
 });

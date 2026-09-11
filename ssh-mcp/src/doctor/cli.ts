@@ -18,6 +18,7 @@ import {
   runChecks,
 } from './checks.js';
 import type { CheckRow, CheckStatus, DoctorOptions, PatternRow } from './checks.js';
+import type { ArgvRuleDef } from '../safety/classify.js';
 
 export const EXIT_OK = 0;
 export const EXIT_CHECK_FAILED = 1;
@@ -130,6 +131,37 @@ function renderPatterns(rows: readonly PatternRow[]): string {
   return [line(header), separator, ...rows.map(line)].join('\n');
 }
 
+/**
+ * The argv rules, printed after the regex table.
+ *
+ * They have no `source` column because there is no regex to paste anywhere:
+ * unlike a pattern, an argv rule cannot be switched off from `hosts.json`. The
+ * `reason` column is what shows up in a denial, so it is the string an operator
+ * would search for.
+ */
+function renderArgvRules(rules: readonly ArgvRuleDef[]): string {
+  const header: ArgvRuleDef = {
+    id: 'id',
+    grade: 'destructive',
+    reason: 'reason',
+    description: '설명',
+  };
+  const all = [header, ...rules];
+  const width = (pick: (rule: ArgvRuleDef) => string): number =>
+    all.reduce((max, rule) => Math.max(max, displayWidth(pick(rule))), 0);
+  const idWidth = width((rule) => rule.id);
+  const gradeWidth = Math.max(
+    width((rule) => rule.grade),
+    displayWidth('grade')
+  );
+  const line = (rule: ArgvRuleDef, gradeText: string): string =>
+    `${pad(rule.id, idWidth)} | ${pad(gradeText, gradeWidth)} | ${rule.description}`;
+  const separator = `${'-'.repeat(idWidth)} | ${'-'.repeat(gradeWidth)} | ${'-'.repeat(7)}`;
+  return [line(header, 'grade'), separator, ...rules.map((rule) => line(rule, rule.grade))].join(
+    '\n'
+  );
+}
+
 function countFailures(rows: readonly CheckRow[]): number {
   return rows.filter((row) => row.status === 'FAIL').length;
 }
@@ -169,14 +201,30 @@ export async function runDoctor(argv: string[], options: DoctorOptions = {}): Pr
   if (parsed.flags.patterns) {
     const patterns = loadPatternRows();
     if (parsed.flags.json) {
-      out(JSON.stringify({ ok: true, patterns: patterns.rows }, null, 2));
+      out(
+        JSON.stringify(
+          { ok: true, patterns: patterns.rows, argvRules: patterns.argvRules },
+          null,
+          2
+        )
+      );
       return EXIT_OK;
     }
+    out('정규식 패턴');
     out(renderPatterns(patterns.rows));
     out('');
     out(
-      `패턴 ${String(patterns.rows.length)}개. ` +
-        '위 정규식 문자열을 hosts.json의 patternOverrides.<grade>.remove에 그대로 넣으면 해당 패턴이 해제됩니다.'
+      `정규식 패턴 ${String(patterns.rows.length)}개. ` +
+        '위 정규식 문자열을 hosts.json의 patternOverrides.<grade>.remove에 그대로 넣으면 해당 패턴이 해제됩니다. ' +
+        '단, 핵심 파괴적 패턴은 제거 요청을 무시합니다.'
+    );
+    out('');
+    out('argv 규칙 (정규식이 아니며 해제할 수 없습니다)');
+    out(renderArgvRules(patterns.argvRules));
+    out('');
+    out(
+      `argv 규칙 ${String(patterns.argvRules.length)}개. ` +
+        '명령을 토큰 단위로 검사하므로 patternOverrides로 끌 수 없습니다.'
     );
     return EXIT_OK;
   }

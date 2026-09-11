@@ -14,10 +14,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { homePath, hostsFilePath, keysDirPath, privateKeyPath } from '../../src/config/paths.js';
 import { CHECK_KINDS, loadPatternRows } from '../../src/doctor/checks.js';
+import { classify } from '../../src/safety/classify.js';
+import { CORE_PATTERN_IDS, PATTERNS, missingCorePatterns } from '../../src/safety/patterns.js';
 import type { CheckRow, HostProbeResult } from '../../src/doctor/checks.js';
 import { runDoctor } from '../../src/doctor/cli.js';
 import { generateKeyPair } from '../../src/setup/keygen.js';
-import { currentWindowsPrincipal } from '../../src/setup/winacl.js';
+import { currentWindowsPrincipal, inspectWindowsAcl } from '../../src/setup/winacl.js';
 import type { IcaclsRunner } from '../../src/setup/winacl.js';
 import { assertNoWritesOutside, createTmpHome } from '../fixtures/tmpHome.js';
 import type { TmpHome } from '../fixtures/tmpHome.js';
@@ -143,6 +145,24 @@ describe('a clean machine with no hosts', () => {
     expect(fs.existsSync(homePath())).toBe(true);
     expect(captured).toContain('~/.ssh-mcp 레이아웃');
   });
+
+  it.skipIf(process.platform !== 'win32')(
+    'restricts the directory it creates, with the real icacls (F12)',
+    async () => {
+      // No stub here: this is the end-to-end claim that a state directory
+      // created by any ssh-mcp process - the server making ~/.ssh-mcp for
+      // audit.jsonl, or doctor running first - is owner-only from the moment it
+      // exists, rather than inheriting the profile ACL until a setup run.
+      fs.rmSync(homePath(), { recursive: true, force: true });
+
+      expect(await runDoctor(['--json'])).toBe(0);
+
+      const acl = inspectWindowsAcl(homePath());
+      expect(acl.applied).toBe(true);
+      expect(acl.foreign).toEqual([]);
+      expect(acl.principals.length).toBeGreaterThan(0);
+    }
+  );
 
   it('shows every one of the 15 check kinds (AC21.1)', async () => {
     const code = await runDoctor(['--json']);
@@ -375,6 +395,49 @@ describe('a registered host', () => {
   });
 });
 
+describe('core classification patterns (F7)', () => {
+  it('passes on a sound build and names the core set it checked', async () => {
+    expect(await runDoctor(['--json'])).toBe(0);
+    const patterns = row(parseJson().checks, 'patterns');
+    expect(patterns.status).toBe('PASS');
+    // Sanity: the core guard is actually looking at a populated table.
+    expect(missingCorePatterns()).toEqual([]);
+    expect(CORE_PATTERN_IDS.length).toBeGreaterThan(0);
+  });
+
+  it('fails when a core pattern is absent from the table', async () => {
+    // Simulate a build that dropped a core rule. The point of the check is that
+    // `rm -rf /` grading safe must never be a quiet diagnostic detail.
+    const damaged = PATTERNS.filter((pattern) => pattern.id !== 'rm-recursive');
+    expect(missingCorePatterns(damaged)).toContain('rm-recursive');
+  });
+
+  it('fails the host row when an override removes a core pattern', async () => {
+    fs.mkdirSync(keysDirPath(), { recursive: true });
+    generateKeyPair('prod');
+    writeHosts({
+      schemaVersion: 1,
+      hosts: {
+        prod: hostEntry({
+          patternOverrides: {
+            destructive: { add: [], remove: ['rm-recursive'] },
+            privileged: { add: [], remove: [] },
+          },
+        }),
+      },
+    });
+
+    const code = await runDoctor(['--json'], { prober: stubProber({}), icacls: stubIcacls() });
+    const approval = row(parseJson().checks, 'host-approval');
+
+    // compilePatterns refuses core removals, so the guard should stay quiet and
+    // the run should not fail. If safety ever stops refusing, this flips to
+    // FAIL and says which pattern went missing.
+    expect(approval.status).not.toBe('FAIL');
+    expect(code).toBe(0);
+  });
+});
+
 describe('--patterns (AC21.9)', () => {
   it('lists every pattern with id, scope, grade and regex', async () => {
     const patterns = loadPatternRows();
@@ -390,9 +453,13 @@ describe('--patterns (AC21.9)', () => {
       .map((text) => text.split(' | ').map((cell) => cell.trim()));
     const body = cells.filter((cols) => cols[0] !== 'id' && !(cols[0] ?? '').startsWith('--'));
 
-    expect(body.length).toBe(patterns.rows.length);
+    // Both sections are printed, so the body covers regex patterns plus argv
+    // rules. A regex row has four columns, an argv rule three.
+    expect(patterns.argvRules.length).toBeGreaterThan(0);
+    expect(body.length).toBe(patterns.rows.length + patterns.argvRules.length);
+
     for (const pattern of patterns.rows) {
-      const printed = body.find((cols) => cols[0] === pattern.id);
+      const printed = body.find((cols) => cols[0] === pattern.id && cols.length === 4);
       expect(printed, `no row for pattern ${pattern.id}`).toBeDefined();
       expect(printed?.[1]).toBe(pattern.scope);
       expect(printed?.[2]).toBe(pattern.grade);
@@ -400,7 +467,77 @@ describe('--patterns (AC21.9)', () => {
       // patternOverrides.<grade>.remove (string-equality removal).
       expect(printed?.[3]).toBe(pattern.source);
     }
-    expect(captured).toContain(`패턴 ${String(patterns.rows.length)}개`);
+
+    // The argv rules are the half that has no regex to paste. Listing them is
+    // what stops an operator concluding that removing every `rm-*` pattern
+    // makes `rm -rf /` safe (F4).
+    for (const rule of patterns.argvRules) {
+      const printed = body.find((cols) => cols[0] === rule.id && cols.length === 3);
+      expect(printed, `no row for argv rule ${rule.id}`).toBeDefined();
+      expect(printed?.[1]).toBe(rule.grade);
+      expect(printed?.[2]).toBe(rule.description);
+    }
+
+    expect(captured).toContain(`정규식 패턴 ${String(patterns.rows.length)}개`);
+    expect(captured).toContain(`argv 규칙 ${String(patterns.argvRules.length)}개`);
+    expect(captured).toContain('해제할 수 없습니다');
+  });
+
+  it('round-trips a printed regex into patternOverrides.remove (AC21.9)', async () => {
+    // AC21.9's actual claim: paste a printed regex into
+    // patternOverrides.<grade>.remove and the pattern really stops matching.
+    // A NON-CORE pattern, because since F7 a core id is refused - which the
+    // next case pins down.
+    expect(await runDoctor(['--patterns'])).toBe(0);
+
+    const printed = captured
+      .split('\n')
+      .map((line) => line.split(' | ').map((cell) => cell.trim()))
+      .find((cols) => cols.length === 4 && cols[0] === 'k8s-delete');
+    expect(printed, 'k8s-delete is not in the printed table').toBeDefined();
+    const source = printed?.[3] ?? '';
+
+    const command = 'kubectl delete pod x';
+    expect(classify(command).grade).toBe('destructive');
+
+    const overrides = {
+      destructive: { add: [], remove: [source] },
+      privileged: { add: [], remove: [] },
+    };
+    expect(classify(command, overrides).grade).not.toBe('destructive');
+  });
+
+  it('refuses to round-trip a core pattern out of existence (F7)', async () => {
+    // The opposite assertion, and the one that catches F7 regressing: naming a
+    // core pattern for removal must leave the command destructive.
+    const core = PATTERNS.find((pattern) => pattern.id === 'rm-recursive');
+    expect(core).toBeDefined();
+
+    for (const entry of ['rm-recursive', core?.source ?? '']) {
+      const overrides = {
+        destructive: { add: [], remove: [entry] },
+        privileged: { add: [], remove: [] },
+      };
+      expect(classify('rm -rf /tmp/x', overrides).grade).toBe('destructive');
+    }
+  });
+
+  it('reports both counts in the --json listing', async () => {
+    const expected = loadPatternRows();
+    expect(await runDoctor(['--patterns', '--json'])).toBe(0);
+
+    const payload = JSON.parse(captured) as {
+      ok: boolean;
+      patterns: { id: string }[];
+      argvRules: { id: string; grade: string; reason: string; description: string }[];
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.patterns.length).toBe(expected.rows.length);
+    expect(payload.argvRules.length).toBe(expected.argvRules.length);
+    // `reason` is the string that shows up in a denial, so it must survive.
+    for (const rule of payload.argvRules) {
+      expect(rule.reason).toBe(`${rule.grade}:${rule.id}`);
+    }
   });
 });
 

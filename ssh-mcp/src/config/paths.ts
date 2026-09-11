@@ -9,6 +9,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Layering note: `winacl.ts` depends on nothing but node builtins, so this
+// import creates no cycle. The ACL is a filesystem concern, which is why it
+// belongs here rather than only in the setup flow (F12).
+import { hardenWindowsAcl } from '../setup/winacl.js';
+
 /** Mode for the state directory: owner-only (POSIX). */
 export const HOME_DIR_MODE = 0o700;
 /** Mode for every state file we create: owner read/write (POSIX). */
@@ -21,6 +26,36 @@ const HOSTS_FILE_NAME = 'hosts.json';
 const STATE_FILE_NAME = 'state.json';
 const AUDIT_FILE_NAME = 'audit.jsonl';
 const KEYS_DIR_NAME = 'keys';
+
+/**
+ * Directories this process has already restricted, so the repeated
+ * {@link ensureHome} calls on the audit path do not spawn `icacls` again.
+ */
+const hardenedDirs = new Set<string>();
+
+/**
+ * Restrict a directory we just created, on Windows only (F12).
+ *
+ * `fs.chmod` does not map onto NTFS ACLs, so a directory created here inherits
+ * whatever the user profile grants - typically `BUILTIN\Administrators` as well
+ * as the owner. That matters the moment anything sensitive lands inside: an
+ * unencrypted private key, or `audit.jsonl`, which carries command strings.
+ *
+ * Hardening at creation closes the case where the **server** makes
+ * `~/.ssh-mcp` first (for the audit file) and no `setup` run ever follows.
+ * `setup` additionally hardens before it writes a key, which covers a directory
+ * that already existed from an earlier version.
+ *
+ * Only newly created directories are touched, so this costs one `icacls` pass
+ * per directory per machine rather than one per call. A failure throws: a
+ * directory we could not restrict is exactly the state not to proceed from.
+ * Callers that must not fail over this (the audit writer) already swallow it.
+ */
+function restrictNewDirectory(dir: string, created: boolean): void {
+  if (!created || hardenedDirs.has(dir)) return;
+  hardenWindowsAcl(dir);
+  hardenedDirs.add(dir);
+}
 
 /**
  * Root of the ssh-mcp state directory.
@@ -93,10 +128,12 @@ export function publicKeyPath(alias: string): string {
  */
 export function ensureHome(): string {
   const dir = homePath();
-  fs.mkdirSync(dir, { recursive: true, mode: HOME_DIR_MODE });
+  const created = fs.mkdirSync(dir, { recursive: true, mode: HOME_DIR_MODE }) !== undefined;
   if (process.platform !== 'win32') {
     // mkdir's mode is masked by umask, so set it explicitly (AC7.2a).
     fs.chmodSync(dir, HOME_DIR_MODE);
+  } else {
+    restrictNewDirectory(dir, created);
   }
   return dir;
 }
@@ -105,9 +142,11 @@ export function ensureHome(): string {
 export function ensureKeysDir(): string {
   ensureHome();
   const dir = keysDirPath();
-  fs.mkdirSync(dir, { recursive: true, mode: HOME_DIR_MODE });
+  const created = fs.mkdirSync(dir, { recursive: true, mode: HOME_DIR_MODE }) !== undefined;
   if (process.platform !== 'win32') {
     fs.chmodSync(dir, HOME_DIR_MODE);
+  } else {
+    restrictNewDirectory(dir, created);
   }
   return dir;
 }

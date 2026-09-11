@@ -36,7 +36,9 @@ import { loadState } from '../config/state.js';
 import type { State } from '../config/state.js';
 import * as store from '../config/store.js';
 import { ERROR_CODES } from '../errors.js';
-import { PATTERNS } from '../safety/patterns.js';
+import { ARGV_RULES } from '../safety/classify.js';
+import type { ArgvRuleDef } from '../safety/classify.js';
+import { PATTERNS, compilePatterns, missingCorePatterns } from '../safety/patterns.js';
 import { inspectWindowsAcl } from '../setup/winacl.js';
 import type { IcaclsRunner } from '../setup/winacl.js';
 import { sha256Fingerprint } from '../ssh/fingerprint.js';
@@ -174,6 +176,15 @@ export interface PatternLoadResult {
   rows: PatternRow[];
   /** Why the list is empty, when it is. */
   reason: string;
+  /** Core pattern ids absent from the built-in table (F7). Normally empty. */
+  missingCore: string[];
+  /**
+   * Verdicts the classifier reaches without a regex (F4). They have no source
+   * to print and no way to switch off, so listing only {@link PatternRow} would
+   * let an operator conclude that removing every `rm-*` pattern makes
+   * `rm -rf /` safe.
+   */
+  argvRules: readonly ArgvRuleDef[];
 }
 
 /**
@@ -191,7 +202,7 @@ export function loadPatternRows(): PatternLoadResult {
     grade: pattern.grade,
     source: pattern.source,
   }));
-  return { ok: true, rows, reason: '' };
+  return { ok: true, rows, reason: '', missingCore: missingCorePatterns(), argvRules: ARGV_RULES };
 }
 
 // --------------------------------------------------------------------------
@@ -438,13 +449,14 @@ function permissionsCheck(ctx: CheckContext): Check {
     const keyFiles = existingPrivateKeys(ctx);
 
     if (process.platform === 'win32') {
-      if (keyFiles.length === 0) {
-        // A brand-new directory still inherits the profile ACL, and `setup`
-        // (not `doctor`) is what tightens it. Reporting that as a failure would
-        // make a clean Windows machine exit non-zero, which AC21.10 forbids.
+      // The audit file counts as something to protect even when no key exists:
+      // it carries command strings (§5.10, R26). Only a directory holding
+      // neither is skipped, which is the clean-runner case AC21.10 needs.
+      const hasAudit = fs.existsSync(auditFilePath());
+      if (keyFiles.length === 0 && !hasAudit) {
         return {
           status: 'PASS',
-          detail: '개인키가 없어 ACL을 점검하지 않았습니다 — setup이 실행되면 하드닝됩니다',
+          detail: '보호할 파일이 아직 없습니다 — 디렉터리는 생성 시점에 제한됩니다',
         };
       }
       try {
@@ -654,6 +666,21 @@ function hostApprovalChecks(ctx: CheckContext): Check[] {
   return ctx.hosts.map(([alias, entry]) =>
     sync(`host-approval:${alias}`, `호스트 ${alias}: 승인 설정`, () => {
       const fallback = store.resolveApprovalFallback(entry);
+
+      // A host override must not be able to drop a core destructive pattern.
+      // `compilePatterns` already refuses and warns, so this is a regression
+      // guard on that refusal rather than a live hole - but a silent
+      // `rm -rf /` -> safe is worth one FAIL row to make loud (F7).
+      const missingCore = missingCorePatterns(compilePatterns(entry.patternOverrides));
+      if (missingCore.length > 0) {
+        return {
+          status: 'FAIL',
+          detail:
+            `patternOverrides가 핵심 파괴적 패턴을 제거했습니다: ${missingCore.join(', ')} — ` +
+            '이 호스트에서는 해당 명령이 safe로 분류됩니다',
+        };
+      }
+
       const warnings: string[] = [];
       if (entry.approvalMode === 'auto') {
         warnings.push('approvalMode: auto — 모든 명령이 확인 없이 실행됩니다');
@@ -746,9 +773,22 @@ function hostShellChecks(ctx: CheckContext): Check[] {
 }
 
 function patternsCheck(): Check {
-  // Item 14 never fails the run (§5.11): it is an informational listing.
+  /*
+   * §5.11 lists item 14 as informational, and the listing half still is. The
+   * one condition that fails it is a core pattern missing from the built-in
+   * table: `rm -rf /` grading safe is not a diagnostic detail, and a build that
+   * dropped a rule would otherwise be invisible here (F7).
+   */
   return sync('patterns', '분류 패턴 목록', () => {
     const result = loadPatternRows();
+    if (result.missingCore.length > 0) {
+      return {
+        status: 'FAIL',
+        detail:
+          `핵심 파괴적 패턴이 빠져 있습니다: ${result.missingCore.join(', ')} — ` +
+          '빌드나 분류 테이블이 손상된 상태이므로 이 서버를 신뢰할 수 없습니다',
+      };
+    }
     const byGrade = new Map<string, number>();
     for (const row of result.rows) {
       byGrade.set(row.grade, (byGrade.get(row.grade) ?? 0) + 1);
@@ -760,8 +800,8 @@ function patternsCheck(): Check {
     return {
       status: 'PASS',
       detail:
-        `패턴 ${String(result.rows.length)}개${summary === '' ? '' : ` (${summary})`} ` +
-        '— 전체 목록은 --patterns',
+        `정규식 패턴 ${String(result.rows.length)}개${summary === '' ? '' : ` (${summary})`} · ` +
+        `argv 규칙 ${String(result.argvRules.length)}개 — 전체 목록은 --patterns`,
     };
   });
 }

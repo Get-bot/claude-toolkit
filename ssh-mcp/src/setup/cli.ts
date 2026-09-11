@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import ssh2, { Client } from 'ssh2';
 import type { AuthenticationType, ClientChannel, ConnectConfig } from 'ssh2';
 
-import { homePath, privateKeyPath } from '../config/paths.js';
+import { ensureKeysDir, homePath, keysDirPath, privateKeyPath } from '../config/paths.js';
 import {
   APPROVAL_FALLBACKS,
   APPROVAL_MODES,
@@ -302,7 +302,14 @@ export const defaultConnector: Connector = async (options) =>
       // wipe afterwards, so neither needs a prompt fallback.
       tryKeyboard: false,
     };
-    if (options.password !== undefined) config.password = options.password.toString('utf8');
+    if (options.password !== undefined) {
+      // F13 (documented residual): ssh2 1.17.0's ConnectConfig takes `password`
+      // as a string, so this copy is an immutable JS value that `fill(0)` on the
+      // Buffer cannot reach. It lives until the garbage collector takes it. The
+      // Buffer is still wiped, which bounds the exposure; removing this residual
+      // would need ssh2 to accept a Buffer.
+      config.password = options.password.toString('utf8');
+    }
     if (options.privateKey !== undefined) config.privateKey = options.privateKey;
 
     const onReady = (): void => {
@@ -470,6 +477,28 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   let succeeded = false;
 
   try {
+    // Step 3a: restrict the directories BEFORE anything sensitive lands in them
+    // (F12). Hardening after the key was written left an unencrypted key under
+    // inherited NTFS ACLs across two network round trips and a human prompt.
+    // `ensureKeysDir` also hardens a directory it creates itself; this call
+    // covers one that already existed, from an earlier version or from the
+    // server creating `~/.ssh-mcp` for the audit file.
+    try {
+      ensureKeysDir();
+      for (const dir of [homePath(), keysDirPath()]) {
+        const acl =
+          deps.icacls === undefined ? hardenWindowsAcl(dir) : hardenWindowsAcl(dir, deps.icacls);
+        if (acl.applied) err(`Windows ACL 하드닝 완료: ${dir} — ${acl.detail}`);
+      }
+    } catch (error) {
+      err(
+        `ssh-mcp setup: Windows ACL 하드닝에 실패했습니다 (${errorMessage(error)}). ` +
+          '암호 없는 개인키를 보호할 수 없으므로 키를 만들지 않고 중단합니다.'
+      );
+      return EXIT_FAILED;
+    }
+
+    // Step 3b: generate the key pair, into the now-restricted directory.
     backup = backupKeyPair(args.alias);
     keys = generateKeyPair(args.alias);
     err(`ed25519 키를 만들었습니다: ${keys.privateKeyPath}`);
@@ -615,21 +644,6 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
         }
         return EXIT_FAILED;
       }
-    }
-
-    // Step 7: Windows ACL hardening. A failure here aborts (AC7.7).
-    try {
-      const acl =
-        deps.icacls === undefined
-          ? hardenWindowsAcl(homePath())
-          : hardenWindowsAcl(homePath(), deps.icacls);
-      if (acl.applied) err(`Windows ACL 하드닝 완료: ${acl.detail}`);
-    } catch (error) {
-      err(
-        `ssh-mcp setup: Windows ACL 하드닝에 실패했습니다 (${errorMessage(error)}). ` +
-          '암호 없는 개인키를 보호할 수 없으므로 생성한 키를 삭제하고 중단합니다.'
-      );
-      return EXIT_FAILED;
     }
 
     // Step 8: persist. This is the first and only write to hosts.json.
