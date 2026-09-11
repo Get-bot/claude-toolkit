@@ -9,7 +9,7 @@
  * AC9 needs a *second* host key to play "the server's key changed", so this
  * module hands out independent pairs rather than a singleton.
  */
-import { utils } from 'ssh2';
+import { utils, type ParsedKey } from 'ssh2';
 
 import { sha256Fingerprint } from '../../src/ssh/fingerprint.js';
 
@@ -42,24 +42,42 @@ const MAX_GENERATION_ATTEMPTS = 12;
  * unrelated-looking "Malformed OpenSSH private key" in whichever suite happened
  * to draw the bad key, so the flake is spent here rather than in every test
  * that needs a key.
+ *
+ * The two halves are checked against each other as well; the reason is inline
+ * below, where the comparison happens.
  */
 export function generateKeyPair(comment = 'ssh-mcp-test'): FixtureKeyPair {
   for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const keys = utils.generateKeyPairSync('ed25519', { comment });
     const publicKey = keys.public.trim();
-    if (utils.parseKey(keys.private) instanceof Error) continue;
-    if (utils.parseKey(publicKey) instanceof Error) continue;
+
+    const parsedPrivate = firstKey(utils.parseKey(keys.private));
+    if (parsedPrivate === null) continue;
+    if (firstKey(utils.parseKey(publicKey)) === null) continue;
+
+    // The two halves must belong to each other. A pair whose halves came from
+    // different draws parses cleanly on both sides and then authenticates
+    // nowhere, so parsing alone would let it through.
+    const fingerprint = sha256Fingerprint(publicKeyBlob(publicKey));
+    if (sha256Fingerprint(parsedPrivate.getPublicSSH()) !== fingerprint) continue;
 
     return {
       privateKey: keys.private,
       publicKey,
-      fingerprint: sha256Fingerprint(publicKeyBlob(publicKey)),
+      fingerprint,
       algo: 'ssh-ed25519',
     };
   }
   throw new Error(
-    `ssh2 produced ${String(MAX_GENERATION_ATTEMPTS)} unparseable ed25519 key pairs in a row`
+    `ssh2 produced ${String(MAX_GENERATION_ATTEMPTS)} unusable ed25519 key pairs in a row`
   );
+}
+
+/** `parseKey` returns a key, a list of keys or an Error; normalise to one key. */
+function firstKey(parsed: ReturnType<typeof utils.parseKey>): ParsedKey | null {
+  if (parsed instanceof Error) return null;
+  const key = Array.isArray(parsed) ? parsed[0] : parsed;
+  return key ?? null;
 }
 
 /** Wire-format blob of a one-line OpenSSH public key. */
