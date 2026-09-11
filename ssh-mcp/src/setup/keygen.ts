@@ -14,7 +14,7 @@ import fs from 'node:fs';
 
 import { utils } from 'ssh2';
 
-import { parseAuthorizedKeyLine } from '../ssh/fingerprint.js';
+import { parseAuthorizedKeyLine, sha256Fingerprint } from '../ssh/fingerprint.js';
 import {
   PUBLIC_KEY_FILE_MODE,
   STATE_FILE_MODE,
@@ -66,20 +66,73 @@ export function describePublicKey(publicKey: string): {
   return { publicKeyLine, fingerprint: parsed.fingerprint, algo: parsed.algo };
 }
 
+/** How many times a malformed pair is discarded before giving up. */
+export const MAX_GENERATION_ATTEMPTS = 12;
+
+interface SoundKeyPair {
+  privateKey: string;
+  publicKeyLine: string;
+  fingerprint: string;
+  algo: string;
+}
+
+/**
+ * Generate one pair and hand it back only if both halves are sound.
+ *
+ * ssh2 1.17.0 emits a malformed pair roughly once in every 130 calls: the
+ * encoded body comes out three bytes short and `parseKey` rejects it. Both
+ * halves are affected, so both are parsed back, and the private half is checked
+ * against the public one - a pair whose halves disagree would authenticate
+ * nowhere and would only be discovered at the verification reconnect, after a
+ * password had already been sent.
+ *
+ * Returns `null` for a bad draw; {@link generateKeyPair} retries.
+ */
+function drawKeyPair(alias: string): SoundKeyPair | null {
+  const pair = utils.generateKeyPairSync('ed25519', { comment: `${KEY_COMMENT_PREFIX}${alias}` });
+  if (!pair.private.startsWith(OPENSSH_PRIVATE_KEY_HEADER)) return null;
+
+  const parsedPrivate = utils.parseKey(pair.private);
+  if (parsedPrivate instanceof Error || !parsedPrivate.isPrivateKey()) return null;
+
+  const parsedPublic = parseAuthorizedKeyLine(pair.public.trim());
+  if (parsedPublic === null) return null;
+
+  // The private half must carry the public half we are about to install
+  // remotely, or the key-only reconnect (row 5.6) would fail for no visible
+  // reason.
+  if (sha256Fingerprint(parsedPrivate.getPublicSSH()) !== parsedPublic.fingerprint) return null;
+
+  return {
+    privateKey: pair.private,
+    publicKeyLine: pair.public.trim(),
+    fingerprint: parsedPublic.fingerprint,
+    algo: parsedPublic.algo,
+  };
+}
+
 /**
  * Generate a key pair for `alias` and write both halves under `keysDirPath()`.
  *
  * An existing pair is overwritten: the caller (`setup --force`) is responsible
  * for having taken a {@link backupKeyPair} first so an aborted run can restore
  * the previous key (row 5.1b).
+ *
+ * A malformed draw from ssh2 is discarded and retried here rather than being
+ * handed to the caller, so `setup` does not fail once in every 130 runs with a
+ * message about a key the user never saw (see {@link drawKeyPair}).
  */
 export function generateKeyPair(alias: string): GeneratedKeyPair {
-  const pair = utils.generateKeyPairSync('ed25519', { comment: `${KEY_COMMENT_PREFIX}${alias}` });
-  if (!pair.private.startsWith(OPENSSH_PRIVATE_KEY_HEADER)) {
-    throw new Error('ssh2 returned a private key that is not in OpenSSH format');
+  let sound: SoundKeyPair | null = null;
+  for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS && sound === null; attempt += 1) {
+    sound = drawKeyPair(alias);
+  }
+  if (sound === null) {
+    throw new Error(
+      `ssh2 produced ${String(MAX_GENERATION_ATTEMPTS)} unparseable ed25519 key pairs in a row`
+    );
   }
 
-  const described = describePublicKey(pair.public);
   ensureKeysDir();
 
   const privatePath = privateKeyPath(alias);
@@ -90,10 +143,10 @@ export function generateKeyPair(alias: string): GeneratedKeyPair {
   fs.rmSync(privatePath, { force: true });
   fs.rmSync(publicPath, { force: true });
 
-  fs.writeFileSync(privatePath, pair.private, { encoding: 'utf8', mode: STATE_FILE_MODE });
+  fs.writeFileSync(privatePath, sound.privateKey, { encoding: 'utf8', mode: STATE_FILE_MODE });
   applyMode(privatePath, STATE_FILE_MODE);
 
-  fs.writeFileSync(publicPath, `${described.publicKeyLine}\n`, {
+  fs.writeFileSync(publicPath, `${sound.publicKeyLine}\n`, {
     encoding: 'utf8',
     mode: PUBLIC_KEY_FILE_MODE,
   });
@@ -103,9 +156,9 @@ export function generateKeyPair(alias: string): GeneratedKeyPair {
     alias,
     privateKeyPath: privatePath,
     publicKeyPath: publicPath,
-    publicKeyLine: described.publicKeyLine,
-    fingerprint: described.fingerprint,
-    algo: described.algo,
+    publicKeyLine: sound.publicKeyLine,
+    fingerprint: sound.fingerprint,
+    algo: sound.algo,
   };
 }
 

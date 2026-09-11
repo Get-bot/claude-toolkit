@@ -7,11 +7,13 @@
  */
 import fs from 'node:fs';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { utils } from 'ssh2';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { keysDirPath, privateKeyPath, publicKeyPath } from '../../src/config/paths.js';
 import {
   KEY_COMMENT_PREFIX,
+  MAX_GENERATION_ATTEMPTS,
   OPENSSH_PRIVATE_KEY_HEADER,
   backupKeyPair,
   describePublicKey,
@@ -113,6 +115,82 @@ describe('generateKeyPair', () => {
     fs.chmodSync(keys.privateKeyPath, 0o666);
     generateKeyPair('reused');
     expect(mode(privateKeyPath('reused'))).toBe(0o600);
+  });
+});
+
+describe('malformed draws from ssh2 (1.17.0 defect)', () => {
+  /**
+   * ssh2 emits a pair whose encoded body is three bytes short roughly once in
+   * every 130 calls. `generateKeyPair` must spend that flake internally: a user
+   * running `ssh-mcp setup` should never see a failure about a key they never
+   * asked about.
+   */
+  function shortenPublicBody(publicKey: string): string {
+    const [algo, encoded, ...rest] = publicKey.trim().split(/\s+/);
+    const blob = Buffer.from(encoded ?? '', 'base64');
+    const truncated = blob.subarray(0, blob.length - 3).toString('base64');
+    return [algo, truncated, ...rest].join(' ');
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('retries past a malformed pair and returns a sound one', () => {
+    const real = utils.generateKeyPairSync.bind(utils);
+    let draws = 0;
+    vi.spyOn(utils, 'generateKeyPairSync').mockImplementation(((
+      ...args: Parameters<typeof utils.generateKeyPairSync>
+    ) => {
+      const pair = real(...args);
+      draws += 1;
+      // Corrupt the first two draws the way the defect does.
+      return draws <= 2 ? { ...pair, public: shortenPublicBody(pair.public) } : pair;
+    }) as typeof utils.generateKeyPairSync);
+
+    const keys = generateKeyPair('flaky');
+
+    expect(draws).toBe(3);
+    expect(keys.fingerprint).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/);
+    // The written key is the sound one, not a corrupted earlier draw.
+    expect(describePublicKey(fs.readFileSync(keys.publicKeyPath, 'utf8')).fingerprint).toBe(
+      keys.fingerprint
+    );
+  });
+
+  it('rejects a pair whose halves disagree', () => {
+    const real = utils.generateKeyPairSync.bind(utils);
+    vi.spyOn(utils, 'generateKeyPairSync').mockImplementation(((
+      ...args: Parameters<typeof utils.generateKeyPairSync>
+    ) => {
+      // A private half from one pair and a public half from another: both parse,
+      // but the key would authenticate nowhere.
+      const mine = real(...args);
+      const stranger = real(...args);
+      return { private: mine.private, public: stranger.public };
+    }) as typeof utils.generateKeyPairSync);
+
+    expect(() => generateKeyPair('mismatched')).toThrow(/unparseable ed25519 key pairs/);
+    expect(fs.existsSync(privateKeyPath('mismatched'))).toBe(false);
+    expect(fs.existsSync(publicKeyPath('mismatched'))).toBe(false);
+  });
+
+  it('gives up with a clear message after the attempt limit', () => {
+    const real = utils.generateKeyPairSync.bind(utils);
+    let draws = 0;
+    vi.spyOn(utils, 'generateKeyPairSync').mockImplementation(((
+      ...args: Parameters<typeof utils.generateKeyPairSync>
+    ) => {
+      draws += 1;
+      const pair = real(...args);
+      return { ...pair, public: shortenPublicBody(pair.public) };
+    }) as typeof utils.generateKeyPairSync);
+
+    expect(() => generateKeyPair('hopeless')).toThrow(
+      `ssh2 produced ${String(MAX_GENERATION_ATTEMPTS)} unparseable ed25519 key pairs in a row`
+    );
+    expect(draws).toBe(MAX_GENERATION_ATTEMPTS);
+    expect(fs.existsSync(privateKeyPath('hopeless'))).toBe(false);
   });
 });
 
