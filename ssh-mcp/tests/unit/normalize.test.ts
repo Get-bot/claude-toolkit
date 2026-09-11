@@ -33,9 +33,12 @@ describe('top-level splitting', () => {
     ['echo a\\;b', ['echo a;b']],
     ['echo "a|b"', ['echo a|b']],
     ['echo "a&&b"', ['echo a&&b']],
-  ] as [string, string[]][])('does not split quoted or escaped separators in %j', (command, expected) => {
-    expect(topNormalized(command)).toEqual(expected);
-  });
+  ] as [string, string[]][])(
+    'does not split quoted or escaped separators in %j',
+    (command, expected) => {
+      expect(topNormalized(command)).toEqual(expected);
+    },
+  );
 
   it('records the terminator that ended each segment', () => {
     const segments = topLevel('a && b | c; d & e');

@@ -24,7 +24,6 @@ export const UNCONDITIONAL_PROGRAMS: readonly string[] = [
   'nano',
   'pico',
   'joe',
-  'top',
   'htop',
   'btop',
   'atop',
@@ -53,10 +52,13 @@ const PAGER_ALTERNATIVES = [
   'grep -n <pattern> <file>',
 ];
 
+/** `top -b -n 1` is allowed (batch mode), so it leads every suggestion here. */
+const TOP_ALTERNATIVES = ['top -b -n 1', 'ps aux --sort=-%cpu | head -20'];
+
 const PROCESS_VIEWER_ALTERNATIVES = [
+  'top -b -n 1',
   'ps aux --sort=-%cpu | head -20',
   'ps -eo pid,ppid,pcpu,pmem,comm --sort=-pcpu | head -20',
-  'uptime',
 ];
 
 /** Concrete replacements, keyed by program (OPT-1 "응답"). */
@@ -70,7 +72,7 @@ const ALTERNATIVES: Readonly<Record<string, readonly string[]>> = {
   joe: EDITOR_ALTERNATIVES,
   less: PAGER_ALTERNATIVES,
   more: PAGER_ALTERNATIVES,
-  top: PROCESS_VIEWER_ALTERNATIVES,
+  top: TOP_ALTERNATIVES,
   htop: PROCESS_VIEWER_ALTERNATIVES,
   btop: PROCESS_VIEWER_ALTERNATIVES,
   atop: PROCESS_VIEWER_ALTERNATIVES,
@@ -105,7 +107,9 @@ function hasFlag(args: readonly Token[], flags: readonly string[]): boolean {
   return args.some((token) => {
     if (token.kind === 'operator') return false;
     const value = token.value;
-    return flags.some((flag) => value === flag || (flag.startsWith('--') && value.startsWith(`${flag}=`)));
+    return flags.some(
+      (flag) => value === flag || (flag.startsWith('--') && value.startsWith(`${flag}=`)),
+    );
   });
 }
 
@@ -133,12 +137,26 @@ interface ConditionalRule {
   refuse: (args: readonly Token[]) => boolean;
 }
 
-/** Refused only for some argument shapes (OPT-1, 12 programs). */
+/** Refused only for some argument shapes (OPT-1, 13 programs). */
 const CONDITIONAL_RULES: readonly ConditionalRule[] = [
+  {
+    // `top` redraws the screen forever without `-b`; with it, it prints once
+    // and exits, which is an ordinary command. `htop` and friends have no
+    // batch mode and stay on the unconditional list.
+    program: 'top',
+    reason: 'top without -b redraws a terminal forever; batch mode prints once and exits',
+    refuse: (args) =>
+      !words(args).some(
+        (token) =>
+          token.value === '--batch-mode' ||
+          (!token.value.startsWith('--') && /^-[A-Za-z]*b/.test(token.value)),
+      ),
+  },
   {
     program: 'mysql',
     reason: 'mysql without -e/--execute opens an interactive SQL shell',
-    refuse: (args) => !hasFlag(args, ['-e', '--execute']) && !args.some((t) => t.value.startsWith('--execute=')),
+    refuse: (args) =>
+      !hasFlag(args, ['-e', '--execute']) && !args.some((t) => t.value.startsWith('--execute=')),
   },
   {
     program: 'psql',

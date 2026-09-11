@@ -59,7 +59,12 @@ interface FakeClient {
 function makeClient(options: ClientOptions): FakeClient {
   const state = { calls: 0 };
   if (!options.elicitation) {
-    return { client: { supportsElicitation: false }, get calls() { return state.calls; } };
+    return {
+      client: { supportsElicitation: false },
+      get calls() {
+        return state.calls;
+      },
+    };
   }
   return {
     client: {
@@ -503,6 +508,20 @@ describe('confirmation_required response body (M1, M7)', () => {
     expect(body.expires_in_sec).toBe(300);
     expect(typeof body.expires_at).toBe('string');
     expect(body.next_call).toBeDefined();
+  });
+
+  it('shows the full command even past the 2 KiB default field cap (M7)', async () => {
+    // `redact` truncates ordinary strings at 2 KiB; `command` is in
+    // `preserveKeys`, which raises the cap to 32 KiB, and `command_too_long`
+    // already rejects anything over 8192 characters.
+    const long = `rm -rf /var/www/${'a'.repeat(5000)}`;
+    const result = await gate({
+      host: host('prod-web', 'ask-destructive', 'token'),
+      command: long,
+    });
+    expect(result.kind).toBe('confirmation_required');
+    const body = parseBody(result);
+    expect(body.command).toBe(long);
   });
 
   it('states that the server cannot verify human approval', async () => {

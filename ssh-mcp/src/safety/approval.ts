@@ -29,7 +29,13 @@ import { classify, MAX_COMMAND_LENGTH } from './classify.js';
 import type { Classification } from './classify.js';
 import { checkInteractiveScan } from './interactive.js';
 import { normalize } from './normalize.js';
-import { consumeToken, issueToken, TOKEN_TTL_MS, TOKEN_TTL_SEC, tokenHashPrefix } from './tokens.js';
+import {
+  consumeToken,
+  issueToken,
+  TOKEN_TTL_MS,
+  TOKEN_TTL_SEC,
+  tokenHashPrefix,
+} from './tokens.js';
 import type { ConsumeResult } from './tokens.js';
 
 /** Tools that run a command and therefore go through this gate. */
@@ -331,7 +337,10 @@ function confirmationRequired(
       ERROR_CODES.confirmation_required,
       '이 명령은 사용자 승인이 필요합니다.',
       details,
-      { preserveKeys: ['confirmation_token'] },
+      // `command` is preserved so the model can quote the full text to the
+      // user (M7); `redact` caps a preserved value at 32 KiB and the command
+      // itself is already capped at 8192 characters by `command_too_long`.
+      { preserveKeys: ['confirmation_token', 'command'] },
     ),
     token,
     classification,

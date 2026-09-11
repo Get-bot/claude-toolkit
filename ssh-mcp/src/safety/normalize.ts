@@ -518,7 +518,10 @@ function stripPrivilegePrefix(tokens: readonly Token[]): PrivilegeResult {
       if (value === '--stdin') stdinPassword = true;
       if (!value.startsWith('--') && /S/.test(value.slice(1))) stdinPassword = true;
       i += 1;
-      if (SUDO_LONG_VALUE_FLAG.test(value) || (!value.startsWith('--') && SUDO_VALUE_FLAG.test(value))) {
+      if (
+        SUDO_LONG_VALUE_FLAG.test(value) ||
+        (!value.startsWith('--') && SUDO_VALUE_FLAG.test(value))
+      ) {
         i += 1;
       }
       continue;
@@ -562,7 +565,11 @@ function detectShellWrapper(
   let shell = name;
   if (name === 'busybox') {
     const second = commandTokens[1];
-    if (second === undefined || second.kind !== 'word' || !SHELL_NAME.test(basename(second.value))) {
+    if (
+      second === undefined ||
+      second.kind !== 'word' ||
+      !SHELL_NAME.test(basename(second.value))
+    ) {
       return null;
     }
     shell = basename(second.value);
@@ -904,7 +911,16 @@ function scanLevel(source: string, depth: number, ctx: ScanContext): Segment[] {
           j = close + 1;
           continue;
         }
-        if (isBlank(dc) || dc === '\n' || dc === ';' || dc === '|' || dc === '&' || dc === '>') break;
+        if (
+          isBlank(dc) ||
+          dc === '\n' ||
+          dc === ';' ||
+          dc === '|' ||
+          dc === '&' ||
+          dc === '>'
+        ) {
+          break;
+        }
         if (dc === '\\') {
           delim += source.charAt(j + 1);
           j += 2;

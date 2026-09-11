@@ -8,12 +8,20 @@ import {
 } from '../../src/safety/interactive.js';
 
 describe('list sizes (OPT-1)', () => {
-  it('has 22 unconditionally refused programs', () => {
-    expect(UNCONDITIONAL_PROGRAMS).toHaveLength(22);
+  it('has 21 unconditionally refused programs', () => {
+    expect(UNCONDITIONAL_PROGRAMS).toHaveLength(21);
   });
 
-  it('has 12 argument-conditional programs', () => {
-    expect(CONDITIONAL_PROGRAMS).toHaveLength(12);
+  it('has 13 argument-conditional programs', () => {
+    expect(CONDITIONAL_PROGRAMS).toHaveLength(13);
+  });
+
+  it('keeps top off the unconditional list and htop on it', () => {
+    // `top -b` prints once and exits, so `top` is argument-conditional.
+    // `htop` has no batch mode, so nothing about its arguments can save it.
+    expect(UNCONDITIONAL_PROGRAMS).not.toContain('top');
+    expect(CONDITIONAL_PROGRAMS).toContain('top');
+    expect(UNCONDITIONAL_PROGRAMS).toContain('htop');
   });
 });
 
@@ -58,6 +66,8 @@ describe('unconditional refusals', () => {
 
 describe('argument-conditional refusals', () => {
   const refused: string[] = [
+    'top',
+    'top -n 1',
     'mysql',
     'mysql -u root mydb',
     'psql',
@@ -79,6 +89,10 @@ describe('argument-conditional refusals', () => {
   ];
 
   const allowed: string[] = [
+    'top -b -n 1',
+    'top -b -n1',
+    'top -bn1',
+    'top --batch-mode -n 1',
     'mysql -e "SELECT 1"',
     'mysql --execute="SELECT 1"',
     'psql -c "SELECT 1"',
@@ -122,6 +136,26 @@ describe('the gate is not a risk judgement (Critic C14)', () => {
     const command = 'redis-cli FLUSHALL';
     expect(checkInteractive(command).refused).toBe(false);
     expect(classify(command).grade).toBe('destructive');
+  });
+
+  it('lets the §6.1 safe-corpus row top -b -n1 pass both gates', () => {
+    // The corpus grades it `safe`; after the top ruling the interactive gate
+    // must agree, otherwise the row could never actually run.
+    expect(checkInteractive('top -b -n1').refused).toBe(false);
+    expect(classify('top -b -n1').grade).toBe('safe');
+  });
+
+  it('suggests batch mode when it refuses bare top', () => {
+    const verdict = checkInteractive('top');
+    expect(verdict.refused).toBe(true);
+    if (verdict.refused) {
+      expect(verdict.alternatives[0]).toBe('top -b -n 1');
+      expect(verdict.alternatives).toContain('ps aux --sort=-%cpu | head -20');
+      // A suggestion the gate would itself refuse is worse than none.
+      expect(
+        verdict.alternatives.filter((alternative) => checkInteractive(alternative).refused),
+      ).toEqual([]);
+    }
   });
 });
 

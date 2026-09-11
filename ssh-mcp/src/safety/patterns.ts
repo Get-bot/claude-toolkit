@@ -447,7 +447,12 @@ const PRIVILEGED_SPECS: readonly PatternSpec[] = [
     reason: 'changes firewall rules',
     source: '^(?:ufw|firewall-cmd|iptables|ip6tables|nft)\\b',
   },
-  { id: 'mount', scope: 'segment', reason: 'mounts or unmounts a filesystem', source: '^(?:mount|umount)\\b' },
+  {
+    id: 'mount',
+    scope: 'segment',
+    reason: 'mounts or unmounts a filesystem',
+    source: '^(?:mount|umount)\\b',
+  },
   {
     id: 'kernel-module',
     scope: 'segment',

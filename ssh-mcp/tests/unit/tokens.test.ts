@@ -108,7 +108,9 @@ describe('consume', () => {
 describe('store bounds', () => {
   it(`evicts the oldest entry past ${String(MAX_TOKENS)} tokens`, () => {
     const first = issueToken(BINDING);
-    for (let i = 0; i < MAX_TOKENS; i += 1) issueToken({ ...BINDING, command: `echo ${String(i)}` });
+    for (let i = 0; i < MAX_TOKENS; i += 1) {
+      issueToken({ ...BINDING, command: `echo ${String(i)}` });
+    }
     expect(tokenStoreSize()).toBe(MAX_TOKENS);
     expect(consumeToken(first, BINDING)).toBe('invalid');
   });
