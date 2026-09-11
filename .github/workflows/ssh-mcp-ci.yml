@@ -1,0 +1,366 @@
+name: ssh-mcp CI
+
+# Phase 7 (plan .omc/plans/ssh-mcp-plan.md §Phase 7). Six jobs:
+#   build-test        — matrix build/typecheck/test + false-positive gate (7.1, 7.6)
+#   real-sshd         — integration tests against a real OpenSSH container + shell matrix (7.2, 7.2b)
+#   no-build-tools    — Windows path with optional native deps skipped (7.3)
+#   package-smoke     — npm pack + npx smoke test, both OS (7.4)
+#   windows-spawn     — proves the npx/cmd spawn(ENOENT) behavior the README warns about (7.5)
+#
+# NOTE for reviewers: several npm script names and env var names referenced below are not yet
+# defined in ssh-mcp/package.json as of this workflow's authoring (scaffold work is concurrent).
+# See the "assumed names" list in the worker-docs handoff message to team-lead. If package.json
+# ends up with different script names, update the `npm run <script>` lines below to match.
+
+on:
+  pull_request:
+    paths:
+      - "ssh-mcp/**"
+      - ".github/workflows/ssh-mcp-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ssh-mcp/**"
+      - ".github/workflows/ssh-mcp-ci.yml"
+
+defaults:
+  run:
+    working-directory: ssh-mcp
+
+env:
+  # F13: MSYS/git-bash on Windows runners rewrites POSIX-looking paths (e.g. leading "/") before
+  # they reach child processes. Disable that rewriting for every job so ssh-mcp's own path/command
+  # handling is what's under test, not MSYS's path mangling.
+  MSYS_NO_PATHCONV: 1
+
+jobs:
+  build-test:
+    name: build-test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: build
+        run: npm run build
+
+      - name: test (fixture sshd)
+        run: npm test
+        env:
+          ENDPOINT: fixture
+
+      # 7.6 — false-positive gate: the safe-command corpus (tests/unit/classify.test.ts) must
+      # classify every entry as "safe". A single non-safe verdict fails the job (AC16 오탐 방지).
+      # ASSUMED script name: "test:fp-gate" -> `vitest run tests/unit/classify.test.ts`.
+      # Told to team-lead: scaffold needs to add this script to ssh-mcp/package.json.
+      - name: false-positive gate (safe corpus)
+        run: npm run test:fp-gate
+
+  real-sshd:
+    name: real-sshd (ubuntu-latest)
+    runs-on: ubuntu-latest
+    env:
+      # ASSUMED env names (told to team-lead): CI-only ephemeral SSH credentials for the
+      # linuxserver/openssh-server test container. Never real secrets — sourced from an Actions
+      # *variable* (not a secret) with a hardcoded ephemeral fallback, since there is nothing here
+      # worth protecting (the container is destroyed at the end of the job).
+      SSH_MCP_CI_SSH_USER: ${{ vars.SSH_MCP_CI_SSH_USER || 'ciuser' }}
+      # ci-only-password: throwaway credential for a throwaway container, valid only for the
+      # lifetime of this job. Do not reuse this value anywhere real.
+      SSH_MCP_CI_SSH_PASSWORD: ${{ vars.SSH_MCP_CI_SSH_PASSWORD || 'ci-only-password' }}
+    # Appendix A asks to CONFIRM the OpenSSH container image tag. Decision + evidence:
+    #   Image: lscr.io/linuxserver/openssh-server
+    #   Tag:   10.3_p1-r1-ls236  (linuxserver/docker-openssh-server release, 2026-09-06 — the most
+    #          recent tag at the time this workflow was authored per the project's GitHub Releases
+    #          page). Pinned to an exact tag (not "latest") for reproducible CI.
+    #   The image bundles openssh-sftp-server (docs.linuxserver.io/images/docker-openssh-server),
+    #   so the sftp subsystem is available out of the box for AC13 — this was not independently
+    #   re-verified against a live container by this worker; flagged as unverified below.
+    services:
+      sshd:
+        image: lscr.io/linuxserver/openssh-server:10.3_p1-r1-ls236
+        ports:
+          - 2222:2222
+        env:
+          PUID: "1000"
+          PGID: "1000"
+          PASSWORD_ACCESS: "true"
+          USER_NAME: ${{ env.SSH_MCP_CI_SSH_USER }}
+          USER_PASSWORD: ${{ env.SSH_MCP_CI_SSH_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      - name: wait for sshd container
+        shell: bash
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/2222) 2>/dev/null; then
+              echo "sshd is accepting connections"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "sshd did not become ready in time" >&2
+          exit 1
+
+      # ASSUMED env names (told to team-lead): tests/fixtures/endpoints.ts's ENDPOINT=sshd branch
+      # is expected to read these four to reach the service container. If endpoints.ts uses
+      # different names, align them.
+      - name: integration tests against real sshd (AC7-AC9, AC11.3, AC13)
+        run: npm run test:integration
+        env:
+          ENDPOINT: sshd
+          SSH_MCP_SSHD_HOST: 127.0.0.1
+          SSH_MCP_SSHD_PORT: "2222"
+          SSH_MCP_SSHD_USER: ${{ env.SSH_MCP_CI_SSH_USER }}
+          SSH_MCP_SSHD_PASSWORD: ${{ env.SSH_MCP_CI_SSH_PASSWORD }}
+
+      # 7.2b — shell matrix: bash / dash / zsh (busybox ash is exercised separately since the
+      # openssh-server image itself is Alpine/busybox-based; installing "busybox" here covers any
+      # ash-dependent assertions the fixture makes on the runner side).
+      - name: install zsh + busybox for shell matrix
+        run: sudo apt-get update && sudo apt-get install -y zsh busybox
+
+      - name: shell matrix — session.test.ts (AC14.3, AC14.4)
+        shell: bash
+        run: |
+          set -e
+          for shell in bash dash zsh; do
+            echo "=== SHELL_UNDER_TEST=$shell ==="
+            SHELL_UNDER_TEST="$shell" \
+            ENDPOINT=sshd \
+            SSH_MCP_SSHD_HOST=127.0.0.1 \
+            SSH_MCP_SSHD_PORT=2222 \
+            SSH_MCP_SSHD_USER="$SSH_MCP_CI_SSH_USER" \
+            SSH_MCP_SSHD_PASSWORD="$SSH_MCP_CI_SSH_PASSWORD" \
+            npm run test:integration -- tests/integration/session.test.ts
+          done
+
+  no-build-tools:
+    name: no-build-tools (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci --omit=optional (no native build tools)
+        run: npm ci --omit=optional
+
+      - name: build
+        run: npm run build
+
+      # A clean runner has no ~/.ssh-mcp and zero registered hosts. doctor's check #3 treats
+      # "missing but creatable" as PASS, so this must exit 0 (AC21.10, PM-3).
+      - name: doctor (expect exit 0 on a clean runner)
+        run: node dist/index.js doctor
+
+  package-smoke:
+    name: package-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      - name: npm pack
+        run: npm pack
+
+      # Resolve the packed tarball's absolute path with Node so the logic is identical on both
+      # OSes (bash vs pwsh globbing differs; Node's fs.readdirSync does not).
+      - name: resolve packed tarball path
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const tgz = fs.readdirSync('.').find((f) => f.endsWith('.tgz'));
+            if (!tgz) { console.error('no .tgz produced by npm pack'); process.exit(1); }
+            fs.appendFileSync(process.env.GITHUB_ENV, 'SSH_MCP_TGZ=' + path.resolve(tgz) + require('node:os').EOL);
+          "
+
+      # ASSUMED script name: "test:e2e" -> `vitest run tests/e2e/package.test.ts` (realHost.test.ts
+      # self-skips without SSH_MCP_E2E_HOST, so it's safe to include in the same run).
+      - name: package smoke test (initialize + tools/list, expect 7 tools)
+        run: npm run test:e2e
+
+  windows-spawn:
+    name: windows-spawn (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      - name: npm pack
+        run: npm pack
+
+      - name: resolve packed tarball path
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const tgz = fs.readdirSync('.').find((f) => f.endsWith('.tgz'));
+            if (!tgz) { console.error('no .tgz produced by npm pack'); process.exit(1); }
+            fs.appendFileSync(process.env.GITHUB_ENV, 'SSH_MCP_TGZ=' + path.resolve(tgz) + require('node:os').EOL);
+          "
+
+      # PM-3 / AC4-AC6 evidence: on Windows, `npx` is a .cmd shim. spawn(..., { shell: false })
+      # never goes through cmd.exe, so Node's spawn cannot locate/execute a .cmd file directly and
+      # fails with ENOENT — this is exactly the failure mode the README's "use cmd /c npx ..."
+      # guidance exists to avoid. Wrapping with `cmd /c` fixes it because cmd.exe itself resolves
+      # the .cmd shim's PATHEXT association.
+      - name: assert npx spawn(shell:false) fails, cmd /c npx succeeds
+        shell: bash
+        run: |
+          cat <<'EOF' > "$RUNNER_TEMP/windows-spawn-check.mjs"
+          import { spawn } from 'node:child_process';
+
+          const tgz = process.env.SSH_MCP_TGZ;
+          if (!tgz) throw new Error('SSH_MCP_TGZ not set');
+
+          const REQ_INIT = JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2026-07-28',
+              capabilities: {},
+              clientInfo: { name: 'ci-windows-spawn', version: '0.0.0' },
+            },
+          }) + '\n';
+
+          function expectEnoent(cmd, args) {
+            return new Promise((resolvePromise, reject) => {
+              let settled = false;
+              const child = spawn(cmd, args, { shell: false });
+              const giveUp = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                child.kill();
+                reject(new Error(`expected ${cmd} spawn to fail with ENOENT, but it did not within 5s`));
+              }, 5000);
+
+              child.on('error', (err) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(giveUp);
+                if (err.code === 'ENOENT') resolvePromise(err.code);
+                else reject(new Error(`expected ENOENT from ${cmd}, got ${err.code}: ${err.message}`));
+              });
+            });
+          }
+
+          function expectInitializeResponse(cmd, args) {
+            return new Promise((resolvePromise, reject) => {
+              let settled = false;
+              let buf = '';
+              const child = spawn(cmd, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+              const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                child.kill();
+                reject(new Error(`${cmd} did not answer initialize within 20s`));
+              }, 20000);
+
+              child.on('error', (err) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                reject(new Error(`unexpected spawn error for ${cmd}: ${err.message}`));
+              });
+
+              child.stdout.on('data', (d) => {
+                buf += d.toString('utf8');
+                let nl;
+                while ((nl = buf.indexOf('\n')) !== -1) {
+                  const line = buf.slice(0, nl);
+                  buf = buf.slice(nl + 1);
+                  if (!line.trim()) continue;
+                  try {
+                    const msg = JSON.parse(line);
+                    if (msg.id === 1 && msg.result && msg.result.serverInfo) {
+                      settled = true;
+                      clearTimeout(timer);
+                      child.kill();
+                      resolvePromise(msg.result.serverInfo);
+                      return;
+                    }
+                  } catch {
+                    // ignore non-JSON stdout noise
+                  }
+                }
+              });
+
+              child.stdin.write(REQ_INIT);
+            });
+          }
+
+          console.log('[1/2] spawn("npx", ["-y", tgz], { shell: false }) — expecting ENOENT');
+          const code = await expectEnoent('npx', ['-y', tgz]);
+          console.log('  -> failed as expected:', code);
+
+          console.log('[2/2] spawn("cmd", ["/c", "npx", "-y", tgz], { shell: false }) — expecting initialize response');
+          const serverInfo = await expectInitializeResponse('cmd', ['/c', 'npx', '-y', tgz]);
+          console.log('  -> responded:', JSON.stringify(serverInfo));
+
+          console.log('windows-spawn check: PASS');
+          EOF
+          node "$RUNNER_TEMP/windows-spawn-check.mjs"
