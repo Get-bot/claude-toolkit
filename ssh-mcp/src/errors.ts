@@ -143,12 +143,23 @@ function buildPayload(
   for (const key of preserved) {
     if (key === 'error' || key === 'message') continue;
     if (Object.prototype.hasOwnProperty.call(details, key)) {
-      payload[key] = redact(details[key]);
+      payload[key] = redact(details[key], { maxStringBytes: PRESERVED_VALUE_MAX_BYTES });
     }
   }
 
   return payload;
 }
+
+/**
+ * Length cap for values listed in `preserveKeys`.
+ *
+ * The default 2 KiB field cap would cut the command echoed back in a
+ * `confirmation_required` notice, and the person approving must see the whole
+ * command (OPT-0 M7). Commands are already limited to 8192 characters by
+ * `command_too_long`, so 32 KiB covers the worst-case UTF-8 expansion.
+ * Key-name masking and PEM masking still apply to preserved values.
+ */
+export const PRESERVED_VALUE_MAX_BYTES = 32 * 1024;
 
 /**
  * Build an error tool result (row 1.7).
