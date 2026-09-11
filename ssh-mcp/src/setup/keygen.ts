@@ -12,7 +12,7 @@
  */
 import fs from 'node:fs';
 
-import { utils } from 'ssh2';
+import ssh2 from 'ssh2';
 
 import { CodedError, ERROR_CODES } from '../errors.js';
 import { parseAuthorizedKeyLine, sha256Fingerprint } from '../ssh/fingerprint.js';
@@ -23,6 +23,18 @@ import {
   privateKeyPath,
   publicKeyPath,
 } from '../config/paths.js';
+
+/**
+ * `utils` is taken off the default export on purpose.
+ *
+ * ssh2 is CommonJS, and Node's named-export detection for CJS finds only
+ * `AgentProtocol`, `BaseAgent`, `Client` and `createAgent`. A named `utils`
+ * import type-checks and works under vitest, which rewrites it through esbuild
+ * interop, then dies in the built ESM bundle with
+ * `SyntaxError: Named export 'utils' not found`. `Client` is detected, so it
+ * stays a named import.
+ */
+const { utils } = ssh2;
 
 /** Comment embedded in every generated key, so it is identifiable remotely. */
 export const KEY_COMMENT_PREFIX = 'ssh-mcp:';

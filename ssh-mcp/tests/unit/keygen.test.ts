@@ -7,7 +7,7 @@
  */
 import fs from 'node:fs';
 
-import { utils } from 'ssh2';
+import ssh2 from 'ssh2';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { keysDirPath, privateKeyPath, publicKeyPath } from '../../src/config/paths.js';
@@ -27,6 +27,10 @@ import type { KeyPairGenerator, RawKeyPair } from '../../src/setup/keygen.js';
 import { sha256Fingerprint } from '../../src/ssh/fingerprint.js';
 import { assertNoWritesOutside, createTmpHome } from '../fixtures/tmpHome.js';
 import type { TmpHome } from '../fixtures/tmpHome.js';
+
+// Off the default export: ssh2 is CJS and does not expose `utils` as a
+// detected named export (see src/setup/keygen.ts).
+const { utils } = ssh2;
 
 const isPosix = process.platform !== 'win32';
 

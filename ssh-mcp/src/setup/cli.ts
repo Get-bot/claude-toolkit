@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs';
 
-import { Client, utils } from 'ssh2';
+import ssh2, { Client } from 'ssh2';
 import type { AuthenticationType, ClientChannel, ConnectConfig } from 'ssh2';
 
 import { homePath, privateKeyPath } from '../config/paths.js';
@@ -45,6 +45,18 @@ import {
 import type { Prompter } from './prompt.js';
 import { hardenWindowsAcl } from './winacl.js';
 import type { IcaclsRunner } from './winacl.js';
+
+/**
+ * `utils` is taken off the default export on purpose.
+ *
+ * ssh2 is CommonJS, and Node's named-export detection for CJS finds only
+ * `AgentProtocol`, `BaseAgent`, `Client` and `createAgent`. A named `utils`
+ * import type-checks and works under vitest, which rewrites it through esbuild
+ * interop, then dies in the built ESM bundle with
+ * `SyntaxError: Named export 'utils' not found`. `Client` is detected, so it
+ * stays a named import.
+ */
+const { utils } = ssh2;
 
 /** Success. */
 export const EXIT_OK = 0;
