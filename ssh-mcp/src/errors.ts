@@ -15,6 +15,13 @@ export const ERROR_CODES = {
   host_not_found: 'host_not_found',
   /** Pinned host key fingerprint did not match (AC9.1). */
   host_key_mismatch: 'host_key_mismatch',
+  /**
+   * TCP connect or SSH handshake failed before authentication (unreachable
+   * host, refused port, protocol error). Not in the §5.3 table — added during
+   * team-exec because the SSH layer needs to distinguish "cannot reach" from
+   * "rejected credentials" and from an internal bug.
+   */
+  connection_failed: 'connection_failed',
   /** Public key authentication failed. */
   auth_failed: 'auth_failed',
   /** `deny` mode, or the user declined at the elicitation prompt (AC16). */
@@ -57,6 +64,33 @@ export const ERROR_CODE_LIST: readonly ErrorCode[] = Object.values(ERROR_CODES);
 
 export function isErrorCode(value: unknown): value is ErrorCode {
   return typeof value === 'string' && (ERROR_CODE_LIST as readonly string[]).includes(value);
+}
+
+/**
+ * Error that carries a tool error code across module boundaries.
+ *
+ * Lower layers (ssh, safety, setup) throw this; the Phase 4 tool wrapper turns
+ * it into {@link toToolError} with `code`/`details` intact. Anything thrown
+ * that is not a `CodedError` becomes `internal_error`.
+ */
+export class CodedError extends Error {
+  readonly code: ErrorCode;
+  readonly details: ErrorDetails | undefined;
+
+  constructor(code: ErrorCode, message: string, details?: ErrorDetails, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'CodedError';
+    this.code = code;
+    this.details = details;
+  }
+
+  toToolError(options?: ToolPayloadOptions): ToolTextResult {
+    return toToolError(this.code, this.message, this.details, options);
+  }
+}
+
+export function isCodedError(value: unknown): value is CodedError {
+  return value instanceof CodedError;
 }
 
 /** Shape the MCP SDK expects back from a tool handler. */
