@@ -18,9 +18,16 @@
  *
  * There is deliberately no allow mechanism: a host can switch a built-in
  * pattern off and can add patterns, but nothing can declare a command safe
- * (plan F8, enforced by `HostsFileSchema.strict()`).
+ * (plan F8, enforced by `HostsFileSchema.strict()`). Since security finding F7
+ * a host cannot switch off a {@link CORE_PATTERN_IDS} entry either.
+ *
+ * Some checks are not regexes at all. Anything that depends on *argv position*
+ * — is `rm` the program, is this path the destination — lives in
+ * `classify.ts`, because a regex over a flattened string cannot tell a source
+ * argument from a destination one. Those rules cannot be switched off.
  */
 import type { PatternOverrides } from '../config/schema.js';
+import { logger } from '../log.js';
 
 export type PatternScope = 'whole' | 'segment';
 export type PatternGrade = 'destructive' | 'privileged';
@@ -55,8 +62,22 @@ export const WHOLE_START = '(?:^|[;&|]\\s*)';
 const SYSDIR =
   '(?:~/|\\$HOME/|\\$\\{HOME\\}/|/(?:etc|var|usr|opt|boot|srv|lib|lib64|bin|sbin|root|home)(?:/|\\s|$))';
 
+/**
+ * The subset of {@link SYSDIR} where even an *append* is destructive: one line
+ * added to `/etc/passwd` or `/etc/sudoers` is a new root account. Appending to
+ * `/var/log/app.log` is ordinary, which is why `/var` is not in this list (F8).
+ */
+const CRITICAL_DIR = '/(?:etc|usr|bin|sbin|boot|lib|lib64|root)(?:/|\\s|$)';
+
 /** Block devices: writing to one destroys a filesystem. */
 const BLOCKDEV = '/dev/(?:sd[a-z]|nvme\\d|hd[a-z]|vd[a-z]|mmcblk\\d|disk\\d|xvd[a-z])';
+
+/** Anything that will execute text handed to it on stdin or as an argument. */
+const INTERPRETER = '(?:python3?|perl|ruby|node|php|(?:ba|z|k|da|a)?sh)';
+
+/** Files whose contents are credentials (security finding F5). */
+const SECRET_PATH =
+  '(?:/etc/(?:shadow|gshadow|sudoers)\\b|id_(?:rsa|dsa|ecdsa|ed25519)\\b|\\.aws/credentials\\b|\\.netrc\\b|\\.npmrc\\b|\\.env(?:\\s|$|\\.)|\\.pem\\b|\\.kube/config\\b)';
 
 interface PatternSpec {
   id: string;
@@ -122,8 +143,8 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
   {
     id: 'rm-any-target',
     scope: 'segment',
-    reason: 'rm deletes files; only rm -i is interactive enough to be safe',
-    source: '^rm\\s+(?!-i\\b)(?!-)\\S',
+    reason: 'rm deletes files',
+    source: '^rm\\s+(?!-)\\S',
   },
   {
     id: 'shred',
@@ -159,7 +180,8 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
     id: 'power',
     scope: 'segment',
     reason: 'shutting the host down ends every session on it',
-    source: '^(?:(?:shutdown|reboot|halt|poweroff)\\b|init\\s+[06]\\b)',
+    source:
+      '^(?:(?:shutdown|reboot|halt|poweroff)\\b|init\\s+[06]\\b|systemctl\\s+(?:poweroff|reboot|halt|kexec|emergency|rescue|isolate)\\b)',
   },
   {
     id: 'chmod-777',
@@ -183,15 +205,15 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
   {
     id: 'pipe-to-shell',
     scope: 'whole',
-    reason: 'downloading a script straight into a shell runs unreviewed code',
-    source: '(?:\\S*/)?(?:curl|wget|fetch)\\b[^|]*\\|\\s*(?:sudo\\s+)?\\S*(?:ba|z|k|da|a)?sh\\b',
+    reason: 'downloading code straight into an interpreter runs unreviewed code',
+    source: `(?:\\S*/)?(?:curl|wget|fetch)\\b[^|]*\\|\\s*(?:sudo\\s+)?\\S*${INTERPRETER}\\b`,
     prefix: false,
   },
   {
     id: 'b64-to-shell',
     scope: 'whole',
     reason: 'base64 decoded into a shell hides what is executed',
-    source: '\\|\\s*(?:\\S*/)?base64\\s+-\\S*[dD]\\S*\\s*\\|\\s*\\S*sh\\b',
+    source: `\\|\\s*(?:\\S*/)?base64\\s+-\\S*[dD]\\S*\\s*\\|\\s*\\S*${INTERPRETER}\\b`,
     prefix: false,
   },
   {
@@ -205,7 +227,9 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
     id: 'git-force-push',
     scope: 'segment',
     reason: 'force push overwrites remote history',
-    source: '^git\\s+push\\b.*\\s(?:--force|-f)\\b',
+    // `--force-with-lease` is deliberately excluded: it refuses when the remote
+    // moved, which is the whole point of it (F8). It is privileged instead.
+    source: '^git\\s+push\\b.*\\s(?:--force(?![-\\w])|-f)\\b',
   },
   {
     id: 'git-reset-hard',
@@ -229,7 +253,15 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
     id: 'redirect-truncate',
     scope: 'whole',
     reason: 'redirection truncates the target file, whatever the command is',
-    source: `${WHOLE_START}[^;&|<>]*>{1,2}\\s*${SYSDIR}`,
+    // `>` only. `>>` appends, and appending to a log file is ordinary (F8);
+    // the critical subset is covered by `redirect-append-critical`.
+    source: `${WHOLE_START}[^;&|<>]*>(?!>)\\s*${SYSDIR}`,
+  },
+  {
+    id: 'redirect-append-critical',
+    scope: 'whole',
+    reason: 'appending to a system configuration file can add an account or a rule',
+    source: `${WHOLE_START}[^;&|<>]*>>\\s*${CRITICAL_DIR}`,
   },
   {
     id: 'redirect-device',
@@ -244,22 +276,10 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
     source: `${WHOLE_START}(?:sudo\\s+)?tee\\s+(?:-a\\s+)?${SYSDIR}`,
   },
   {
-    id: 'move-to-system',
-    scope: 'segment',
-    reason: 'moving or copying onto /dev, /proc, /sys or /boot breaks the host',
-    source: '^(?:mv|cp)\\s+.*\\s/(?:dev|proc|sys|boot)(?:/|\\s|$)',
-  },
-  {
     id: 'move-from-system',
     scope: 'segment',
     reason: 'moving a system directory away is a deletion in practice',
     source: `^mv\\s+${SYSDIR}`,
-  },
-  {
-    id: 'inline-interpreter',
-    scope: 'segment',
-    reason: 'inline interpreter code is opaque to classification',
-    source: '^(?:python3?|perl|ruby|node|php)\\s+(?:-c|-e)\\s',
   },
   {
     id: 'awk-system',
@@ -343,8 +363,11 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
   {
     id: 'find-delete',
     scope: 'whole',
-    reason: 'find -delete / -exec rm walks a tree deleting matches',
-    source: '\\bfind\\b.*(?:-delete\\b|-exec\\s+\\S*(?:rm|shred)\\b)',
+    // Widened from `-delete`/`-exec rm` (F4): `find … -exec truncate {} +` and
+    // `-exec tee` destroy just as thoroughly, and enumerating the safe
+    // commands is the wrong side of that bet.
+    reason: 'find runs a command over every match, or deletes them',
+    source: '\\bfind\\b.*(?:-delete\\b|-(?:exec|ok)(?:dir)?\\s+\\S)',
     prefix: false,
   },
   {
@@ -365,6 +388,12 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
     reason: 'kill -9 -1 signals every process the user owns',
     source: '^kill\\s+(?:-9|-KILL|-s\\s*(?:9|KILL))\\s+-1\\b',
   },
+  {
+    id: 'netcat-exec',
+    scope: 'segment',
+    reason: 'netcat wired to a program is a reverse shell',
+    source: '^(?:nc|ncat|netcat)\\b.*\\s-(?:e|c)\\b',
+  },
 ];
 
 // --------------------------------------------------------------------------
@@ -372,7 +401,14 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
 // --------------------------------------------------------------------------
 
 const PRIVILEGED_SPECS: readonly PatternSpec[] = [
-  { id: 'sudo', scope: 'segment', reason: 'runs as another user via sudo', source: '^sudo\\b' },
+  {
+    id: 'sudo',
+    scope: 'segment',
+    reason: 'runs as another user via sudo',
+    // `^sudo\b` does not match `sudoedit` (no word boundary inside a word), so
+    // both names are listed explicitly (F4).
+    source: '^(?:sudo|sudoedit|pkexec)\\b',
+  },
   {
     id: 'su',
     scope: 'segment',
@@ -384,7 +420,7 @@ const PRIVILEGED_SPECS: readonly PatternSpec[] = [
     scope: 'segment',
     reason: 'changes service state',
     source:
-      '^systemctl\\s+(?:start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload)\\b',
+      '^systemctl\\s+(?:start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload|kill|set-property|edit|link|revert|preset|set-default)\\b',
   },
   {
     id: 'service-mutate',
@@ -445,13 +481,23 @@ const PRIVILEGED_SPECS: readonly PatternSpec[] = [
     id: 'firewall-config',
     scope: 'segment',
     reason: 'changes firewall rules',
-    source: '^(?:ufw|firewall-cmd|iptables|ip6tables|nft)\\b',
+    source: '^(?:ufw|firewall-cmd)\\b',
+  },
+  {
+    id: 'iptables-mutate',
+    scope: 'segment',
+    reason: 'changes packet filter rules',
+    // `iptables -L/-S/-n` only reads, and grading a read privileged is the
+    // kind of false positive that pushes a user to `approvalMode: auto` (F8).
+    source:
+      '^(?:(?:iptables|ip6tables)\\b.*\\s-(?:A|I|D|R|N|X|P|Z|E)\\b|nft\\s+(?:add|delete|insert|create|replace|rename)\\b)',
   },
   {
     id: 'mount',
     scope: 'segment',
     reason: 'mounts or unmounts a filesystem',
-    source: '^(?:mount|umount)\\b',
+    // Bare `mount` and `mount -l` only list what is mounted (F8).
+    source: '^(?:mount|umount)\\s+(?!-[lhV]\\b)\\S',
   },
   {
     id: 'kernel-module',
@@ -465,6 +511,60 @@ const PRIVILEGED_SPECS: readonly PatternSpec[] = [
     reason: 'changes a kernel parameter',
     source: '^sysctl\\s+-w\\b',
   },
+  {
+    id: 'git-force-lease',
+    scope: 'segment',
+    reason: 'force push with a lease still rewrites remote history',
+    source: '^git\\s+push\\b.*\\s--force-with-lease\\b',
+  },
+  {
+    id: 'remote-copy',
+    scope: 'segment',
+    reason: 'copies files to or from another host',
+    source: '^(?:scp|rsync|sftp)\\b.*\\s[^\\s/]+@[^\\s:]+:',
+  },
+  {
+    id: 'secret-read',
+    scope: 'segment',
+    reason: 'reads a file that holds credentials',
+    source: `^(?:cat|less|more|head|tail|strings|xxd|od|base64|cp|mv|scp|grep|awk|sed|tar|zip)\\b.*${SECRET_PATH}`,
+  },
+  {
+    id: 'crontab-write',
+    scope: 'segment',
+    reason: 'installs a crontab, which survives reboots',
+    source: '^crontab\\s+(?!-l\\b)\\S',
+  },
+  {
+    id: 'at-schedule',
+    scope: 'segment',
+    reason: 'schedules a command to run later, outside this session',
+    source: '^(?:at|batch)\\s+\\S',
+  },
+  {
+    id: 'systemd-run',
+    scope: 'segment',
+    reason: 'starts a transient unit that outlives this session',
+    source: '^systemd-run\\b',
+  },
+  {
+    id: 'file-attributes',
+    scope: 'segment',
+    reason: 'changes file attributes or ACLs',
+    source: '^(?:chattr|setfacl|setcap)\\b',
+  },
+  {
+    id: 'docker-mount-host',
+    scope: 'segment',
+    reason: 'a bind mount gives the container the host filesystem',
+    source: '^(?:docker|podman)\\s+run\\b.*\\s(?:-v|--volume|--mount)\\b',
+  },
+  {
+    id: 'docker-exec',
+    scope: 'segment',
+    reason: 'runs a command inside a running container',
+    source: '^(?:docker|podman)\\s+exec\\b',
+  },
 ];
 
 /** Every built-in pattern, destructive first. */
@@ -475,6 +575,50 @@ export const PATTERNS: readonly PatternDef[] = [
 
 export const DESTRUCTIVE_PATTERN_COUNT = DESTRUCTIVE_SPECS.length;
 export const PRIVILEGED_PATTERN_COUNT = PRIVILEGED_SPECS.length;
+
+/**
+ * Patterns a host may not switch off (security finding F7).
+ *
+ * `patternOverrides.remove` exists so an operator can silence a pattern that is
+ * wrong for their fleet. It was not meant to be able to make `rm -rf /` safe,
+ * and before this list one line in `hosts.json` could do exactly that. A
+ * removal naming one of these is ignored with a warning rather than rejected,
+ * because refusing the whole file would take every other host down with it.
+ */
+export const CORE_PATTERN_IDS: readonly string[] = [
+  'rm-recursive',
+  'rm-longopt',
+  'rm-postfix-flags',
+  'rm-any-target',
+  'mkfs',
+  'dd-device',
+  'dd-to-path',
+  'fork-bomb',
+  'pipe-to-shell',
+  'b64-to-shell',
+  'redirect-truncate',
+  'redirect-append-critical',
+  'redirect-device',
+  'power',
+  'shred',
+  'disk-tool',
+  'netcat-exec',
+];
+
+const CORE_ID_SET = new Set(CORE_PATTERN_IDS);
+
+const CORE_SOURCE_SET = new Set(
+  PATTERNS.filter((pattern) => CORE_ID_SET.has(pattern.id)).map((pattern) => pattern.source)
+);
+
+/**
+ * Core pattern ids missing from `patterns`. `doctor` fails when this is
+ * non-empty, which catches a build that dropped one as well as a bad override.
+ */
+export function missingCorePatterns(patterns: readonly PatternDef[] = PATTERNS): string[] {
+  const present = new Set(patterns.map((pattern) => pattern.id));
+  return CORE_PATTERN_IDS.filter((id) => !present.has(id));
+}
 
 function isEmptyGroup(group: { add: string[]; remove: string[] } | undefined): boolean {
   return group === undefined || (group.add.length === 0 && group.remove.length === 0);
@@ -514,7 +658,8 @@ const overrideCache = new WeakMap<PatternOverrides, readonly PatternDef[]>();
  *
  * `remove` matches a built-in by its exact {@link PatternDef.source} — the
  * string `doctor` prints, so the round trip in AC21.9 holds — or by its `id`,
- * which is what a user reaches for first.
+ * which is what a user reaches for first. A {@link CORE_PATTERN_IDS} entry is
+ * never removed (F7).
  */
 export function compilePatterns(overrides?: PatternOverrides): readonly PatternDef[] {
   if (overrides === undefined) return PATTERNS;
@@ -523,12 +668,24 @@ export function compilePatterns(overrides?: PatternOverrides): readonly PatternD
   const cached = overrideCache.get(overrides);
   if (cached !== undefined) return cached;
 
+  const requested = [
+    ...(overrides.destructive?.remove ?? []),
+    ...(overrides.privileged?.remove ?? []),
+  ];
+  const refused = requested.filter((entry) => CORE_ID_SET.has(entry) || CORE_SOURCE_SET.has(entry));
+  if (refused.length > 0) {
+    logger.warn('ignoring patternOverrides.remove entries for core patterns', {
+      entries: refused,
+    });
+  }
+
   const removals = new Map<PatternGrade, Set<string>>([
     ['destructive', new Set(overrides.destructive?.remove ?? [])],
     ['privileged', new Set(overrides.privileged?.remove ?? [])],
   ]);
 
   const kept = PATTERNS.filter((pattern) => {
+    if (CORE_ID_SET.has(pattern.id)) return true;
     const remove = removals.get(pattern.grade);
     if (remove === undefined) return true;
     return !remove.has(pattern.source) && !remove.has(pattern.id);

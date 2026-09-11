@@ -11,8 +11,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApprovalFallback, ApprovalMode, HostEntry } from '../../src/config/schema.js';
 import { ERROR_CODES, toToolNotice } from '../../src/errors.js';
-import { gateCommand, interpretElicitResult } from '../../src/safety/approval.js';
-import type { ElicitOutcome, GateInput, GateResult } from '../../src/safety/approval.js';
+import {
+  auditView,
+  gateCommand,
+  gateFileOperation,
+  interpretElicitResult,
+} from '../../src/safety/approval.js';
+import type {
+  ElicitOutcome,
+  ElicitRequest,
+  GateInput,
+  GateResult,
+} from '../../src/safety/approval.js';
+import { classify } from '../../src/safety/classify.js';
 import { clearTokens, stopSweep, tokenStoreSize } from '../../src/safety/tokens.js';
 
 const SAFE_COMMAND = 'ls -la';
@@ -276,13 +287,17 @@ const MATRIX: MatrixRow[] = [
     expectOutcome: 'approval_unavailable',
   },
   {
-    label: 'fail-closed + ask-all + safe still takes the token path (AC17.7)',
+    // Deviation from the plan's AC17.7 row, deliberate (security finding F9).
+    // `ask-all` asked for a human on every call and `fail-closed` said a token
+    // is not a human; the old behaviour quietly turned `ask-all` back into
+    // `ask-destructive` on exactly the client that had no other protection.
+    label: 'fail-closed + ask-all + safe is refused, not tokenised (F9)',
     mode: 'ask-all',
     fallback: 'fail-closed',
     elicitation: false,
     command: SAFE_COMMAND,
-    expectKind: 'confirmation_required',
-    expectOutcome: 'pending-confirmation',
+    expectKind: 'deny',
+    expectOutcome: 'approval_unavailable',
   },
   {
     label: 'fail-closed + ask-destructive + safe just runs',
@@ -304,13 +319,13 @@ const MATRIX: MatrixRow[] = [
     expectOutcome: 'approval_unavailable',
   },
   {
-    label: 'missing approvalFallback keeps the token path for a safe ask-all command',
+    label: 'missing approvalFallback refuses a safe ask-all command too (D2 + F9)',
     mode: 'ask-all',
     fallback: undefined,
     elicitation: false,
     command: SAFE_COMMAND,
-    expectKind: 'confirmation_required',
-    expectOutcome: 'pending-confirmation',
+    expectKind: 'deny',
+    expectOutcome: 'approval_unavailable',
   },
 ];
 
@@ -424,10 +439,22 @@ describe('elicitation failure (AC17.13)', () => {
     expect(tokenStoreSize()).toBe(0);
   });
 
-  it('still issues a token for a safe ask-all command on a fail-closed host', async () => {
+  it('refuses a safe ask-all command on a fail-closed host (F9)', async () => {
     const fake = makeClient({ elicitation: true, throws: true });
     const result = await gate({
       host: host('prod-web', 'ask-all', 'fail-closed'),
+      command: SAFE_COMMAND,
+      client: fake.client,
+    });
+    expect(result.kind).toBe('deny');
+    expect(result.approvalOutcome).toBe('approval_unavailable');
+    expect(tokenStoreSize()).toBe(0);
+  });
+
+  it('still issues a token for a safe ask-all command on a token host', async () => {
+    const fake = makeClient({ elicitation: true, throws: true });
+    const result = await gate({
+      host: host('prod-web', 'ask-all', 'token'),
       command: SAFE_COMMAND,
       client: fake.client,
     });
@@ -692,6 +719,170 @@ describe('gates that run before approval', () => {
     });
     expect(result.kind).toBe('command_too_long');
     expect(result.errorCode).toBe(ERROR_CODES.command_too_long);
+  });
+});
+// --------------------------------------------------------------------------
+// file transfers (security finding F1)
+// --------------------------------------------------------------------------
+
+describe('gateFileOperation', () => {
+  const DESCRIPTION = 'upload /local/app.tar.gz -> prod-web:/srv/app/app.tar.gz';
+
+  async function fileGate(
+    overrides: Partial<Parameters<typeof gateFileOperation>[0]> & {
+      host: Parameters<typeof gateFileOperation>[0]['host'];
+    }
+  ): Promise<GateResult> {
+    return gateFileOperation({
+      toolName: 'upload',
+      grade: 'privileged',
+      description: DESCRIPTION,
+      sessionId: null,
+      client: { supportsElicitation: false },
+      ...overrides,
+    });
+  }
+
+  it('runs without asking on an auto host', async () => {
+    const result = await fileGate({ host: host('prod-web', 'auto', 'token') });
+    expect(result.kind).toBe('allow');
+    expect(result.approvalOutcome).toBe('auto');
+  });
+
+  it('is refused on a deny host', async () => {
+    const result = await fileGate({ host: host('prod-web', 'deny', 'token') });
+    expect(result.kind).toBe('deny');
+    expect(result.errorCode).toBe(ERROR_CODES.command_denied);
+  });
+
+  it('needs approval for a privileged upload under ask-destructive', async () => {
+    const result = await fileGate({ host: host('prod-web', 'ask-destructive', 'token') });
+    expect(result.kind).toBe('confirmation_required');
+    const body = parseBody(result);
+    expect(body.grade).toBe('privileged');
+    expect(body.command).toBe(DESCRIPTION);
+    expect(body.tool).toBe('upload');
+  });
+
+  it('treats an overwriting download as destructive', async () => {
+    const fake = makeClient({ elicitation: true, outcome: 'decline' });
+    const result = await fileGate({
+      toolName: 'download',
+      grade: 'destructive',
+      description: 'download prod-web:/etc/nginx.conf -> /local/nginx.conf (overwrite)',
+      host: host('prod-web', 'ask-destructive', 'token'),
+      client: fake.client,
+    });
+    expect(result.kind).toBe('deny');
+    expect(result.approvalOutcome).toBe('declined');
+    expect(fake.calls).toBe(1);
+  });
+
+  it('is refused on a fail-closed host with no elicitation', async () => {
+    const result = await fileGate({ host: host('prod-web', 'ask-destructive', 'fail-closed') });
+    expect(result.kind).toBe('deny');
+    expect(result.approvalOutcome).toBe('approval_unavailable');
+    expect(tokenStoreSize()).toBe(0);
+  });
+
+  it('round-trips its token', async () => {
+    const issued = await fileGate({ host: host('prod-web', 'ask-destructive', 'token') });
+    expect(issued.kind).toBe('confirmation_required');
+    if (issued.kind !== 'confirmation_required') return;
+    const result = await fileGate({
+      host: host('prod-web', 'ask-destructive', 'token'),
+      confirmationToken: issued.token,
+    });
+    expect(result.kind).toBe('allow');
+    expect(result.approvalOutcome).toBe('token-approved');
+  });
+
+  it('binds its token to the description', async () => {
+    const issued = await fileGate({ host: host('prod-web', 'ask-destructive', 'token') });
+    if (issued.kind !== 'confirmation_required') throw new Error('expected a token');
+    const result = await fileGate({
+      host: host('prod-web', 'ask-destructive', 'token'),
+      description: DESCRIPTION + '.bak',
+      confirmationToken: issued.token,
+    });
+    expect(result.errorCode).toBe(ERROR_CODES.confirmation_token_mismatch);
+  });
+
+  it('binds its token to the tool', async () => {
+    const issued = await fileGate({ host: host('prod-web', 'ask-destructive', 'token') });
+    if (issued.kind !== 'confirmation_required') throw new Error('expected a token');
+    const result = await fileGate({
+      toolName: 'download',
+      host: host('prod-web', 'ask-destructive', 'token'),
+      confirmationToken: issued.token,
+    });
+    expect(result.errorCode).toBe(ERROR_CODES.confirmation_token_mismatch);
+  });
+
+  it('never returns a command-only outcome', async () => {
+    const result = await fileGate({ host: host('prod-web', 'ask-destructive', 'token') });
+    expect(['refused_interactive', 'sudo_password_required', 'command_too_long']).not.toContain(
+      result.kind
+    );
+  });
+});
+
+// --------------------------------------------------------------------------
+// secret masking (security finding F11)
+// --------------------------------------------------------------------------
+
+describe('secrets never reach the audit view or the approval prompt', () => {
+  const SECRET_COMMAND = 'mysql -uroot -pHUNTER2 -e "DROP DATABASE prod"';
+
+  it('masks the command, normalised command and segments for the audit record', async () => {
+    const result = await gate({
+      host: host('prod-web', 'auto', 'token'),
+      command: SECRET_COMMAND,
+    });
+    expect(result.audit.command).not.toContain('HUNTER2');
+    expect(result.audit.normalizedCommand).not.toContain('HUNTER2');
+    expect(JSON.stringify(result.audit.segments)).not.toContain('HUNTER2');
+    expect(result.audit.command).toContain('[redacted]');
+  });
+
+  it('masks the elicitation prompt a human reads', async () => {
+    const seen: ElicitRequest[] = [];
+    const result = await gate({
+      host: host('prod-web', 'ask-destructive', 'token'),
+      command: SECRET_COMMAND,
+      client: {
+        supportsElicitation: true,
+        elicit: (request: ElicitRequest): Promise<ElicitOutcome> => {
+          seen.push(request);
+          return Promise.resolve('accept');
+        },
+      },
+    });
+    expect(result.kind).toBe('allow');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.message).not.toContain('HUNTER2');
+    expect(seen[0]?.message).toContain('[redacted]');
+  });
+
+  it('classifies the real bytes, not the masked ones', () => {
+    // Masking must not change the verdict: the password is gone, the DROP is not.
+    expect(classify(SECRET_COMMAND).grade).toBe('destructive');
+    expect(auditView(SECRET_COMMAND, classify(SECRET_COMMAND)).command).not.toContain('HUNTER2');
+  });
+
+  it('binds the confirmation token to the unmasked command', async () => {
+    const issued = await gate({
+      host: host('prod-web', 'ask-destructive', 'token'),
+      command: SECRET_COMMAND,
+    });
+    if (issued.kind !== 'confirmation_required') throw new Error('expected a token');
+    const result = await gate({
+      host: host('prod-web', 'ask-destructive', 'token'),
+      command: SECRET_COMMAND,
+      confirmationToken: issued.token,
+    });
+    expect(result.kind).toBe('allow');
+    expect(result.approvalOutcome).toBe('token-approved');
   });
 });
 

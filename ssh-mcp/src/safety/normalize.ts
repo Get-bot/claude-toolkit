@@ -82,6 +82,8 @@ export interface Segment {
   privilegeProgram: string | null;
   /** `sudo -S` / `sudo --stdin`: would read the password from closed stdin. */
   sudoStdinPassword: boolean;
+  /** `su -c "<payload>"` / `doas -c` — a command string, classified on its own. */
+  privilegePayload: Token | null;
   shellWrapper: ShellWrapperInfo | null;
   envAssignments: readonly string[];
   wrappers: readonly string[];
@@ -121,10 +123,14 @@ const WRAPPER_PROGRAMS = new Set([
   'command',
   'builtin',
   'exec',
+  // busybox dispatches to an applet: `busybox rm -rf /` is an `rm` (F4).
+  // A shell applet (`busybox sh -c ...`) falls through to the shell-wrapper
+  // unwrap below, because stripping `busybox` leaves `sh -c ...` in front.
+  'busybox',
 ]);
 
 /** Kept in place and reported, never stripped from the grade (plan row 2.4). */
-const PRIVILEGE_PROGRAMS = new Set(['sudo', 'su', 'doas', 'runuser']);
+const PRIVILEGE_PROGRAMS = new Set(['sudo', 'su', 'doas', 'runuser', 'pkexec']);
 
 /** `sh`, `bash`, `zsh`, `ksh`, `dash`, `ash` (plan row 2.5). */
 const SHELL_NAME = /^(?:ba|z|k|da|a)?sh$/;
@@ -482,29 +488,29 @@ interface PrivilegeResult {
   privileged: boolean;
   privilegeProgram: string | null;
   sudoStdinPassword: boolean;
+  /** `su -c "<payload>"` / `doas -c` — the payload is a command string (F6). */
+  privilegePayload: Token | null;
 }
+
+/** `su`, `doas` and `runuser` take the command after `-c`; `sudo` does not. */
+const PRIVILEGE_COMMAND_FLAG = /^(?:-[A-Za-z]*c|--command)$/;
 
 function stripPrivilegePrefix(tokens: readonly Token[]): PrivilegeResult {
   const head = tokens[0];
-  if (head === undefined || head.kind !== 'word') {
+  const program = head !== undefined && head.kind === 'word' ? basename(head.value) : null;
+  if (program === null || !PRIVILEGE_PROGRAMS.has(program)) {
     return {
       commandTokens: [...tokens],
       privileged: false,
       privilegeProgram: null,
       sudoStdinPassword: false,
-    };
-  }
-  const program = basename(head.value);
-  if (!PRIVILEGE_PROGRAMS.has(program)) {
-    return {
-      commandTokens: [...tokens],
-      privileged: false,
-      privilegeProgram: null,
-      sudoStdinPassword: false,
+      privilegePayload: null,
     };
   }
 
+  const takesCommandFlag = program !== 'sudo' && program !== 'pkexec';
   let stdinPassword = false;
+  let payload: Token | null = null;
   let i = 1;
   while (i < tokens.length) {
     const token = tokens[i];
@@ -518,6 +524,12 @@ function stripPrivilegePrefix(tokens: readonly Token[]): PrivilegeResult {
       if (value === '--stdin') stdinPassword = true;
       if (!value.startsWith('--') && /S/.test(value.slice(1))) stdinPassword = true;
       i += 1;
+      if (takesCommandFlag && PRIVILEGE_COMMAND_FLAG.test(value)) {
+        // F6: everything after `-c` is a command string, not an argv tail.
+        payload = tokens[i] ?? null;
+        i += 1;
+        continue;
+      }
       if (
         SUDO_LONG_VALUE_FLAG.test(value) ||
         (!value.startsWith('--') && SUDO_VALUE_FLAG.test(value))
@@ -537,11 +549,25 @@ function stripPrivilegePrefix(tokens: readonly Token[]): PrivilegeResult {
     break;
   }
 
+  if (takesCommandFlag && payload === null) {
+    // `su - root -c "<payload>"`: the user operand sits between the flags and
+    // `-c`, so the loop above stopped before reaching it (F6).
+    for (let j = i; j < tokens.length - 1; j += 1) {
+      const token = tokens[j];
+      if (token === undefined || token.kind !== 'word') continue;
+      if (!PRIVILEGE_COMMAND_FLAG.test(token.value)) continue;
+      payload = tokens[j + 1] ?? null;
+      i = j + 2;
+      break;
+    }
+  }
+
   return {
     commandTokens: tokens.slice(i),
     privileged: true,
     privilegeProgram: program,
     sudoStdinPassword: stdinPassword,
+    privilegePayload: payload,
   };
 }
 
@@ -560,25 +586,12 @@ function detectShellWrapper(
   if (head === undefined || head.kind !== 'word' || head.hasVariable || head.hasSubstitution) {
     return null;
   }
-  const name = basename(head.value);
-  let argsFrom = 1;
-  let shell = name;
-  if (name === 'busybox') {
-    const second = commandTokens[1];
-    if (
-      second === undefined ||
-      second.kind !== 'word' ||
-      !SHELL_NAME.test(basename(second.value))
-    ) {
-      return null;
-    }
-    shell = basename(second.value);
-    argsFrom = 2;
-  } else if (!SHELL_NAME.test(name)) {
-    return null;
-  }
+  // `busybox sh -c …` arrives here as `sh -c …`: `busybox` is a wrapper and
+  // has already been stripped, along with any applet flags.
+  const shell = basename(head.value);
+  if (!SHELL_NAME.test(shell)) return null;
 
-  for (let i = argsFrom; i < commandTokens.length; i += 1) {
+  for (let i = 1; i < commandTokens.length; i += 1) {
     const token = commandTokens[i];
     if (token === undefined || token.kind !== 'word') break;
     const value = token.value;
@@ -608,7 +621,22 @@ function buildSegment(
 ): Segment {
   const stripped = stripPrefixes(rawTokens);
   const privilege = stripPrivilegePrefix(stripped.effective);
-  const firstToken = privilege.commandTokens[0] ?? null;
+  // Strip wrappers a second time: `sudo env rm -rf /x` and `sudo busybox rm`
+  // only expose the real program once the privilege prefix is out of the way.
+  const inner = stripPrefixes(privilege.commandTokens);
+  const commandTokens = inner.effective;
+
+  // F6: `su -c "<payload>"` runs a command string, so the payload becomes a
+  // segment of its own instead of being read as an argv tail.
+  const payload = privilege.privilegePayload;
+  if (payload !== null && payload.kind !== 'operator') {
+    const literal = !payload.hasVariable && !payload.hasSubstitution;
+    if (literal && depth + 1 <= MAX_SUBSTITUTION_DEPTH) {
+      scanLevel(payload.value, depth + 1, ctx);
+    }
+  }
+
+  const firstToken = commandTokens[0] ?? null;
   const program =
     firstToken !== null &&
     firstToken.kind === 'word' &&
@@ -618,9 +646,9 @@ function buildSegment(
       : null;
 
   const normalized = joinTokens(stripped.effective, false);
-  const commandNormalized = joinTokens(privilege.commandTokens, false);
+  const commandNormalized = joinTokens(commandTokens, false);
   const defangedNormalized = joinTokens(stripped.effective, true);
-  const defangedCommandNormalized = joinTokens(privilege.commandTokens, true);
+  const defangedCommandNormalized = joinTokens(commandTokens, true);
   const matchTargets =
     defangedCommandNormalized !== '' && defangedCommandNormalized !== defangedNormalized
       ? [defangedNormalized, defangedCommandNormalized]
@@ -631,7 +659,7 @@ function buildSegment(
     terminator,
     rawTokens,
     tokens: stripped.effective,
-    commandTokens: privilege.commandTokens,
+    commandTokens,
     normalized,
     commandNormalized,
     defangedNormalized,
@@ -639,13 +667,14 @@ function buildSegment(
     matchTargets,
     program,
     firstToken,
-    args: privilege.commandTokens.slice(1),
+    args: commandTokens.slice(1),
     privileged: privilege.privileged,
     privilegeProgram: privilege.privilegeProgram,
     sudoStdinPassword: privilege.sudoStdinPassword,
-    shellWrapper: detectShellWrapper(privilege.commandTokens, depth, ctx),
-    envAssignments: stripped.envAssignments,
-    wrappers: stripped.wrappers,
+    privilegePayload: payload,
+    shellWrapper: detectShellWrapper(commandTokens, depth, ctx),
+    envAssignments: [...stripped.envAssignments, ...inner.envAssignments],
+    wrappers: [...stripped.wrappers, ...inner.wrappers],
   };
 }
 
@@ -930,6 +959,30 @@ function scanLevel(source: string, depth: number, ctx: ScanContext): Segment[] {
         pending.push({ delim, stripTabs });
       }
       i = j;
+      continue;
+    }
+
+    // Process substitution `<(cmd)` / `>(cmd)` is a command substitution wearing
+    // a redirection's clothes: `bash <(curl …)` runs whatever `curl` returned
+    // (F4). Recurse into it exactly as `$(` does, and mark the token so the
+    // classifier can see that an interpreter was handed opaque input.
+    if (source.startsWith('<(', i) || source.startsWith('>(', i)) {
+      const close = findMatching(source, i + 1, '(', ')');
+      const target = ensure();
+      target.hasSubstitution = true;
+      if (close === -1) {
+        ctx.unparseable = true;
+        pushRaw(target, source.slice(i), false);
+        i = n;
+        continue;
+      }
+      pushRaw(target, source.slice(i, close + 1), false);
+      if (depth + 1 > MAX_SUBSTITUTION_DEPTH) {
+        ctx.unparseable = true;
+      } else {
+        scanLevel(source.slice(i + 2, close), depth + 1, ctx);
+      }
+      i = close + 1;
       continue;
     }
 
