@@ -13,3 +13,8 @@ Thumbs.db
 node_modules/
 .env
 .env.local
+
+# ssh-mcp build artifacts
+ssh-mcp/dist/
+ssh-mcp/coverage/
+ssh-mcp/*.tgz
