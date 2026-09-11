@@ -10,11 +10,8 @@
  * Sub-command modules are imported dynamically so that starting the server
  * never loads the CLI code, and vice versa.
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { installStdoutGuard } from './log.js';
+import { readPackageVersion } from './version.js';
 
 /** Lower bound from `engines.node` and the spec's tech stack (AC1.1). */
 export const MIN_NODE_MAJOR = 20;
@@ -24,24 +21,9 @@ function nodeMajor(): number {
   return Number.isNaN(major) ? 0 : major;
 }
 
-/** Read `version` out of the package manifest next to this file. */
-export function readPackageVersion(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  // dist/index.js and src/index.ts both sit one level below the package root.
-  const candidates = [path.join(here, '..', 'package.json'), path.join(here, 'package.json')];
-  for (const candidate of candidates) {
-    try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(candidate, 'utf8'));
-      if (typeof parsed === 'object' && parsed !== null) {
-        const version = (parsed as { version?: unknown }).version;
-        if (typeof version === 'string' && version !== '') return version;
-      }
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return '0.0.0-unknown';
-}
+// The version lookup lives in `./version.js` because `server.ts` needs it too
+// and cannot import this module: importing it would run the CLI again.
+export { readPackageVersion };
 
 export async function run(argv: string[]): Promise<number> {
   const major = nodeMajor();
