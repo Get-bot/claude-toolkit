@@ -78,7 +78,10 @@ async function handler(
   const started = Date.now();
   try {
     const result = await download(conn, args.remote_path, localPath, { overwrite });
-    return toToolResult({ host: host.alias, ...result, overwritten: overwrite });
+    // `result.overwritten` is the measured fact (true only when a file was actually
+    // replaced), not the caller's flag — a download to a fresh path reports false
+    // even when `overwrite: true` was passed (CR-4).
+    return toToolResult({ host: host.alias, ...result });
   } finally {
     audit.exec_duration_ms = Date.now() - started;
   }
