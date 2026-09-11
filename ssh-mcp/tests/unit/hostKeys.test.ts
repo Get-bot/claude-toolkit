@@ -53,6 +53,27 @@ function malformedPair(): RawPair {
   return { private: shortenBody(sound.private), public: sound.public };
 }
 
+/**
+ * The same three-byte loss on the public half: decode the blob, drop the last
+ * three bytes, re-encode. The trailing key string then claims more bytes than
+ * remain, which is what `parseKey` rejects.
+ */
+function shortenPublicBody(publicKey: string): string {
+  const [algo, encoded, ...rest] = publicKey.trim().split(/\s+/);
+  const blob = Buffer.from(encoded ?? '', 'base64');
+  return [algo, blob.subarray(0, blob.length - 3).toString('base64'), ...rest].join(' ');
+}
+
+/**
+ * A draw whose private half is sound and whose public half is short. The real
+ * defect shortens both, but the private check runs first and would mask this
+ * branch, so the halves are corrupted one at a time.
+ */
+function publicMalformedPair(): RawPair {
+  const sound = soundPair();
+  return { private: sound.private, public: shortenPublicBody(sound.public) };
+}
+
 /** Queue a fixed sequence of draws in place of the real generator. */
 function stubDraws(draws: RawPair[]): ReturnType<typeof vi.spyOn> {
   let index = 0;
@@ -73,6 +94,14 @@ describe('injected defect shapes', () => {
     const bad = malformedPair();
     expect(utils.parseKey(bad.private)).toBeInstanceOf(Error);
   });
+
+  it('rejects a short public half while leaving the private half sound', () => {
+    const bad = publicMalformedPair();
+    expect(utils.parseKey(bad.public)).toBeInstanceOf(Error);
+    // Without this the case would be indistinguishable from the private-half
+    // one, because the private check short-circuits first.
+    expect(utils.parseKey(bad.private)).not.toBeInstanceOf(Error);
+  });
 });
 
 describe('generateKeyPair retries', () => {
@@ -86,6 +115,18 @@ describe('generateKeyPair retries', () => {
     expect(pair.privateKey).toBe(good.private);
     expect(pair.publicKey).toBe(good.public.trim());
     expect(utils.parseKey(pair.privateKey)).not.toBeInstanceOf(Error);
+  });
+
+  it('discards a draw whose public half is short', () => {
+    const good = soundPair();
+    const spy = stubDraws([publicMalformedPair(), good]);
+
+    const pair = generateKeyPair('ssh-mcp-unit');
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(pair.privateKey).toBe(good.private);
+    expect(pair.publicKey).toBe(good.public.trim());
+    expect(utils.parseKey(pair.publicKey)).not.toBeInstanceOf(Error);
   });
 
   it('discards a pair whose halves come from different draws', () => {
