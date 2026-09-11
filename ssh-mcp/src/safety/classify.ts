@@ -142,7 +142,7 @@ function applySegmentRules(segment: Segment, verdict: Verdict): void {
 export function classify(
   command: string,
   overrides?: PatternOverrides,
-  scan?: NormalizeResult,
+  scan?: NormalizeResult
 ): Classification {
   const result = scan ?? normalize(command);
   const patterns = compilePatterns(overrides);

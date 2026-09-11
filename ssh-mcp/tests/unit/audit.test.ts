@@ -124,12 +124,17 @@ describe('appendAudit basics (AC20.1, AC20.2)', () => {
     expect(readLines()[0]?.ts).toBe('2026-09-11T12:00:00.000Z');
   });
 
-  it.each(['list_hosts', 'exec', 'upload', 'download', 'open_session', 'run_in_session', 'close_session'])(
-    'accepts tool %s',
-    (tool) => {
-      expect(appendAudit(record({ tool }))).toBe(true);
-    },
-  );
+  it.each([
+    'list_hosts',
+    'exec',
+    'upload',
+    'download',
+    'open_session',
+    'run_in_session',
+    'close_session',
+  ])('accepts tool %s', (tool) => {
+    expect(appendAudit(record({ tool }))).toBe(true);
+  });
 
   it('rejects an unknown tool name without writing anything', () => {
     const captured = captureStderr();
@@ -166,12 +171,12 @@ describe('approval_outcome (AC20.4)', () => {
       const captured = captureStderr();
       expect(appendAudit(record({ approval_outcome: outcome }))).toBe(false);
       expect(captured.lines).toHaveLength(1);
-    },
+    }
   );
 
   it('forces server_cannot_verify_human_approval for token-approved', () => {
     appendAudit(
-      record({ approval_outcome: 'token-approved', server_cannot_verify_human_approval: false }),
+      record({ approval_outcome: 'token-approved', server_cannot_verify_human_approval: false })
     );
     expect(readLines()[0]?.server_cannot_verify_human_approval).toBe(true);
   });
@@ -294,7 +299,7 @@ describe('metadata-only mode (AC20.10)', () => {
         stderr_bytes: 0,
         truncated: false,
         client: { name: 'claude-desktop', version: '1.2.3' },
-      }),
+      })
     );
 
     const lines = readLines();

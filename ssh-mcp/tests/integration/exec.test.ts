@@ -130,9 +130,9 @@ describe('background jobs (AC10.4)', () => {
 describe('timeout (AC11)', () => {
   it('fails with command_timeout well before the command would finish', async () => {
     const started = Date.now();
-    await expect(
-      execOnce(conn, 'sleep 30', { ...budget, timeoutMs: 1500 })
-    ).rejects.toMatchObject({ code: 'command_timeout' });
+    await expect(execOnce(conn, 'sleep 30', { ...budget, timeoutMs: 1500 })).rejects.toMatchObject({
+      code: 'command_timeout',
+    });
     expect(Date.now() - started).toBeLessThan(6000);
   });
 
@@ -152,9 +152,9 @@ describe('timeout (AC11)', () => {
 
   it.runIf(onFixture)('closes the channel on the server side (AC11.2)', async () => {
     const before = endpoint.fixture?.eventsOfType('channel-close').length ?? 0;
-    await expect(
-      execOnce(conn, 'sleep 30', { ...budget, timeoutMs: 1000 })
-    ).rejects.toMatchObject({ code: 'command_timeout' });
+    await expect(execOnce(conn, 'sleep 30', { ...budget, timeoutMs: 1000 })).rejects.toMatchObject({
+      code: 'command_timeout',
+    });
     await new Promise((resolve) => setTimeout(resolve, 500));
     const after = endpoint.fixture?.eventsOfType('channel-close').length ?? 0;
     expect(after).toBeGreaterThan(before);
@@ -163,9 +163,9 @@ describe('timeout (AC11)', () => {
   // WINDOWS-GAP: proving the remote process really died needs a real sshd;
   // the in-process fixture can only show the channel was closed (Critic C19).
   it.runIf(onSshd)('leaves no process behind (AC11.3)', async () => {
-    await expect(
-      execOnce(conn, 'sleep 37', { ...budget, timeoutMs: 1500 })
-    ).rejects.toMatchObject({ code: 'command_timeout' });
+    await expect(execOnce(conn, 'sleep 37', { ...budget, timeoutMs: 1500 })).rejects.toMatchObject({
+      code: 'command_timeout',
+    });
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const check = await execOnce(conn, "pgrep -f 'sleep 37' || true", budget);
     expect(check.stdout.trim()).toBe('');

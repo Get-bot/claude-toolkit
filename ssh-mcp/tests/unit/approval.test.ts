@@ -22,7 +22,7 @@ const PRIVILEGED_COMMAND = 'apt-get install -y curl';
 function host(
   alias: string,
   approvalMode: ApprovalMode,
-  approvalFallback?: ApprovalFallback,
+  approvalFallback?: ApprovalFallback
 ): HostEntry & { alias: string } {
   const base = {
     alias,
@@ -320,7 +320,7 @@ describe('§5.5 host x mode x grade matrix', () => {
       const fake = makeClient(
         row.outcome === undefined
           ? { elicitation: row.elicitation }
-          : { elicitation: row.elicitation, outcome: row.outcome },
+          : { elicitation: row.elicitation, outcome: row.outcome }
       );
       const result = await gate({
         host: host('prod-web', row.mode, row.fallback),
@@ -342,7 +342,7 @@ describe('§5.5 host x mode x grade matrix', () => {
       const fake = makeClient(
         row.outcome === undefined
           ? { elicitation: row.elicitation }
-          : { elicitation: row.elicitation, outcome: row.outcome },
+          : { elicitation: row.elicitation, outcome: row.outcome }
       );
       const result = await gate({
         toolName: 'run_in_session',
@@ -481,7 +481,7 @@ describe('confirmation_required response body (M1, M7)', () => {
       ERROR_CODES.confirmation_required,
       'x',
       { confirmation_token: 'KEEP-ME', session_token: 'MASK-ME', password: 'MASK-ME' },
-      { preserveKeys: ['confirmation_token'] },
+      { preserveKeys: ['confirmation_token'] }
     );
     const body = JSON.parse(notice.content[0]?.text ?? '{}') as Record<string, unknown>;
     expect(body.confirmation_token).toBe('KEEP-ME');

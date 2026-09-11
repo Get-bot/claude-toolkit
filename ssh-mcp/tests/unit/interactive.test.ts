@@ -153,7 +153,7 @@ describe('the gate is not a risk judgement (Critic C14)', () => {
       expect(verdict.alternatives).toContain('ps aux --sort=-%cpu | head -20');
       // A suggestion the gate would itself refuse is worse than none.
       expect(
-        verdict.alternatives.filter((alternative) => checkInteractive(alternative).refused),
+        verdict.alternatives.filter((alternative) => checkInteractive(alternative).refused)
       ).toEqual([]);
     }
   });

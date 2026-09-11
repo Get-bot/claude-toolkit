@@ -48,7 +48,7 @@ export async function run(argv: string[]): Promise<number> {
   if (major < MIN_NODE_MAJOR) {
     process.stderr.write(
       `ssh-mcp requires Node.js ${String(MIN_NODE_MAJOR)} or newer, but this is ` +
-        `${process.versions.node}. Install a supported Node.js and try again.\n`,
+        `${process.versions.node}. Install a supported Node.js and try again.\n`
     );
     return 1;
   }

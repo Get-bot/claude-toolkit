@@ -8,34 +8,34 @@
 //      test is also runnable locally after a plain `npm run build` without a full `npm pack`.
 //
 // Only Node built-ins + vitest are used, per the plan's requirement for this file.
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, readdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PKG_ROOT = resolve(__dirname, "..", "..");
+const PKG_ROOT = resolve(__dirname, '..', '..');
 
 const EXPECTED_TOOLS = [
-  "list_hosts",
-  "exec",
-  "upload",
-  "download",
-  "open_session",
-  "run_in_session",
-  "close_session",
+  'list_hosts',
+  'exec',
+  'upload',
+  'download',
+  'open_session',
+  'run_in_session',
+  'close_session',
 ].sort();
 
 interface JsonRpcRequest {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id?: number;
   method: string;
   params?: unknown;
 }
 
 interface JsonRpcResponse {
-  jsonrpc: "2.0";
+  jsonrpc: '2.0';
   id?: number;
   result?: {
     serverInfo?: { name?: string; version?: string };
@@ -50,39 +50,39 @@ function resolveEntrypoint(): { cmd: string; args: string[] } {
   if (tgz) {
     if (!existsSync(tgz)) {
       throw new Error(
-        `SSH_MCP_TGZ is set to "${tgz}" but that file does not exist. Run \`npm pack\` first.`,
+        `SSH_MCP_TGZ is set to "${tgz}" but that file does not exist. Run \`npm pack\` first.`
       );
     }
-    return { cmd: "npx", args: ["-y", resolve(tgz)] };
+    return { cmd: 'npx', args: ['-y', resolve(tgz)] };
   }
 
-  const distEntry = resolve(PKG_ROOT, "dist", "index.js");
+  const distEntry = resolve(PKG_ROOT, 'dist', 'index.js');
   if (existsSync(distEntry)) {
     return { cmd: process.execPath, args: [distEntry] };
   }
 
-  const tgzInRoot = readdirSync(PKG_ROOT).find((f) => f.endsWith(".tgz"));
+  const tgzInRoot = readdirSync(PKG_ROOT).find((f) => f.endsWith('.tgz'));
   if (tgzInRoot) {
-    return { cmd: "npx", args: ["-y", resolve(PKG_ROOT, tgzInRoot)] };
+    return { cmd: 'npx', args: ['-y', resolve(PKG_ROOT, tgzInRoot)] };
   }
 
   throw new Error(
-    "package.test.ts: no entrypoint found. Set SSH_MCP_TGZ to a packed tarball " +
-      "(from `npm pack`), or run `npm run build` to produce dist/index.js.",
+    'package.test.ts: no entrypoint found. Set SSH_MCP_TGZ to a packed tarball ' +
+      '(from `npm pack`), or run `npm run build` to produce dist/index.js.'
   );
 }
 
 function sendFrame(child: ChildProcessWithoutNullStreams, frame: JsonRpcRequest): void {
-  child.stdin.write(JSON.stringify(frame) + "\n");
+  child.stdin.write(JSON.stringify(frame) + '\n');
 }
 
 function waitForResponse(
   child: ChildProcessWithoutNullStreams,
   id: number,
-  timeoutMs = 30_000,
+  timeoutMs = 30_000
 ): Promise<JsonRpcResponse> {
   return new Promise((resolvePromise, reject) => {
-    let buf = "";
+    let buf = '';
 
     const timer = setTimeout(() => {
       cleanup();
@@ -90,9 +90,9 @@ function waitForResponse(
     }, timeoutMs);
 
     function onStdout(chunk: Buffer): void {
-      buf += chunk.toString("utf8");
+      buf += chunk.toString('utf8');
       let nl: number;
-      while ((nl = buf.indexOf("\n")) !== -1) {
+      while ((nl = buf.indexOf('\n')) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         if (!line.trim()) continue;
@@ -115,19 +115,19 @@ function waitForResponse(
 
     function cleanup(): void {
       clearTimeout(timer);
-      child.stdout.off("data", onStdout);
+      child.stdout.off('data', onStdout);
     }
 
-    child.stdout.on("data", onStdout);
+    child.stdout.on('data', onStdout);
   });
 }
 
-describe("package e2e — npm pack / npx smoke (AC1, AC2)", () => {
+describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
   let child: ChildProcessWithoutNullStreams;
 
   beforeAll(() => {
     const { cmd, args } = resolveEntrypoint();
-    child = spawn(cmd, args, { shell: false, stdio: ["pipe", "pipe", "pipe"] });
+    child = spawn(cmd, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
   });
 
   afterAll(() => {
@@ -136,25 +136,25 @@ describe("package e2e — npm pack / npx smoke (AC1, AC2)", () => {
 
   it("responds to initialize with serverInfo.name === 'ssh-mcp'", async () => {
     sendFrame(child, {
-      jsonrpc: "2.0",
+      jsonrpc: '2.0',
       id: 1,
-      method: "initialize",
+      method: 'initialize',
       params: {
-        protocolVersion: "2026-07-28",
+        protocolVersion: '2026-07-28',
         capabilities: {},
-        clientInfo: { name: "ssh-mcp-package-e2e", version: "0.0.0" },
+        clientInfo: { name: 'ssh-mcp-package-e2e', version: '0.0.0' },
       },
     });
 
     const response = await waitForResponse(child, 1);
-    expect(response.result?.serverInfo?.name).toBe("ssh-mcp");
+    expect(response.result?.serverInfo?.name).toBe('ssh-mcp');
   });
 
-  it("accepts notifications/initialized and then lists exactly the 7 spec tools", async () => {
+  it('accepts notifications/initialized and then lists exactly the 7 spec tools', async () => {
     // Notifications carry no `id` and expect no response frame.
-    sendFrame(child, { jsonrpc: "2.0", method: "notifications/initialized" } as JsonRpcRequest);
+    sendFrame(child, { jsonrpc: '2.0', method: 'notifications/initialized' } as JsonRpcRequest);
 
-    sendFrame(child, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    sendFrame(child, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     const response = await waitForResponse(child, 2);
 
     const names = (response.result?.tools ?? []).map((t) => t.name).sort();

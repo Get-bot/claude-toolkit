@@ -24,7 +24,12 @@ import {
   auditRotatedFilePath,
   ensureHome,
 } from './config/paths.js';
-import { APPROVAL_FALLBACKS, APPROVAL_MODES, AUDIT_MODES, COMMAND_GRADES } from './config/schema.js';
+import {
+  APPROVAL_FALLBACKS,
+  APPROVAL_MODES,
+  AUDIT_MODES,
+  COMMAND_GRADES,
+} from './config/schema.js';
 import { TRUNCATION_SUFFIX, logger, redactRecord, truncateUtf8 } from './log.js';
 
 /** Written on every line so a mixed-version file stays readable (§5.10). */
@@ -120,12 +125,7 @@ let thresholds: AuditThresholds = { ...DEFAULT_AUDIT_THRESHOLDS };
 let bytesSinceSizeCheck = Number.MAX_SAFE_INTEGER;
 
 /** Order in which oversized fields are shortened (§5.10, AC20.9). */
-export const TRUNCATION_ORDER = [
-  'command',
-  'segments',
-  'normalized_command',
-  'reasons',
-] as const;
+export const TRUNCATION_ORDER = ['command', 'segments', 'normalized_command', 'reasons'] as const;
 
 type TruncatableField = (typeof TRUNCATION_ORDER)[number];
 
@@ -172,7 +172,7 @@ function serializedBytes(record: Record<string, unknown>): number {
 function shrinkField(
   record: Record<string, unknown>,
   field: TruncatableField,
-  over: number,
+  over: number
 ): boolean {
   const value = record[field];
 

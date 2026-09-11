@@ -140,7 +140,7 @@ export function recordClient(client: {
         seenAt: nowIso(),
       },
     },
-    'lastClient',
+    'lastClient'
   );
 }
 
@@ -158,6 +158,6 @@ export function recordObservedShell(alias: string, shell: string): void {
         [alias]: { shell, seenAt: nowIso() },
       },
     },
-    'observedShells',
+    'observedShells'
   );
 }

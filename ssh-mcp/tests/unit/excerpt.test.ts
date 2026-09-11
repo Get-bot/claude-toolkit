@@ -194,9 +194,7 @@ describe('long lines', () => {
     expect(LINE_CUT_PATTERN.test(result.text)).toBe(true);
     for (const line of result.text.split('\n')) {
       if (OMISSION_MARKER_PATTERN.test(line)) continue;
-      expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(
-        MAX_LINE_BYTES + 64
-      );
+      expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(MAX_LINE_BYTES + 64);
     }
   });
 

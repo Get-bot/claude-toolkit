@@ -30,10 +30,7 @@ export interface ConfigIssue {
 }
 
 export type ConfigInvalidReason =
-  | 'read_error'
-  | 'parse_error'
-  | 'unsupported_schema_version'
-  | 'validation_error';
+  'read_error' | 'parse_error' | 'unsupported_schema_version' | 'validation_error';
 
 export interface ConfigValid {
   ok: true;
@@ -60,17 +57,13 @@ export type ConfigLoadResult = ConfigValid | ConfigInvalid;
 function invalid(
   reason: ConfigInvalidReason,
   message: string,
-  issues: ConfigIssue[] = [],
+  issues: ConfigIssue[] = []
 ): ConfigInvalid {
   return { ok: false, code: 'config_invalid', reason, path: hostsFilePath(), message, issues };
 }
 
 function isEnoent(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as { code?: unknown }).code === 'ENOENT'
-  );
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
 }
 
 function errorMessage(err: unknown): string {
@@ -124,7 +117,7 @@ export function load(): ConfigLoadResult {
       'unsupported_schema_version',
       `${path} has schemaVersion ${String(rawVersion)}, but this build only understands ` +
         `${String(CONFIG_SCHEMA_VERSION)}. Upgrade ssh-mcp instead of editing the file.`,
-      [{ path: 'schemaVersion', message: `unsupported version ${String(rawVersion)}` }],
+      [{ path: 'schemaVersion', message: `unsupported version ${String(rawVersion)}` }]
     );
   }
 
@@ -152,7 +145,7 @@ export function load(): ConfigLoadResult {
     // One warning per load, listing every affected alias (decision D2, M6).
     logger.warn(
       'hosts without approvalFallback are treated as fail-closed; add the field explicitly',
-      { path, aliases: normalizedFallbackAliases, assumed: DEFAULT_APPROVAL_FALLBACK },
+      { path, aliases: normalizedFallbackAliases, assumed: DEFAULT_APPROVAL_FALLBACK }
     );
   }
 

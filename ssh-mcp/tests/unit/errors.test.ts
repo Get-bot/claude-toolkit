@@ -96,7 +96,7 @@ describe('toToolError (plan row 1.7)', () => {
 
   it('never lets details override the code or the message', () => {
     const body = bodyOf(
-      toToolError('auth_failed', 'real message', { error: 'spoofed', message: 'spoofed' }),
+      toToolError('auth_failed', 'real message', { error: 'spoofed', message: 'spoofed' })
     );
     expect(body.error).toBe('auth_failed');
     expect(body.message).toBe('real message');
@@ -117,7 +117,7 @@ describe('toToolNotice / toToolResult', () => {
 
   it('masks a token-shaped key by default', () => {
     const body = bodyOf(
-      toToolNotice('confirmation_required', 'approve first', { confirmation_token: 'tok-abc123' }),
+      toToolNotice('confirmation_required', 'approve first', { confirmation_token: 'tok-abc123' })
     );
     expect(body.confirmation_token).toBe('[redacted]');
   });
@@ -128,8 +128,8 @@ describe('toToolNotice / toToolResult', () => {
         'confirmation_required',
         'approve first',
         { confirmation_token: 'tok-abc123', password: SENTINEL },
-        { preserveKeys: ['confirmation_token'] },
-      ),
+        { preserveKeys: ['confirmation_token'] }
+      )
     );
     expect(body.confirmation_token).toBe('tok-abc123');
     // Everything else is still masked.

@@ -276,10 +276,7 @@ export function buildCommandFrame(command: string, options: FrameOptions): strin
 
 /** Liveness ping used after a timeout (OPT-2 step 8). */
 export function buildPingFrame(marker: string): string {
-  return [
-    `printf '\\n%s%s\\n' '${marker}' 0`,
-    `printf '\\n%s\\n' '${marker}' 1>&2`,
-  ].join('; ');
+  return [`printf '\\n%s%s\\n' '${marker}' 0`, `printf '\\n%s\\n' '${marker}' 1>&2`].join('; ');
 }
 
 // ---------------------------------------------------------------------------
@@ -397,11 +394,11 @@ function lookup(sessionId: string): SessionRecord {
       { session_id: sessionId, host: tombstone.alias, reason: 'terminated' }
     );
   }
-  throw new SshOperationError(
-    ERROR_CODES.session_not_found,
-    `session ${sessionId} was closed`,
-    { session_id: sessionId, host: tombstone.alias, reason: 'closed' }
-  );
+  throw new SshOperationError(ERROR_CODES.session_not_found, `session ${sessionId} was closed`, {
+    session_id: sessionId,
+    host: tombstone.alias,
+    reason: 'closed',
+  });
 }
 
 /** Live sessions, for one alias or in total. */

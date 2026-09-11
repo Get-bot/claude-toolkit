@@ -122,7 +122,7 @@ function redactValue(
   value: unknown,
   maxStringBytes: number | null,
   depth: number,
-  seen: WeakSet<object>,
+  seen: WeakSet<object>
 ): unknown {
   if (value === null || value === undefined) return value;
 
@@ -183,7 +183,7 @@ function redactValue(
     }
     if (obj instanceof Set) {
       return Array.from(obj.values()).map((item) =>
-        redactValue(item, maxStringBytes, depth + 1, seen),
+        redactValue(item, maxStringBytes, depth + 1, seen)
       );
     }
 
@@ -220,7 +220,7 @@ export function redact(value: unknown, options?: RedactOptions): unknown {
  */
 export function redactRecord<T extends Record<string, unknown>>(
   record: T,
-  options?: RedactOptions,
+  options?: RedactOptions
 ): T {
   return redact(record, options) as T;
 }

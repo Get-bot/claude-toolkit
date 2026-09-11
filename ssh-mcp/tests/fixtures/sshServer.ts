@@ -33,14 +33,7 @@ import type { FixtureKeyPair } from './hostKeys.js';
 const { STATUS_CODE } = utils.sftp;
 
 export type FixtureEventType =
-  | 'auth'
-  | 'exec'
-  | 'shell'
-  | 'pty'
-  | 'sftp'
-  | 'signal'
-  | 'channel-close'
-  | 'connection-error';
+  'auth' | 'exec' | 'shell' | 'pty' | 'sftp' | 'signal' | 'channel-close' | 'connection-error';
 
 export interface FixtureEvent {
   type: FixtureEventType;

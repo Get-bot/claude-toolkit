@@ -69,7 +69,7 @@ describe('strict objects reject unknown keys', () => {
           privileged: { add: [], remove: [] },
           allow: ['^rm -rf /tmp/'],
         },
-      }),
+      })
     );
     expect(result.success).toBe(false);
     if (result.success) return;
@@ -87,22 +87,22 @@ describe('strict objects reject unknown keys', () => {
           destructive: { add: [], remove: [], replace: [] },
           privileged: { add: [], remove: [] },
         },
-      }),
+      })
     );
     expect(result.success).toBe(false);
   });
 
   it('rejects an unknown key on the hosts file', () => {
-    expect(
-      HostsFileSchema.safeParse({ schemaVersion: 1, hosts: {}, extra: true }).success,
-    ).toBe(false);
+    expect(HostsFileSchema.safeParse({ schemaVersion: 1, hosts: {}, extra: true }).success).toBe(
+      false
+    );
   });
 
   it('rejects an unknown key on hostKey', () => {
     expect(
       HostEntrySchema.safeParse(
-        entry({ hostKey: { algo: 'ssh-ed25519', sha256: FINGERPRINT, md5: 'x' } }),
-      ).success,
+        entry({ hostKey: { algo: 'ssh-ed25519', sha256: FINGERPRINT, md5: 'x' } })
+      ).success
     ).toBe(false);
   });
 });
@@ -164,7 +164,7 @@ describe('bounds', () => {
           destructive: { add: [long], remove: [] },
           privileged: { add: [], remove: [] },
         },
-      }),
+      })
     );
     expect(result.success).toBe(false);
   });
@@ -176,7 +176,7 @@ describe('bounds', () => {
           destructive: { add: ['^ok', '^(unclosed'], remove: [] },
           privileged: { add: [], remove: [] },
         },
-      }),
+      })
     );
     expect(result.success).toBe(false);
     if (result.success) return;
@@ -191,7 +191,7 @@ describe('bounds', () => {
           destructive: { add: ['^helm\\s+uninstall\\b'], remove: ['^git\\s+push\\b'] },
           privileged: { add: [], remove: [] },
         },
-      }),
+      })
     );
     expect(parsed.patternOverrides.destructive.add).toEqual(['^helm\\s+uninstall\\b']);
   });
@@ -212,19 +212,19 @@ describe('hostKey.sha256 format (AC7.4)', () => {
     'sha256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU',
   ])('rejects %s', (sha256) => {
     expect(
-      HostEntrySchema.safeParse(entry({ hostKey: { algo: 'ssh-ed25519', sha256 } })).success,
+      HostEntrySchema.safeParse(entry({ hostKey: { algo: 'ssh-ed25519', sha256 } })).success
     ).toBe(false);
   });
 });
 
 describe('createdAt', () => {
   it('accepts an ISO timestamp with Z or an offset', () => {
-    expect(HostEntrySchema.safeParse(entry({ createdAt: '2026-09-11T12:00:00.000Z' })).success).toBe(
-      true,
-    );
-    expect(HostEntrySchema.safeParse(entry({ createdAt: '2026-09-11T21:00:00+09:00' })).success).toBe(
-      true,
-    );
+    expect(
+      HostEntrySchema.safeParse(entry({ createdAt: '2026-09-11T12:00:00.000Z' })).success
+    ).toBe(true);
+    expect(
+      HostEntrySchema.safeParse(entry({ createdAt: '2026-09-11T21:00:00+09:00' })).success
+    ).toBe(true);
   });
 
   it('rejects a non-timestamp', () => {
@@ -254,18 +254,18 @@ describe('HostsFileSchema', () => {
     'accepts alias %s',
     (alias) => {
       expect(
-        HostsFileSchema.safeParse({ schemaVersion: 1, hosts: { [alias]: entry() } }).success,
+        HostsFileSchema.safeParse({ schemaVersion: 1, hosts: { [alias]: entry() } }).success
       ).toBe(true);
-    },
+    }
   );
 
   it.each(['-bad', '.bad', '_bad', 'has space', 'has/slash', '', `a${'b'.repeat(64)}`])(
     'rejects alias %s',
     (alias) => {
       expect(
-        HostsFileSchema.safeParse({ schemaVersion: 1, hosts: { [alias]: entry() } }).success,
+        HostsFileSchema.safeParse({ schemaVersion: 1, hosts: { [alias]: entry() } }).success
       ).toBe(false);
-    },
+    }
   );
 
   it('validates nested host entries', () => {

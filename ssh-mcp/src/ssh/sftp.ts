@@ -60,11 +60,10 @@ function statLocalFile(localPath: string): fs.Stats {
   try {
     stats = fs.statSync(localPath);
   } catch (err) {
-    throw new SshOperationError(
-      ERROR_CODES.sftp_failed,
-      `local file not found: ${localPath}`,
-      { local_path: localPath, reason: errorMessage(err) }
-    );
+    throw new SshOperationError(ERROR_CODES.sftp_failed, `local file not found: ${localPath}`, {
+      local_path: localPath,
+      reason: errorMessage(err),
+    });
   }
   if (!stats.isFile()) {
     throw new SshOperationError(

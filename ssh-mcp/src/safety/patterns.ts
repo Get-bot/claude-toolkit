@@ -184,8 +184,7 @@ const DESTRUCTIVE_SPECS: readonly PatternSpec[] = [
     id: 'pipe-to-shell',
     scope: 'whole',
     reason: 'downloading a script straight into a shell runs unreviewed code',
-    source:
-      '(?:\\S*/)?(?:curl|wget|fetch)\\b[^|]*\\|\\s*(?:sudo\\s+)?\\S*(?:ba|z|k|da|a)?sh\\b',
+    source: '(?:\\S*/)?(?:curl|wget|fetch)\\b[^|]*\\|\\s*(?:sudo\\s+)?\\S*(?:ba|z|k|da|a)?sh\\b',
     prefix: false,
   },
   {
@@ -397,7 +396,8 @@ const PRIVILEGED_SPECS: readonly PatternSpec[] = [
     id: 'apt',
     scope: 'segment',
     reason: 'installs or removes system packages',
-    source: '^(?:apt|apt-get|aptitude)\\s+(?:install|remove|purge|upgrade|dist-upgrade|autoremove)\\b',
+    source:
+      '^(?:apt|apt-get|aptitude)\\s+(?:install|remove|purge|upgrade|dist-upgrade|autoremove)\\b',
   },
   {
     id: 'yum-dnf',

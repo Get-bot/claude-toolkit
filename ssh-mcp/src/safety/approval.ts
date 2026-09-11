@@ -82,7 +82,7 @@ export type ElicitOutcome = 'accept' | 'decline' | 'cancel' | 'timeout';
 
 export function interpretElicitResult(
   action: 'accept' | 'decline' | 'cancel',
-  content?: Record<string, unknown> | undefined,
+  content?: Record<string, unknown> | undefined
 ): ElicitOutcome {
   if (action !== 'accept') return action;
   return content?.[ELICIT_CONFIRM_FIELD] === true ? 'accept' : 'decline';
@@ -204,7 +204,7 @@ function gradeLabel(classification: Classification): string {
 /** §5.5: grade, matched pattern ids, host alias and the full command. */
 export function buildElicitRequest(
   input: Pick<GateInput, 'toolName' | 'host' | 'command' | 'sessionId'>,
-  classification: Classification,
+  classification: Classification
 ): ElicitRequest {
   const reasons = classification.reasons.length > 0 ? classification.reasons.join(', ') : '(없음)';
   const message = [
@@ -230,7 +230,7 @@ export function buildElicitRequest(
 function allow(
   classification: Classification,
   approvalOutcome: GateAllow['approvalOutcome'],
-  approvalWaitMs: number,
+  approvalWaitMs: number
 ): GateAllow {
   return { kind: 'allow', classification, approvalOutcome, approvalWaitMs, errorCode: null };
 }
@@ -241,7 +241,7 @@ function deny(
   message: string,
   details: Record<string, unknown>,
   approvalOutcome: GateDeny['approvalOutcome'],
-  approvalWaitMs: number,
+  approvalWaitMs: number
 ): GateDeny {
   return {
     kind: 'deny',
@@ -255,7 +255,7 @@ function deny(
 
 function classificationDetails(
   input: GateInput,
-  classification: Classification,
+  classification: Classification
 ): Record<string, unknown> {
   return {
     host: input.host.alias,
@@ -269,10 +269,7 @@ function classificationDetails(
   };
 }
 
-function withTimeout(
-  promise: Promise<ElicitOutcome>,
-  timeoutMs: number,
-): Promise<ElicitOutcome> {
+function withTimeout(promise: Promise<ElicitOutcome>, timeoutMs: number): Promise<ElicitOutcome> {
   return new Promise<ElicitOutcome>((resolve, reject) => {
     const timer = setTimeout(() => {
       resolve('timeout');
@@ -286,7 +283,7 @@ function withTimeout(
       (error: unknown) => {
         clearTimeout(timer);
         reject(error instanceof Error ? error : new Error(String(error)));
-      },
+      }
     );
   });
 }
@@ -294,7 +291,7 @@ function withTimeout(
 function confirmationRequired(
   input: GateInput,
   classification: Classification,
-  approvalWaitMs: number,
+  approvalWaitMs: number
 ): GateConfirmationRequired {
   const token = issueToken({
     toolName: input.toolName,
@@ -340,7 +337,7 @@ function confirmationRequired(
       // `command` is preserved so the model can quote the full text to the
       // user (M7); `redact` caps a preserved value at 32 KiB and the command
       // itself is already capped at 8192 characters by `command_too_long`.
-      { preserveKeys: ['confirmation_token', 'command'] },
+      { preserveKeys: ['confirmation_token', 'command'] }
     ),
     token,
     classification,
@@ -358,7 +355,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
       toolResult: toToolError(
         ERROR_CODES.command_too_long,
         `명령 길이가 상한을 넘었습니다 (${String(input.command.length)} > ${String(MAX_COMMAND_LENGTH)}자).`,
-        { host: input.host.alias, tool: input.toolName, length: input.command.length },
+        { host: input.host.alias, tool: input.toolName, length: input.command.length }
       ),
       classification: null,
       approvalOutcome: 'denied',
@@ -382,7 +379,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
           program: interactive.program,
           detail: interactive.reason,
           alternatives: interactive.alternatives,
-        },
+        }
       ),
       classification: null,
       approvalOutcome: 'denied',
@@ -400,7 +397,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
         ERROR_CODES.sudo_password_required,
         'sudo가 stdin에서 비밀번호를 읽으려 합니다. ssh-mcp는 stdin을 항상 닫으므로 이 명령은 반드시 실패합니다. ' +
           '해당 명령에 NOPASSWD 설정이 필요합니다. ssh-mcp는 sudo 비밀번호를 입력하지 않습니다 (v1 비목표).',
-        classificationDetails(input, classification),
+        classificationDetails(input, classification)
       ),
       classification,
       approvalOutcome: 'denied',
@@ -424,7 +421,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
       `이 호스트는 approvalMode: deny이며 ${grade} 등급 명령을 실행하지 않습니다.`,
       details,
       'denied',
-      0,
+      0
     );
   }
 
@@ -445,7 +442,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
       TOKEN_FAILURE_MESSAGES[outcome],
       details,
       'denied',
-      0,
+      0
     );
   }
 
@@ -456,7 +453,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
     try {
       outcome = await withTimeout(
         input.client.elicit(buildElicitRequest(input, classification)),
-        input.approvalTimeoutMs ?? ELICITATION_TIMEOUT_MS,
+        input.approvalTimeoutMs ?? ELICITATION_TIMEOUT_MS
       );
     } catch (error) {
       const waited = Date.now() - startedAt;
@@ -475,7 +472,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
           '승인 절차를 진행할 수 없습니다 (elicitation 호출 실패). 이 호스트는 approvalFallback: fail-closed이므로 토큰을 발급하지 않습니다.',
           details,
           'approval_unavailable',
-          waited,
+          waited
         );
       }
       return confirmationRequired(input, classification, waited);
@@ -491,7 +488,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
         : '사용자가 명령 실행을 승인하지 않았습니다.',
       { ...details, elicitation_outcome: outcome },
       'declined',
-      waited,
+      waited
     );
   }
 
@@ -504,7 +501,7 @@ export async function gateCommand(input: GateInput): Promise<GateResult> {
         '토큰을 발급하지 않으며 명령을 실행하지 않습니다.',
       details,
       'approval_unavailable',
-      0,
+      0
     );
   }
   return confirmationRequired(input, classification, 0);

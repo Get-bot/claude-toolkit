@@ -3,6 +3,7 @@
 이 문서는 자동화 테스트가 커버하지 못하는, **실제 Claude Desktop / Claude Code 클라이언트**와의 통합을 사람이 확인하기 위한 체크리스트입니다. `.omc/plans/ssh-mcp-plan.md` §8.5의 검증 절차를 따릅니다.
 
 전제:
+
 - Windows 11 머신 (1차 검증 대상).
 - `ssh-mcp`가 빌드되어 있거나(`npm run build`), 패키지가 배포되어 `npx @get-bot/ssh-mcp`로 실행 가능한 상태.
 - 비밀번호 로그인이 가능한 테스트용 원격 리눅스 호스트(SSH) 1대.
@@ -21,7 +22,11 @@
 1. `%APPDATA%\Claude\claude_desktop_config.json`을 열고 아래를 추가한다.
 
    ```json
-   { "mcpServers": { "ssh-mcp": { "command": "cmd", "args": ["/c", "npx", "-y", "@get-bot/ssh-mcp"] } } }
+   {
+     "mcpServers": {
+       "ssh-mcp": { "command": "cmd", "args": ["/c", "npx", "-y", "@get-bot/ssh-mcp"] }
+     }
+   }
    ```
 
 2. Claude Desktop을 완전히 재시작한다.
@@ -105,10 +110,10 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 
 ## 기록란
 
-| 항목 | 결과(PASS/FAIL) | 관측 내용 / 스크린샷 링크 | 확인자 | 날짜 |
-|------|-----------------|---------------------------|--------|------|
-| AC3 | | | | |
-| AC4 | | | | |
-| AC5 | | | | |
-| AC6 | | | | |
-| 실호스트 확인 | | | | |
+| 항목          | 결과(PASS/FAIL) | 관측 내용 / 스크린샷 링크 | 확인자 | 날짜 |
+| ------------- | --------------- | ------------------------- | ------ | ---- |
+| AC3           |                 |                           |        |      |
+| AC4           |                 |                           |        |      |
+| AC5           |                 |                           |        |      |
+| AC6           |                 |                           |        |      |
+| 실호스트 확인 |                 |                           |        |      |

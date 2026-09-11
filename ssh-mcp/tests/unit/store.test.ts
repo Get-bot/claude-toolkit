@@ -118,7 +118,7 @@ describe('load (plan row 1.3, Principle 2)', () => {
 
   it('keeps an explicit token fallback as-is (AC17.11 second half)', () => {
     writeHosts(
-      JSON.stringify({ schemaVersion: 1, hosts: { a: entry({ approvalFallback: 'token' }) } }),
+      JSON.stringify({ schemaVersion: 1, hosts: { a: entry({ approvalFallback: 'token' }) } })
     );
     const captured = captureStderr();
     const result = load();
@@ -154,7 +154,7 @@ describe('save (plan row 1.4)', () => {
 
   it('refuses to persist a registry that load() would reject', () => {
     expect(() =>
-      save({ schemaVersion: 1, hosts: { 'bad alias': entry() } } as unknown as HostsFile),
+      save({ schemaVersion: 1, hosts: { 'bad alias': entry() } } as unknown as HostsFile)
     ).toThrow(/refusing to write/);
     expect(fs.existsSync(hostsFilePath())).toBe(false);
   });
@@ -165,7 +165,7 @@ describe('save (plan row 1.4)', () => {
       save({ schemaVersion: 1, hosts: {} } as unknown as HostsFile);
       expect(fs.statSync(hostsFilePath()).mode & 0o777).toBe(0o600);
       expect(fs.statSync(homePath()).mode & 0o777).toBe(0o700);
-    },
+    }
   );
 });
 

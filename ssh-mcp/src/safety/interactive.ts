@@ -41,7 +41,7 @@ export const UNCONDITIONAL_PROGRAMS: readonly string[] = [
 ];
 
 const EDITOR_ALTERNATIVES = [
-  "download the file, edit it locally, then upload: download {host, remote_path, local_path}",
+  'download the file, edit it locally, then upload: download {host, remote_path, local_path}',
   "or write it in one shot: cat > <file> <<'EOF' … EOF",
 ];
 
@@ -108,7 +108,7 @@ function hasFlag(args: readonly Token[], flags: readonly string[]): boolean {
     if (token.kind === 'operator') return false;
     const value = token.value;
     return flags.some(
-      (flag) => value === flag || (flag.startsWith('--') && value.startsWith(`${flag}=`)),
+      (flag) => value === flag || (flag.startsWith('--') && value.startsWith(`${flag}=`))
     );
   });
 }
@@ -149,7 +149,7 @@ const CONDITIONAL_RULES: readonly ConditionalRule[] = [
       !words(args).some(
         (token) =>
           token.value === '--batch-mode' ||
-          (!token.value.startsWith('--') && /^-[A-Za-z]*b/.test(token.value)),
+          (!token.value.startsWith('--') && /^-[A-Za-z]*b/.test(token.value))
       ),
   },
   {
@@ -216,7 +216,7 @@ const CONDITIONAL_RULES: readonly ConditionalRule[] = [
 const CONDITIONAL_BY_PROGRAM = new Map(CONDITIONAL_RULES.map((rule) => [rule.program, rule]));
 
 export const CONDITIONAL_PROGRAMS: readonly string[] = CONDITIONAL_RULES.map(
-  (rule) => rule.program,
+  (rule) => rule.program
 );
 
 export interface InteractiveRefusal {

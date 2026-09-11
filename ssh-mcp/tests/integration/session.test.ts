@@ -197,7 +197,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
 
     const result = await runInSession(
       session.session_id,
-      "echo 'a;b' # comment\necho \"second\"",
+      'echo \'a;b\' # comment\necho "second"',
       budget
     );
     expect(result.stdout).toBe('a;b\nsecond\n');

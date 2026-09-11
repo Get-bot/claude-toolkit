@@ -120,7 +120,7 @@ function buildPayload(
   code: ErrorCode,
   message: string,
   details: ErrorDetails | undefined,
-  options: ToolPayloadOptions | undefined,
+  options: ToolPayloadOptions | undefined
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = { error: code, message };
   if (details === undefined) return payload;
@@ -172,7 +172,7 @@ export function toToolError(
   code: ErrorCode,
   message: string,
   details?: ErrorDetails,
-  options?: ToolPayloadOptions,
+  options?: ToolPayloadOptions
 ): ToolTextResult {
   return {
     content: [
@@ -191,7 +191,7 @@ export function toToolNotice(
   code: ErrorCode,
   message: string,
   details?: ErrorDetails,
-  options?: ToolPayloadOptions,
+  options?: ToolPayloadOptions
 ): ToolTextResult {
   return {
     content: [
@@ -207,7 +207,7 @@ export function toToolNotice(
  */
 export function toToolResult(
   body: Record<string, unknown>,
-  options?: ToolPayloadOptions,
+  options?: ToolPayloadOptions
 ): ToolTextResult {
   const preserved = new Set(options?.preserveKeys ?? []);
   if (preserved.size === 0) {

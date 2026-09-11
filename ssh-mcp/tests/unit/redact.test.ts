@@ -71,7 +71,7 @@ describe('sensitive keys', () => {
 
   it('masks sensitive keys nested in arrays and objects', () => {
     const out = asRecord(
-      redact({ hosts: [{ alias: 'a', password: SENTINEL }], meta: { apiToken: SENTINEL } }),
+      redact({ hosts: [{ alias: 'a', password: SENTINEL }], meta: { apiToken: SENTINEL } })
     );
     expect(JSON.stringify(out)).not.toContain(SENTINEL);
     expect(JSON.stringify(out)).toContain('"alias":"a"');
@@ -144,7 +144,7 @@ describe('2 KiB field truncation', () => {
     expect(Buffer.byteLength(list[0] ?? '', 'utf8')).toBeLessThanOrEqual(MAX_LOG_FIELD_BYTES);
     const nested = asRecord(out.nested);
     expect(Buffer.byteLength(nested.deep as string, 'utf8')).toBeLessThanOrEqual(
-      MAX_LOG_FIELD_BYTES,
+      MAX_LOG_FIELD_BYTES
     );
   });
 

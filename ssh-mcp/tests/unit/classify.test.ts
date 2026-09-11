@@ -163,12 +163,12 @@ const BYPASS: Row[] = [
     reason: 'destructive:inline-interpreter',
   },
   {
-    command: 'node -e "require(\'fs\').rmSync(\'/srv\',{recursive:true})"',
+    command: "node -e \"require('fs').rmSync('/srv',{recursive:true})\"",
     grade: D,
     reason: 'destructive:inline-interpreter',
   },
   {
-    command: "awk 'BEGIN{system(\"rm -rf /x\")}'",
+    command: 'awk \'BEGIN{system("rm -rf /x")}\'',
     grade: D,
     reason: 'destructive:awk-system',
     pass: 'whole',
@@ -385,14 +385,14 @@ describe('safe corpus', () => {
 describe('false-positive gate', () => {
   it('never grades a safe-corpus row destructive', () => {
     const offenders = SAFE.filter((row) => classify(row.command).grade === 'destructive').map(
-      (row) => `${row.command} -> ${classify(row.command).reasons.join(',')}`,
+      (row) => `${row.command} -> ${classify(row.command).reasons.join(',')}`
     );
     expect(offenders).toEqual([]);
   });
 
   it('grades every safe-corpus row exactly as the corpus states', () => {
     const offenders = SAFE.filter((row) => classify(row.command).grade !== row.grade).map(
-      (row) => `${row.command}: expected ${row.grade}, got ${classify(row.command).grade}`,
+      (row) => `${row.command}: expected ${row.grade}, got ${classify(row.command).grade}`
     );
     expect(offenders).toEqual([]);
   });
@@ -403,7 +403,7 @@ describe('false-positive gate', () => {
       privileged: { add: [], remove: [] },
     };
     const offenders = SAFE.filter(
-      (row) => classify(row.command, overrides).grade === 'destructive',
+      (row) => classify(row.command, overrides).grade === 'destructive'
     ).map((row) => row.command);
     expect(offenders).toEqual([]);
   });
@@ -452,9 +452,7 @@ describe('classification shape', () => {
       destructive: { add: [], remove: ['rm-recursive'] },
       privileged: { add: [], remove: [] },
     };
-    expect(classify('rm -rf /tmp/x', overrides).reasons).not.toContain(
-      'destructive:rm-recursive',
-    );
+    expect(classify('rm -rf /tmp/x', overrides).reasons).not.toContain('destructive:rm-recursive');
   });
 
   it('honours a host that adds a pattern', () => {

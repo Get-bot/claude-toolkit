@@ -127,10 +127,7 @@ describe('false positives', () => {
 
   it('still completes on a later genuine frame after a decoy', () => {
     const scanner = createMarkerScanner(MARKER, { expectExitCode: true });
-    const clean = feed(scanner, [
-      Buffer.from(`echo ${MARKER} here\n`, 'utf8'),
-      stdoutFrame('', 3),
-    ]);
+    const clean = feed(scanner, [Buffer.from(`echo ${MARKER} here\n`, 'utf8'), stdoutFrame('', 3)]);
     expect(scanner.complete).toBe(true);
     expect(scanner.exitCode).toBe(3);
     expect(clean).toBe(`echo ${MARKER} here\n`);

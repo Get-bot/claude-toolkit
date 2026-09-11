@@ -120,7 +120,7 @@ describe('sha256Fingerprint', () => {
   it('matches the OpenSSH representation for a known blob', () => {
     // sha256("") = 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU= -> padding dropped.
     expect(sha256Fingerprint(Buffer.alloc(0))).toBe(
-      'SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU',
+      'SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU'
     );
   });
 });

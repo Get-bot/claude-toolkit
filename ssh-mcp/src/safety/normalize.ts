@@ -554,7 +554,7 @@ interface ScanContext {
 function detectShellWrapper(
   commandTokens: readonly Token[],
   depth: number,
-  ctx: ScanContext,
+  ctx: ScanContext
 ): ShellWrapperInfo | null {
   const head = commandTokens[0];
   if (head === undefined || head.kind !== 'word' || head.hasVariable || head.hasSubstitution) {
@@ -604,7 +604,7 @@ function buildSegment(
   rawTokens: Token[],
   terminator: Terminator,
   depth: number,
-  ctx: ScanContext,
+  ctx: ScanContext
 ): Segment {
   const stripped = stripPrefixes(rawTokens);
   const privilege = stripPrivilegePrefix(stripped.effective);
@@ -911,14 +911,7 @@ function scanLevel(source: string, depth: number, ctx: ScanContext): Segment[] {
           j = close + 1;
           continue;
         }
-        if (
-          isBlank(dc) ||
-          dc === '\n' ||
-          dc === ';' ||
-          dc === '|' ||
-          dc === '&' ||
-          dc === '>'
-        ) {
+        if (isBlank(dc) || dc === '\n' || dc === ';' || dc === '|' || dc === '&' || dc === '>') {
           break;
         }
         if (dc === '\\') {

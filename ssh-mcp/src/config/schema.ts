@@ -100,7 +100,11 @@ export const HostEntrySchema = z
   .object({
     hostname: z.string().min(1).max(253),
     port: z.number().int().min(1).max(65535).default(DEFAULT_PORT),
-    user: z.string().min(1).max(64).regex(/^[^\s:]+$/, 'user must not contain whitespace or ":"'),
+    user: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[^\s:]+$/, 'user must not contain whitespace or ":"'),
     privateKeyPath: z.string().min(1),
     hostKey: HostKeySchema,
     approvalMode: z.enum(APPROVAL_MODES).default(DEFAULT_APPROVAL_MODE),

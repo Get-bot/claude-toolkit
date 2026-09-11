@@ -37,7 +37,7 @@ describe('top-level splitting', () => {
     'does not split quoted or escaped separators in %j',
     (command, expected) => {
       expect(topNormalized(command)).toEqual(expected);
-    },
+    }
   );
 
   it('records the terminator that ended each segment', () => {
@@ -156,17 +156,17 @@ describe('unparseable input', () => {
 
 describe('here-docs', () => {
   it('keeps a <<EOF body as literal data', () => {
-    const result = normalize("cat <<EOF\nrm -rf /\nEOF");
+    const result = normalize('cat <<EOF\nrm -rf /\nEOF');
     expect(result.hereDocs).toBe(1);
     expect(result.unparseable).toBe(false);
     const bodies = result.segments.flatMap((segment) =>
-      segment.rawTokens.filter((token) => token.kind === 'heredoc').map((token) => token.value),
+      segment.rawTokens.filter((token) => token.kind === 'heredoc').map((token) => token.value)
     );
     expect(bodies).toEqual(['rm -rf /']);
   });
 
   it('keeps a <<-EOF body as literal data and strips leading tabs', () => {
-    const result = normalize("cat <<-EOF\n\trm -rf /\n\tEOF");
+    const result = normalize('cat <<-EOF\n\trm -rf /\n\tEOF');
     expect(result.hereDocs).toBe(1);
     expect(result.unparseable).toBe(false);
   });
@@ -178,13 +178,13 @@ describe('here-docs', () => {
   });
 
   it('does not split separators inside a here-doc body', () => {
-    const result = normalize("cat <<EOF\na; b && c\nEOF");
-    expect(topNormalized("cat <<EOF\na; b && c\nEOF")).toHaveLength(1);
+    const result = normalize('cat <<EOF\na; b && c\nEOF');
+    expect(topNormalized('cat <<EOF\na; b && c\nEOF')).toHaveLength(1);
     expect(result.unparseable).toBe(false);
   });
 
   it('flags an unterminated here-doc', () => {
-    expect(normalize("cat <<EOF\nrm -rf /\n").unparseable).toBe(true);
+    expect(normalize('cat <<EOF\nrm -rf /\n').unparseable).toBe(true);
     expect(normalize('cat <<EOF').unparseable).toBe(true);
   });
 });
