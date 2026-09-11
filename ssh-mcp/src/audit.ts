@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import { z } from 'zod';
 
+import { byteLength, errorMessage, isEnoent } from './internal/util.js';
 import {
   STATE_FILE_MODE,
   applyStateFileMode,
@@ -151,14 +152,6 @@ export function getAuditThresholds(): AuditThresholds {
 /** Forget the "bytes since last stat" counter. For tests. */
 export function resetAuditState(): void {
   bytesSinceSizeCheck = Number.MAX_SAFE_INTEGER;
-}
-
-function byteLength(value: string): number {
-  return Buffer.byteLength(value, 'utf8');
-}
-
-function isEnoent(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
 }
 
 function serializedBytes(record: Record<string, unknown>): number {
@@ -323,7 +316,7 @@ export function appendAudit(input: AuditRecordInput): boolean {
     // One warn, no throw: the tool call itself still succeeds (AC20.8).
     logger.warn('could not append to audit.jsonl', {
       path: auditFilePath(),
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
     return false;
   }

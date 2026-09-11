@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 
+import { errorMessage, isEnoent } from '../internal/util.js';
 import { logger } from '../log.js';
 import {
   CONFIG_SCHEMA_VERSION,
@@ -60,14 +61,6 @@ function invalid(
   issues: ConfigIssue[] = []
 ): ConfigInvalid {
   return { ok: false, code: 'config_invalid', reason, path: hostsFilePath(), message, issues };
-}
-
-function isEnoent(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function readRawSchemaVersion(value: unknown): number | undefined {

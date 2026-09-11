@@ -5,10 +5,13 @@ import {
   REDACTED,
   REDACTED_PEM,
   TRUNCATION_SUFFIX,
+  captureProcessStdout,
   installStdoutGuard,
+  isProcessStdoutCaptured,
   isStdoutGuardInstalled,
   logger,
   maskPemBlocks,
+  protocolStdoutStream,
   redact,
   setLogLevel,
   truncateField,
@@ -274,13 +277,23 @@ describe('logger output', () => {
   });
 });
 
-describe('installStdoutGuard (AC2.3)', () => {
-  it('routes every stdout-bound console method to stderr and is reversible', () => {
+describe('installStdoutGuard (AC2.3, F19)', () => {
+  function spyStreams(): {
+    stdout: ReturnType<typeof vi.spyOn>;
+    stderr: ReturnType<typeof vi.spyOn>;
+  } {
     const stdout = vi
       .spyOn(process.stdout, 'write')
       .mockImplementation((() => true) as typeof process.stdout.write);
-    // Spy before installing: the guard binds whatever console.error is then.
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const stderr = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((() => true) as typeof process.stderr.write);
+    return { stdout, stderr };
+  }
+
+  it('keeps console.log/info/debug/dir off stdout and is reversible', () => {
+    const { stdout, stderr } = spyStreams();
+    const before = globalThis.console;
 
     installStdoutGuard();
     expect(isStdoutGuardInstalled()).toBe(true);
@@ -289,13 +302,65 @@ describe('installStdoutGuard (AC2.3)', () => {
     console.debug('c');
     console.dir({ d: 1 });
     expect(stdout).not.toHaveBeenCalled();
-    expect(consoleError).toHaveBeenCalledTimes(4);
+    expect(stderr.mock.calls.length).toBeGreaterThanOrEqual(4);
 
     uninstallStdoutGuard();
     expect(isStdoutGuardInstalled()).toBe(false);
-    consoleError.mockClear();
-    console.log('e');
-    expect(consoleError).not.toHaveBeenCalled();
+    expect(globalThis.console).toBe(before);
+  });
+
+  // F19: these all write to stdout in Node and would corrupt the JSON-RPC
+  // channel. Rebinding individual methods missed them; replacing the whole
+  // Console instance closes the class.
+  it.each([
+    ['table', (): void => console.table([{ a: 1 }])],
+    ['group', (): void => console.group('g')],
+    ['groupCollapsed', (): void => console.groupCollapsed('g')],
+    ['groupEnd', (): void => console.groupEnd()],
+    ['count', (): void => console.count('c')],
+    ['countReset', (): void => console.countReset('c')],
+    [
+      'timeEnd',
+      (): void => {
+        console.time('t');
+        console.timeEnd('t');
+      },
+    ],
+    [
+      'timeLog',
+      (): void => {
+        console.time('t2');
+        console.timeLog('t2');
+        console.timeEnd('t2');
+      },
+    ],
+  ])('console.%s never reaches stdout while the guard is installed', (_name, call) => {
+    const { stdout } = spyStreams();
+    installStdoutGuard();
+    call();
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing to stdout for any console method in one pass', () => {
+    const { stdout, stderr } = spyStreams();
+    installStdoutGuard();
+    console.log('l');
+    console.info('i');
+    console.debug('d');
+    console.dir({ x: 1 });
+    console.table([{ a: 1 }]);
+    console.group('g');
+    console.groupCollapsed('gc');
+    console.groupEnd();
+    console.count('c');
+    console.countReset('c');
+    console.time('t');
+    console.timeLog('t');
+    console.timeEnd('t');
+    console.warn('w');
+    console.error('e');
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.length).toBeGreaterThan(0);
   });
 
   it('is idempotent', () => {
@@ -303,5 +368,56 @@ describe('installStdoutGuard (AC2.3)', () => {
     installStdoutGuard();
     uninstallStdoutGuard();
     expect(isStdoutGuardInstalled()).toBe(false);
+  });
+
+  it('leaves process.stdout.write alone unless capture is opted into', () => {
+    installStdoutGuard();
+    expect(isProcessStdoutCaptured()).toBe(false);
+    const { stdout } = spyStreams();
+    // The JSON-RPC transport writes frames this way; it must still reach stdout.
+    process.stdout.write('{"jsonrpc":"2.0"}\n');
+    expect(stdout).toHaveBeenCalled();
+  });
+});
+
+describe('captureProcessStdout (opt-in) and protocolStdoutStream', () => {
+  it('redirects direct stdout writes but keeps the protocol stream working', async () => {
+    const stdoutWrites: string[] = [];
+    const stderrWrites: string[] = [];
+    const realStdoutWrite = process.stdout.write.bind(process.stdout);
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown): boolean => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown): boolean => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+
+    installStdoutGuard();
+    // Capture the real writer first, exactly as server.ts must.
+    const protocol = protocolStdoutStream();
+    captureProcessStdout();
+    expect(isProcessStdoutCaptured()).toBe(true);
+
+    // Stray output is diverted...
+    process.stdout.write('stray banner\n');
+    expect(stdoutWrites).toHaveLength(0);
+    expect(stderrWrites.join('')).toContain('stray banner');
+
+    // ...while JSON-RPC frames still reach stdout.
+    await new Promise<void>((resolve, reject) => {
+      protocol.write('{"jsonrpc":"2.0","id":1}\n', (err) => (err ? reject(err) : resolve()));
+    });
+    expect(stdoutWrites.join('')).toContain('"jsonrpc":"2.0"');
+
+    uninstallStdoutGuard();
+    expect(isProcessStdoutCaptured()).toBe(false);
+    expect(realStdoutWrite).toBeTypeOf('function');
+  });
+
+  it('is a no-op without the guard installed', () => {
+    captureProcessStdout();
+    expect(isProcessStdoutCaptured()).toBe(false);
   });
 });

@@ -5,6 +5,10 @@
  * Principle 3: in server mode stdout carries JSON-RPC frames and nothing else
  * (AC2.3). Nothing in this module ever writes to stdout.
  */
+import { Console } from 'node:console';
+import { Writable } from 'node:stream';
+
+import { byteLength, errorMessage } from './internal/util.js';
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
@@ -60,10 +64,6 @@ export function currentLogLevel(): LogLevel {
 /** True when a record at `level` would be written. */
 export function isLevelEnabled(level: LogLevel): boolean {
   return LEVEL_ORDER[level] <= LEVEL_ORDER[currentLogLevel()];
-}
-
-function byteLength(value: string): number {
-  return Buffer.byteLength(value, 'utf8');
 }
 
 /** Cut `value` to at most `maxBytes` UTF-8 bytes without splitting a code point. */
@@ -256,48 +256,105 @@ export const logger = {
   debug: (message: string, fields?: LogFields): void => log('debug', message, fields),
 };
 
-type ConsoleWriter = (...args: unknown[]) => void;
-
-let originalConsole: {
-  log: ConsoleWriter;
-  info: ConsoleWriter;
-  debug: ConsoleWriter;
-  dir: (item?: unknown, options?: unknown) => void;
-} | null = null;
-
-/**
- * Redirect every stdout-bound console method to stderr (row 1.5, AC2.3).
- *
- * `console.log`, `console.info`, `console.debug` and `console.dir` all write to
- * stdout, so any one of them would corrupt the JSON-RPC stream. Idempotent;
- * call it before the stdio transport is connected.
- */
-export function installStdoutGuard(): void {
-  if (originalConsole !== null) return;
-  originalConsole = {
-    log: console.log.bind(console) as ConsoleWriter,
-    info: console.info.bind(console) as ConsoleWriter,
-    debug: console.debug.bind(console) as ConsoleWriter,
-    dir: console.dir.bind(console) as (item?: unknown, options?: unknown) => void,
-  };
-  const toStderr = console.error.bind(console) as ConsoleWriter;
-  console.log = toStderr;
-  console.info = toStderr;
-  console.debug = toStderr;
-  console.dir = toStderr;
+interface GuardState {
+  previousConsole: Console;
+  /** Non-null only while {@link captureProcessStdout} is active. */
+  originalStdoutWrite: StdoutWrite | null;
 }
 
-/** Undo {@link installStdoutGuard}. For tests. */
+type StdoutWrite = typeof process.stdout.write;
+
+let guardState: GuardState | null = null;
+
+/**
+ * Route the whole `console` API to stderr for server mode (row 1.5, AC2.3).
+ *
+ * Rather than rebinding individual methods, the global console is replaced by a
+ * `Console` instance whose stdout *is* stderr. That closes the entire class in
+ * one move: `log`, `info`, `debug`, `dir`, and equally `table`, `group`,
+ * `groupCollapsed`, `groupEnd`, `count`, `countReset`, `time`, `timeEnd` and
+ * `timeLog`, all of which write to stdout in Node and would corrupt the
+ * JSON-RPC channel (F19).
+ *
+ * Only server mode installs this. `doctor` and `--version` are CLI modes that
+ * legitimately print to stdout, and `index.ts` does not call it on those paths.
+ *
+ * Idempotent. Call it before the stdio transport is connected.
+ */
+export function installStdoutGuard(): void {
+  if (guardState !== null) return;
+  const previousConsole = globalThis.console;
+  globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
+  guardState = { previousConsole, originalStdoutWrite: null };
+}
+
+/**
+ * Additionally redirect direct `process.stdout.write` calls to stderr.
+ *
+ * Opt-in and **off by default**, because the JSON-RPC transport is itself a
+ * legitimate `process.stdout.write` caller: `StdioServerTransport` sends frames
+ * with `this._stdout.write(json)` where `_stdout` defaults to `process.stdout`.
+ * Enabling this without handing the transport {@link protocolStdoutStream}
+ * would send every response to stderr and break the server outright.
+ *
+ * Correct usage in server mode:
+ *
+ * ```ts
+ * installStdoutGuard();
+ * const stdout = protocolStdoutStream(); // capture the real writer first
+ * captureProcessStdout();
+ * await server.connect(new StdioServerTransport(process.stdin, stdout));
+ * ```
+ *
+ * Requires {@link installStdoutGuard} to have run; no-op otherwise.
+ */
+export function captureProcessStdout(): void {
+  if (guardState === null || guardState.originalStdoutWrite !== null) return;
+  const original = process.stdout.write.bind(process.stdout) as StdoutWrite;
+  guardState.originalStdoutWrite = original;
+  const redirect = ((...args: unknown[]): boolean =>
+    (process.stderr.write as unknown as (...a: unknown[]) => boolean)(...args)) as StdoutWrite;
+  process.stdout.write = redirect;
+}
+
+/**
+ * A stream that always reaches the real stdout, even once
+ * {@link captureProcessStdout} is active. Hand this to
+ * `new StdioServerTransport(process.stdin, protocolStdoutStream())`.
+ *
+ * Safe to use unconditionally: with no capture installed it writes straight
+ * through to `process.stdout`.
+ */
+export function protocolStdoutStream(): Writable {
+  return new Writable({
+    write(chunk: unknown, encoding: unknown, callback: (error?: Error | null) => void): void {
+      try {
+        const write = guardState?.originalStdoutWrite ?? process.stdout.write.bind(process.stdout);
+        (write as unknown as (...a: unknown[]) => boolean)(chunk, encoding);
+        callback();
+      } catch (err) {
+        callback(err instanceof Error ? err : new Error(errorMessage(err)));
+      }
+    },
+  });
+}
+
+/** Undo {@link installStdoutGuard} and {@link captureProcessStdout}. */
 export function uninstallStdoutGuard(): void {
-  if (originalConsole === null) return;
-  console.log = originalConsole.log;
-  console.info = originalConsole.info;
-  console.debug = originalConsole.debug;
-  console.dir = originalConsole.dir;
-  originalConsole = null;
+  if (guardState === null) return;
+  if (guardState.originalStdoutWrite !== null) {
+    process.stdout.write = guardState.originalStdoutWrite;
+  }
+  globalThis.console = guardState.previousConsole;
+  guardState = null;
 }
 
 /** True while the stdout guard is installed. */
 export function isStdoutGuardInstalled(): boolean {
-  return originalConsole !== null;
+  return guardState !== null;
+}
+
+/** True while direct `process.stdout.write` calls are being redirected. */
+export function isProcessStdoutCaptured(): boolean {
+  return guardState !== null && guardState.originalStdoutWrite !== null;
 }

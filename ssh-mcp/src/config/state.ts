@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import { z } from 'zod';
 
+import { errorMessage } from '../internal/util.js';
 import { logger } from '../log.js';
 import {
   STATE_FILE_MODE,
@@ -115,7 +116,7 @@ function persist(next: State, what: string): void {
     // State is a cache: failing to persist it must not break a tool call.
     logger.warn(`could not update state.json (${what})`, {
       path: stateFilePath(),
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   }
 }
