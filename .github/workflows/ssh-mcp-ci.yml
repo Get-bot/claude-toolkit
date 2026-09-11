@@ -69,6 +69,18 @@ jobs:
       - name: build
         run: npm run build
 
+      # Bundle smoke: catches an ESM/bundling defect (e.g. a require() that tsup left
+      # unresolved, or a broken ssh2 import path) that vitest's module graph never exercises
+      # because tests import source, not dist/index.js. `doctor --patterns` in particular forces
+      # the ssh2 import to actually run. SSH_MCP_HOME points at a scratch dir so this never reads
+      # or writes the runner's real home directory.
+      - name: bundle smoke (dist/index.js runs standalone)
+        run: |
+          node dist/index.js --version
+          node dist/index.js doctor --patterns
+        env:
+          SSH_MCP_HOME: ${{ runner.temp }}/ssh-mcp-home
+
       - name: test (fixture sshd)
         run: npm test
         env:
