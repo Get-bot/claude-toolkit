@@ -7,6 +7,13 @@
 // Per the plan (§8.7 릴리스 체크리스트 #3): running this against a real host and recording the
 // result is a required manual step before a release, but it is not part of the automated
 // build-test / real-sshd CI jobs (no real host exists in CI).
+//
+// Unlike package.test.ts, this file deliberately does NOT redirect SSH_MCP_HOME to a sandbox.
+// The whole point of this test is to exercise the real host alias a human already registered
+// with `ssh-mcp setup` in the real ~/.ssh-mcp/hosts.json — pointing SSH_MCP_HOME elsewhere would
+// make that alias invisible and the test would fail for the wrong reason. Because the spawn below
+// lives inside `describe.skipIf(!REAL_HOST_ALIAS)`, it never runs (and never touches the real
+// home) unless a human has explicitly set SSH_MCP_E2E_HOST — which never happens in CI.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';

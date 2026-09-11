@@ -361,6 +361,7 @@ stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인�
 | `sftp_failed`                                                                                                           | SFTP 오류                                                                                                                                                           |
 | `sudo_password_required`                                                                                                | `sudo`가 비밀번호를 요구함(NOPASSWD 아님)                                                                                                                           |
 | `alias_exists`                                                                                                          | `--force` 없이 기존 alias로 `setup` 실행                                                                                                                            |
+| `internal_error`                                                                                                        | 예상 밖 내부 오류(버그). 재현 정보와 함께 이슈로 보고하세요                                                                                                         |
 
 ## 보안 모델
 

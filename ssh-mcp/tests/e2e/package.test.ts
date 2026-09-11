@@ -14,6 +14,8 @@ import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { assertNoWritesOutside, createTmpHome, type TmpHome } from '../fixtures/tmpHome.js';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(__dirname, '..', '..');
 
@@ -124,14 +126,27 @@ function waitForResponse(
 
 describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
   let child: ChildProcessWithoutNullStreams;
+  let home: TmpHome;
 
   beforeAll(() => {
+    // The spawned server writes state.json on `initialize` (last-client record) and would do so
+    // into the real ~/.ssh-mcp if left unpointed. createTmpHome() redirects SSH_MCP_HOME (and
+    // HOME/USERPROFILE) on process.env *before* the spawn below, and the explicit `env` still
+    // pins the child to it even if something upstream changes process.env later in the run.
+    home = createTmpHome('ssh-mcp-e2e-package-');
     const { cmd, args } = resolveEntrypoint();
-    child = spawn(cmd, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(cmd, args, {
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, SSH_MCP_HOME: home.dir },
+    });
   });
 
   afterAll(() => {
     child?.kill();
+    // Must run before home.cleanup() (which restores process.env) — see tmpHome.ts.
+    assertNoWritesOutside(home);
+    home.cleanup();
   });
 
   it("responds to initialize with serverInfo.name === 'ssh-mcp'", async () => {
