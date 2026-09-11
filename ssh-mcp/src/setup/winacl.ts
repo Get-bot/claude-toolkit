@@ -122,7 +122,7 @@ function isAllowed(principal: string, expectedUser: string): boolean {
  */
 export function inspectWindowsAcl(
   dir: string,
-  runner: IcaclsRunner = defaultRunner,
+  runner: IcaclsRunner = defaultRunner
 ): AclHardenResult & { foreign: string[] } {
   if (process.platform !== 'win32') {
     return {
@@ -138,7 +138,7 @@ export function inspectWindowsAcl(
     throw new WindowsAclError(
       'verify',
       `icacls could not read the ACL of ${dir}`,
-      `${read.stdout}${read.stderr}`.trim(),
+      `${read.stdout}${read.stderr}`.trim()
     );
   }
   const principals = parseIcaclsPrincipals(read.stdout, dir);
@@ -163,7 +163,7 @@ export function inspectWindowsAcl(
  */
 export function hardenWindowsAcl(
   dir: string,
-  runner: IcaclsRunner = defaultRunner,
+  runner: IcaclsRunner = defaultRunner
 ): AclHardenResult {
   if (process.platform !== 'win32') {
     return { applied: false, principals: [], detail: `not needed on ${process.platform}` };
@@ -175,7 +175,7 @@ export function hardenWindowsAcl(
     throw new WindowsAclError(
       'grant',
       `icacls failed to restrict ${dir} to ${expectedUser}`,
-      `${grant.stdout}${grant.stderr}`.trim(),
+      `${grant.stdout}${grant.stderr}`.trim()
     );
   }
 
@@ -197,13 +197,13 @@ export function hardenWindowsAcl(
     throw new WindowsAclError(
       'verify',
       `${dir} is still reachable by ${verified.foreign.join(', ')} after hardening`,
-      verified.principals.join(', '),
+      verified.principals.join(', ')
     );
   }
   if (verified.principals.length === 0) {
     throw new WindowsAclError(
       'verify',
-      `icacls reported no ACL entries for ${dir}; cannot confirm it is owner-only`,
+      `icacls reported no ACL entries for ${dir}; cannot confirm it is owner-only`
     );
   }
 

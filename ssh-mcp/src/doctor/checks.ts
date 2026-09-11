@@ -152,7 +152,7 @@ export function formatSnippets(packageName: string = PACKAGE_NAME): string {
     lines.push(
       '',
       'Windows(cmd /c 변형 — npx를 셸 없이 실행하면 ENOENT가 납니다):',
-      snippets.windows,
+      snippets.windows
     );
   }
   return lines.join('\n');
@@ -237,7 +237,7 @@ export const defaultHostProber: HostProber = async (_alias, entry) =>
     let settled = false;
 
     const finish = (
-      result: Omit<HostProbeResult, 'observedFingerprint' | 'keyUnavailable'>,
+      result: Omit<HostProbeResult, 'observedFingerprint' | 'keyUnavailable'>
     ): void => {
       if (settled) return;
       settled = true;
@@ -523,7 +523,7 @@ function auditLogCheck(ctx: CheckContext): Check {
     try {
       size = fs.statSync(file).size;
     } catch {
-      size = null;
+      // No audit file yet; `size` stays null and the branch below says so.
     }
     let rotated = 0;
     for (let index = 1; index <= 3; index += 1) {
@@ -569,7 +569,7 @@ function hostKeyFileChecks(ctx: CheckContext): Check[] {
       const modeText =
         process.platform === 'win32' || mode === null ? '' : ` · 모드 ${octal(mode)}`;
       return { status: 'PASS', detail: `${entry.privateKeyPath}${modeText}` };
-    }),
+    })
   );
 }
 
@@ -587,7 +587,7 @@ function hostTcpChecks(ctx: CheckContext): Check[] {
               `${ERROR_CODES.connection_failed}: ${target} 연결 실패 ` +
               `(${result.error ?? '원인 불명'})`,
           };
-    }),
+    })
   );
 }
 
@@ -611,7 +611,7 @@ function hostFingerprintChecks(ctx: CheckContext): Check[] {
           `${ERROR_CODES.host_key_mismatch}: ` +
           `기대 ${entry.hostKey.sha256} · 관측 ${result.observedFingerprint}`,
       };
-    }),
+    })
   );
 }
 
@@ -642,14 +642,14 @@ function hostAuthChecks(ctx: CheckContext): Check[] {
         status: 'FAIL',
         detail: `${ERROR_CODES.auth_failed}: 인증 실패 (${result.error ?? '원인 불명'})`,
       };
-    }),
+    })
   );
 }
 
 function hostApprovalChecks(ctx: CheckContext): Check[] {
   if (ctx.hosts.length === 0) return [emptyHostRow('host-approval', '호스트: 승인 설정')];
   const normalized = new Set(
-    ctx.loaded.ok ? ctx.loaded.normalizedFallbackAliases : ([] as string[]),
+    ctx.loaded.ok ? ctx.loaded.normalizedFallbackAliases : ([] as string[])
   );
   return ctx.hosts.map(([alias, entry]) =>
     sync(`host-approval:${alias}`, `호스트 ${alias}: 승인 설정`, () => {
@@ -662,14 +662,14 @@ function hostApprovalChecks(ctx: CheckContext): Check[] {
         warnings.push(`approvalFallback 누락 — ${DEFAULT_APPROVAL_FALLBACK}로 간주합니다`);
       } else if (fallback === 'token') {
         warnings.push(
-          'approvalFallback: token — elicitation 미지원 클라이언트에서는 서버가 사람의 승인을 보장하지 못합니다',
+          'approvalFallback: token — elicitation 미지원 클라이언트에서는 서버가 사람의 승인을 보장하지 못합니다'
         );
       }
       const summary = `mode=${entry.approvalMode} · fallback=${fallback}`;
       return warnings.length === 0
         ? { status: 'PASS', detail: summary }
         : { status: 'WARN', detail: `${summary} · ${warnings.join(' · ')}` };
-    }),
+    })
   );
 }
 
@@ -734,15 +734,14 @@ function hostShellChecks(ctx: CheckContext): Check[] {
       if (WINDOWS_SHELLS.has(observed.shell.toLowerCase())) {
         return {
           status: 'WARN',
-          detail:
-            `마지막 관측 기준: ${observed.shell}, ${observed.seenAt} — 분류 커버리지 축소`,
+          detail: `마지막 관측 기준: ${observed.shell}, ${observed.seenAt} — 분류 커버리지 축소`,
         };
       }
       return {
         status: 'PASS',
         detail: `마지막 관측 기준: ${observed.shell}, ${observed.seenAt}`,
       };
-    }),
+    })
   );
 }
 

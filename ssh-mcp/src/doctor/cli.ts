@@ -176,7 +176,7 @@ export async function runDoctor(argv: string[], options: DoctorOptions = {}): Pr
     out('');
     out(
       `패턴 ${String(patterns.rows.length)}개. ` +
-        '위 정규식 문자열을 hosts.json의 patternOverrides.<grade>.remove에 그대로 넣으면 해당 패턴이 해제됩니다.',
+        '위 정규식 문자열을 hosts.json의 patternOverrides.<grade>.remove에 그대로 넣으면 해당 패턴이 해제됩니다.'
     );
     return EXIT_OK;
   }

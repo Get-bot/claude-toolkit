@@ -61,7 +61,7 @@ export class NonInteractiveError extends Error {
   constructor(what: string) {
     super(
       `${what} requires an interactive terminal, but stdin is not a TTY. ` +
-        'Run ssh-mcp setup directly in a terminal.',
+        'Run ssh-mcp setup directly in a terminal.'
     );
     this.name = 'NonInteractiveError';
     this.what = what;
@@ -232,8 +232,8 @@ export class Prompter {
           reject(
             new PromptAbortedError(
               'stream-error',
-              `prompt input failed: ${err instanceof Error ? err.message : String(err)}`,
-            ),
+              `prompt input failed: ${err instanceof Error ? err.message : String(err)}`
+            )
           );
         });
       };
@@ -334,7 +334,7 @@ function decode(buf: Buffer): string {
  */
 export async function promptPassword(
   question: string,
-  prompter: Prompter = processPrompter(),
+  prompter: Prompter = processPrompter()
 ): Promise<Buffer> {
   if (!prompter.interactive) {
     throw new NonInteractiveError('reading a password');
@@ -355,7 +355,7 @@ export async function promptPassword(
  */
 export async function promptYes(
   question: string,
-  prompter: Prompter = processPrompter(),
+  prompter: Prompter = processPrompter()
 ): Promise<boolean> {
   prompter.write(question);
   const answer = decode(await prompter.readLine({ muted: false }));
@@ -373,7 +373,7 @@ export async function promptChoice(
   question: string,
   options: readonly string[],
   prompter: Prompter = processPrompter(),
-  attempts: number = DEFAULT_CHOICE_ATTEMPTS,
+  attempts: number = DEFAULT_CHOICE_ATTEMPTS
 ): Promise<string> {
   if (options.length === 0) throw new Error('promptChoice needs at least one option');
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -387,12 +387,12 @@ export async function promptChoice(
     } else {
       prompter.writeLine(
         `"${answer}"는 선택할 수 없습니다. ${options.join(' 또는 ')} 중 하나를 입력하세요. ` +
-          `남은 기회 ${String(remaining)}회.`,
+          `남은 기회 ${String(remaining)}회.`
       );
     }
   }
   throw new PromptAbortedError(
     'no-answer',
-    `no valid answer after ${String(attempts)} attempts (expected one of: ${options.join(', ')})`,
+    `no valid answer after ${String(attempts)} attempts (expected one of: ${options.join(', ')})`
   );
 }

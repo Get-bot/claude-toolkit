@@ -261,7 +261,7 @@ describe('setup against a live endpoint', () => {
     if (fixture !== undefined) {
       // AC9.2, both sides of the refusal. The server saw the handshake abort:
       const aborted = await waitFor(
-        () => fixture.eventsOfType('connection-error').length > abortsBefore,
+        () => fixture.eventsOfType('connection-error').length > abortsBefore
       );
       expect(aborted).toBe(true);
       // and it saw no command, and no authentication attempt either - the
@@ -276,7 +276,7 @@ describe('setup against a live endpoint', () => {
     expect(
       await runSetup(['dup', target()], {
         prompter: scripted([endpoint.password, 'yes', 'fail-closed']).prompter,
-      }),
+      })
     ).toBe(0);
     const first = loadEntry('dup');
 
@@ -293,7 +293,7 @@ describe('setup against a live endpoint', () => {
     expect(
       await runSetup(['kept', target()], {
         prompter: scripted([endpoint.password, 'yes', 'fail-closed']).prompter,
-      }),
+      })
     ).toBe(0);
     const originalKey = fs.readFileSync(privateKeyPath('kept'), 'utf8');
     const originalEntry = loadEntry('kept');
@@ -313,7 +313,7 @@ describe('setup against a live endpoint', () => {
     expect(
       await runSetup(['rolled', target()], {
         prompter: scripted([endpoint.password, 'yes', 'fail-closed']).prompter,
-      }),
+      })
     ).toBe(0);
     const firstKeyLine = fs.readFileSync(publicKeyPath('rolled'), 'utf8').trim();
 
@@ -355,7 +355,7 @@ describe('setup against a live endpoint', () => {
     expect(
       await runSetup(['pinned', target()], {
         prompter: scripted([endpoint.password, 'yes', 'fail-closed']).prompter,
-      }),
+      })
     ).toBe(0);
 
     // Tamper with the stored pin: the server is the same, the pin is not.
@@ -394,7 +394,7 @@ describe('setup against a live endpoint', () => {
       expect(fs.existsSync(publicKeyPath('acl'))).toBe(false);
       expect(loadEntry('acl')).toBeUndefined();
       expect(script.output()).toContain('ACL 하드닝에 실패');
-    },
+    }
   );
 });
 
@@ -444,7 +444,7 @@ describe('setup without a terminal', () => {
 
     const code = await runSetup(
       ['prod', 'deploy@127.0.0.1:22', '--approval-fallback', 'fail-closed'],
-      { prompter: script.prompter },
+      { prompter: script.prompter }
     );
 
     expect(code).toBe(2);
@@ -485,7 +485,7 @@ describe('argument parsing (row 5.1)', () => {
     'rejects %j',
     (bad) => {
       expect(parseTarget(bad)).toBeNull();
-    },
+    }
   );
 
   it('validates the alias against the registry pattern', () => {

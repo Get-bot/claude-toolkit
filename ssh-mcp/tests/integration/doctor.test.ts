@@ -51,7 +51,7 @@ function writeHosts(body: unknown): void {
   fs.writeFileSync(
     hostsFilePath(),
     typeof body === 'string' ? body : JSON.stringify(body, null, 2),
-    'utf8',
+    'utf8'
   );
 }
 
@@ -98,7 +98,9 @@ function stubIcacls(extra: readonly string[] = []): IcaclsRunner {
     const target = args[0] ?? '';
     const principals = [currentWindowsPrincipal(), ...extra];
     const lines = principals.map((principal, index) =>
-      index === 0 ? `${target} ${principal}:(OI)(CI)(F)` : `                     ${principal}:(OI)(CI)(F)`,
+      index === 0
+        ? `${target} ${principal}:(OI)(CI)(F)`
+        : `                     ${principal}:(OI)(CI)(F)`
     );
     const crlf = String.fromCharCode(13, 10);
     return {
@@ -293,7 +295,9 @@ describe('a registered host', () => {
     writeHosts({ schemaVersion: 1, hosts: { prod: hostEntry() } });
     fs.rmSync(privateKeyPath('prod'));
 
-    const code = await runDoctor(['--json'], { prober: stubProber({ keyUnavailable: true, authOk: false }) });
+    const code = await runDoctor(['--json'], {
+      prober: stubProber({ keyUnavailable: true, authOk: false }),
+    });
 
     expect(code).toBe(1);
     expect(row(parseJson().checks, 'host-key-file').status).toBe('FAIL');
@@ -311,7 +315,7 @@ describe('a registered host', () => {
         lastClient: null,
         observedShells: { prod: { shell: 'cmd', seenAt: '2026-09-11T13:05:00.000Z' } },
       }),
-      'utf8',
+      'utf8'
     );
 
     await runDoctor(['--json'], { prober: stubProber({}), icacls: stubIcacls() });
@@ -339,7 +343,7 @@ describe('a registered host', () => {
       const permissions = row(parseJson().checks, 'file-permissions');
       expect(permissions.status).toBe('FAIL');
       expect(permissions.detail).toContain(`BUILTIN${String.fromCharCode(92)}Users`);
-    },
+    }
   );
 
   it('never opens a channel: the probe stops at authentication (AC21.5)', async () => {

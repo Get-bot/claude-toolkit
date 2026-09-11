@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 
 import { Client, utils } from 'ssh2';
-import type { AuthenticationType, ConnectConfig } from 'ssh2';
+import type { AuthenticationType, ClientChannel, ConnectConfig } from 'ssh2';
 
 import { homePath, privateKeyPath } from '../config/paths.js';
 import {
@@ -125,7 +125,7 @@ function isApprovalFallback(value: string): value is ApprovalFallback {
  * (`user@[::1]:2222`) because an unbracketed one is ambiguous with the port.
  */
 export function parseTarget(
-  target: string,
+  target: string
 ): { user: string; hostname: string; port: number } | null {
   const at = target.lastIndexOf('@');
   if (at <= 0 || at === target.length - 1) return null;
@@ -240,7 +240,10 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
 
   const target = parseTarget(positional[1] ?? '');
   if (target === null) {
-    return { ok: false, message: `invalid target "${positional[1] ?? ''}": expected user@host[:port]` };
+    return {
+      ok: false,
+      message: `invalid target "${positional[1] ?? ''}": expected user@host[:port]`,
+    };
   }
 
   return {
@@ -332,9 +335,9 @@ function errorMessage(err: unknown): string {
 
 async function runRemoteCommand(
   conn: Client,
-  command: string,
+  command: string
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
-  const stream = await new Promise<import('ssh2').ClientChannel>((resolve, reject) => {
+  const stream = await new Promise<ClientChannel>((resolve, reject) => {
     conn.exec(command, (err, channel) => {
       if (err) reject(err);
       else resolve(channel);
@@ -399,7 +402,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   if (existing !== undefined && !args.force) {
     err(
       `ssh-mcp setup: ${ERROR_CODES.alias_exists}: "${args.alias}"는 이미 등록되어 있습니다 ` +
-        `(${existing.user}@${existing.hostname}:${String(existing.port)}).`,
+        `(${existing.user}@${existing.hostname}:${String(existing.port)}).`
     );
     err('다시 설정하려면 --force를 붙이세요. 호스트 키 지문을 다시 확인하게 됩니다.');
     return EXIT_FAILED;
@@ -407,7 +410,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   if (args.force && !prompter.interactive) {
     err(
       'ssh-mcp setup: --force는 호스트 키 지문을 다시 고정하므로 사람 확인이 필수입니다. ' +
-        '터미널에서 실행하세요.',
+        '터미널에서 실행하세요.'
     );
     return EXIT_NOT_INTERACTIVE;
   }
@@ -416,15 +419,21 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   if (!prompter.interactive) {
     err(
       'ssh-mcp setup: 비밀번호를 입력받아야 하므로 stdin이 터미널이어야 합니다. ' +
-        '파이프로 비밀번호를 넘기면 셸 히스토리와 CI 로그에 남기 때문에 지원하지 않습니다.',
+        '파이프로 비밀번호를 넘기면 셸 히스토리와 CI 로그에 남기 때문에 지원하지 않습니다.'
     );
     err('키 파일과 hosts.json에 아무것도 쓰지 않고 종료합니다.');
     return EXIT_NOT_INTERACTIVE;
   }
 
-  err(`호스트 "${args.alias}" 설정을 시작합니다: ${args.user}@${args.hostname}:${String(args.port)}`);
+  err(
+    `호스트 "${args.alias}" 설정을 시작합니다: ${args.user}@${args.hostname}:${String(args.port)}`
+  );
 
-  let password: Buffer | null = null;
+  // Declared without an initialiser: every path out of the catch below returns,
+  // so the only way past it is with the password assigned. The bytes are wiped
+  // with `fill(0)` both mid-flow and in the finally; zeroing twice is harmless,
+  // which is why no null-out step is needed to track whether it already ran.
+  let password: Buffer;
   try {
     password = await promptPassword(`${args.user}@${args.hostname} 비밀번호: `, prompter);
   } catch (error) {
@@ -502,10 +511,12 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       } else if (seen.hostKey === null) {
         err(
           `ssh-mcp setup: ${ERROR_CODES.connection_failed}: ` +
-            `${args.hostname}:${String(args.port)}에 연결할 수 없습니다 (${errorMessage(error)}).`,
+            `${args.hostname}:${String(args.port)}에 연결할 수 없습니다 (${errorMessage(error)}).`
         );
       } else {
-        err(`ssh-mcp setup: ${ERROR_CODES.auth_failed}: 비밀번호 인증에 실패했습니다 (${errorMessage(error)}).`);
+        err(
+          `ssh-mcp setup: ${ERROR_CODES.auth_failed}: 비밀번호 인증에 실패했습니다 (${errorMessage(error)}).`
+        );
       }
       return EXIT_FAILED;
     }
@@ -521,14 +532,14 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     err(
       installed.alreadyPresent
         ? '원격 authorized_keys에 이미 같은 공개키가 있습니다 (변경 없음).'
-        : '원격 authorized_keys에 공개키를 추가했습니다.',
+        : '원격 authorized_keys에 공개키를 추가했습니다.'
     );
     firstConnection.end();
     firstConnection = null;
 
     // The password has done its job; wipe it before the next network round.
+    // The finally wipes it again, which costs nothing and covers early returns.
     password.fill(0);
-    password = null;
 
     // Step 6: reconnect with the new key only. No password, no fallback.
     const privateKeyBytes = fs.readFileSync(privateKeyPath(args.alias));
@@ -547,7 +558,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     } catch (error) {
       err(
         `ssh-mcp setup: 키 전용 재접속 검증에 실패했습니다 (${errorMessage(error)}). ` +
-          'hosts.json에 아무것도 기록하지 않고 키 파일을 되돌립니다.',
+          'hosts.json에 아무것도 기록하지 않고 키 파일을 되돌립니다.'
       );
       return EXIT_FAILED;
     }
@@ -559,7 +570,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       err(
         `ssh-mcp setup: 검증 명령이 기대한 결과를 내지 않았습니다 ` +
           `(exit=${check.exitCode === null ? 'null' : String(check.exitCode)}). ` +
-          'hosts.json에 아무것도 기록하지 않습니다.',
+          'hosts.json에 아무것도 기록하지 않습니다.'
       );
       return EXIT_FAILED;
     }
@@ -577,7 +588,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
         const answer = await promptChoice(
           APPROVAL_FALLBACK_QUESTION,
           [...APPROVAL_FALLBACKS],
-          prompter,
+          prompter
         );
         approvalFallback = isApprovalFallback(answer) ? answer : 'fail-closed';
       } catch (error) {
@@ -585,7 +596,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
           err('');
           err(
             'ssh-mcp setup: 승인 폴백을 선택하지 않았습니다. 기본값은 없으므로 ' +
-              'hosts.json에 아무것도 기록하지 않고 종료합니다.',
+              'hosts.json에 아무것도 기록하지 않고 종료합니다.'
           );
         } else {
           err(`ssh-mcp setup: 승인 폴백 선택이 중단되었습니다 (${errorMessage(error)}).`);
@@ -604,7 +615,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     } catch (error) {
       err(
         `ssh-mcp setup: Windows ACL 하드닝에 실패했습니다 (${errorMessage(error)}). ` +
-          '암호 없는 개인키를 보호할 수 없으므로 생성한 키를 삭제하고 중단합니다.',
+          '암호 없는 개인키를 보호할 수 없으므로 생성한 키를 삭제하고 중단합니다.'
       );
       return EXIT_FAILED;
     }
@@ -619,7 +630,10 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       approvalMode: args.approvalMode ?? DEFAULT_APPROVAL_MODE,
       approvalFallback,
       auditMode: 'full',
-      patternOverrides: { destructive: { add: [], remove: [] }, privileged: { add: [], remove: [] } },
+      patternOverrides: {
+        destructive: { add: [], remove: [] },
+        privileged: { add: [], remove: [] },
+      },
       defaultTimeoutSec: 60,
       maxOutputBytes: 1048576,
       createdAt: now().toISOString(),
@@ -641,7 +655,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       err('');
       err(
         '주의: token을 선택했습니다. elicitation을 지원하지 않는 클라이언트에서는 ' +
-          '서버가 사람의 승인을 보장할 수 없습니다. 프로덕션 호스트에는 fail-closed를 권장합니다.',
+          '서버가 사람의 승인을 보장할 수 없습니다. 프로덕션 호스트에는 fail-closed를 권장합니다.'
       );
     }
     err('');
@@ -651,7 +665,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     err(`ssh-mcp setup: 예기치 않은 오류로 중단합니다 (${errorMessage(error)}).`);
     return EXIT_FAILED;
   } finally {
-    if (password !== null) password.fill(0);
+    password.fill(0);
     firstConnection?.end();
     verifyConnection?.end();
     if (!succeeded && backup !== null && keys !== null) {
@@ -673,7 +687,7 @@ async function confirmHostKey(
   prompter: Prompter,
   args: SetupArgs,
   observed: HostKeyObservation,
-  existing: HostEntry | undefined,
+  existing: HostEntry | undefined
 ): Promise<boolean> {
   prompter.writeLine('');
   prompter.writeLine(`${args.hostname}:${String(args.port)}의 호스트 키 지문:`);
@@ -688,10 +702,10 @@ async function confirmHostKey(
       prompter.writeLine('');
       prompter.writeLine(
         `  ⚠ 지문이 달라졌습니다 (${ERROR_CODES.host_key_mismatch}). 서버가 교체됐거나 ` +
-          '중간자 공격일 수 있습니다.',
+          '중간자 공격일 수 있습니다.'
       );
       prompter.writeLine(
-        '  서버를 재설치했다면 정상입니다. 아니라면 지금 중단하고 서버 관리자에게 확인하세요.',
+        '  서버를 재설치했다면 정상입니다. 아니라면 지금 중단하고 서버 관리자에게 확인하세요.'
       );
     }
   }

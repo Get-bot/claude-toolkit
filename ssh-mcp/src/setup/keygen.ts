@@ -14,7 +14,7 @@ import fs from 'node:fs';
 
 import { utils } from 'ssh2';
 
-import { parseAuthorizedKeyLine, sha256Fingerprint } from '../ssh/fingerprint.js';
+import { parseAuthorizedKeyLine } from '../ssh/fingerprint.js';
 import {
   PUBLIC_KEY_FILE_MODE,
   STATE_FILE_MODE,
@@ -28,7 +28,6 @@ export const KEY_COMMENT_PREFIX = 'ssh-mcp:';
 
 /** First line of an OpenSSH-format private key (AC7.1). */
 export const OPENSSH_PRIVATE_KEY_HEADER = '-----BEGIN OPENSSH PRIVATE KEY-----';
-
 
 export interface GeneratedKeyPair {
   alias: string;

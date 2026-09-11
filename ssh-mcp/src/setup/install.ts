@@ -56,7 +56,7 @@ export class RemoteInstallError extends Error {
       signal?: string | null;
       stdoutText?: string;
       stderrText?: string;
-    } = {},
+    } = {}
   ) {
     super(message);
     this.name = 'RemoteInstallError';
@@ -69,7 +69,10 @@ export class RemoteInstallError extends Error {
 
 /** Last non-empty line of `text`, trimmed. */
 function lastLine(text: string): string {
-  const lines = text.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
   return lines[lines.length - 1] ?? '';
 }
 
@@ -83,7 +86,7 @@ function lastLine(text: string): string {
  */
 export async function installAuthorizedKey(
   conn: Client,
-  publicKeyLine: string,
+  publicKeyLine: string
 ): Promise<InstallResult> {
   const line = publicKeyLine.trim();
   if (line === '') throw new RemoteInstallError('refusing to install an empty public key line');
@@ -117,7 +120,7 @@ export async function installAuthorizedKey(
           signal,
           stdoutText: stdout,
           stderrText: stderr,
-        }),
+        })
       );
     };
 
@@ -138,7 +141,7 @@ export async function installAuthorizedKey(
       if (settled) return;
       if (exitCode !== 0) {
         fail(
-          `install script exited with ${exitCode === null ? `signal ${signal ?? 'unknown'}` : `code ${String(exitCode)}`}`,
+          `install script exited with ${exitCode === null ? `signal ${signal ?? 'unknown'}` : `code ${String(exitCode)}`}`
         );
         return;
       }
