@@ -534,6 +534,7 @@ v1에는 없지만 설계가 이들을 막지 않도록 만들었습니다.
 - SQLite 감사 저장소 — JSONL을 대체 또는 보강
 - `.mcpb` 원클릭 번들 패키징
 - `setup`의 `~/.ssh/config` 가져오기(기존 키·설정 재사용)
+- 실제 OpenSSH 컨테이너 CI 티어 — `StrictModes`·`authorized_keys`·sftp 서브시스템을 실제 sshd 상대로 검증. v1의 게이팅 증거는 인프로세스 ssh2 `Server` 픽스처(실제 bash 브리지)이며, 통합 테스트는 이미 `ENDPOINT=fixture|sshd` 두 엔드포인트로 파라미터화돼 있어 컨테이너 티어 추가를 막지 않는다
 
 다음은 v1에서 명시적으로 제외되었고 로드맵에도 없습니다.
 
