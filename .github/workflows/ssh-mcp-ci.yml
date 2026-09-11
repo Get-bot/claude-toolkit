@@ -161,7 +161,7 @@ jobs:
             SSH_MCP_SSHD_PORT=2222 \
             SSH_MCP_SSHD_USER="$SSH_MCP_CI_SSH_USER" \
             SSH_MCP_SSHD_PASSWORD="$SSH_MCP_CI_SSH_PASSWORD" \
-            npm run test:integration -- tests/integration/session.test.ts
+            npx vitest run tests/integration/session.test.ts
           done
 
   no-build-tools:
