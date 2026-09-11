@@ -14,6 +14,7 @@ import fs from 'node:fs';
 
 import { utils } from 'ssh2';
 
+import { CodedError, ERROR_CODES } from '../errors.js';
 import { parseAuthorizedKeyLine, sha256Fingerprint } from '../ssh/fingerprint.js';
 import {
   PUBLIC_KEY_FILE_MODE,
@@ -69,6 +70,23 @@ export function describePublicKey(publicKey: string): {
 /** How many times a malformed pair is discarded before giving up. */
 export const MAX_GENERATION_ATTEMPTS = 12;
 
+/** Raw output of an ed25519 generator: two OpenSSH-format strings. */
+export interface RawKeyPair {
+  private: string;
+  public: string;
+}
+
+/** Injectable generator, so a test can hand back a known-malformed pair. */
+export type KeyPairGenerator = (comment: string) => RawKeyPair;
+
+export interface GenerateKeyPairDeps {
+  generate?: KeyPairGenerator;
+}
+
+/** The real thing: ssh2's ed25519 generator (OPT-7 A). */
+export const defaultKeyPairGenerator: KeyPairGenerator = (comment) =>
+  utils.generateKeyPairSync('ed25519', { comment });
+
 interface SoundKeyPair {
   privateKey: string;
   publicKeyLine: string;
@@ -77,35 +95,37 @@ interface SoundKeyPair {
 }
 
 /**
- * Generate one pair and hand it back only if both halves are sound.
+ * Return the pair only if both halves parse and agree with each other.
  *
- * ssh2 1.17.0 emits a malformed pair roughly once in every 130 calls: the
- * encoded body comes out three bytes short and `parseKey` rejects it. Both
- * halves are affected, so both are parsed back, and the private half is checked
- * against the public one - a pair whose halves disagree would authenticate
- * nowhere and would only be discovered at the verification reconnect, after a
- * password had already been sent.
+ * ssh2 1.17.0 emits a malformed pair roughly once in every 130 calls (14 in
+ * 2000, measured by the ssh lane): the encoded body comes out three bytes short
+ * and `parseKey` rejects it. Both halves are affected, so both are parsed back.
+ *
+ * The public key carried inside the private half is then compared with the
+ * public line. Parsing alone would accept two halves that came from different
+ * draws: each is well formed, but the key authenticates nowhere, and `setup`
+ * would only find out at the key-only reconnect (row 5.6) - after the password
+ * had already gone over the wire.
  *
  * Returns `null` for a bad draw; {@link generateKeyPair} retries.
  */
-function drawKeyPair(alias: string): SoundKeyPair | null {
-  const pair = utils.generateKeyPairSync('ed25519', { comment: `${KEY_COMMENT_PREFIX}${alias}` });
+function validatePair(pair: RawKeyPair): SoundKeyPair | null {
   if (!pair.private.startsWith(OPENSSH_PRIVATE_KEY_HEADER)) return null;
 
   const parsedPrivate = utils.parseKey(pair.private);
   if (parsedPrivate instanceof Error || !parsedPrivate.isPrivateKey()) return null;
 
-  const parsedPublic = parseAuthorizedKeyLine(pair.public.trim());
+  const publicKeyLine = pair.public.trim();
+  if (utils.parseKey(publicKeyLine) instanceof Error) return null;
+
+  const parsedPublic = parseAuthorizedKeyLine(publicKeyLine);
   if (parsedPublic === null) return null;
 
-  // The private half must carry the public half we are about to install
-  // remotely, or the key-only reconnect (row 5.6) would fail for no visible
-  // reason.
   if (sha256Fingerprint(parsedPrivate.getPublicSSH()) !== parsedPublic.fingerprint) return null;
 
   return {
     privateKey: pair.private,
-    publicKeyLine: pair.public.trim(),
+    publicKeyLine,
     fingerprint: parsedPublic.fingerprint,
     algo: parsedPublic.algo,
   };
@@ -118,18 +138,26 @@ function drawKeyPair(alias: string): SoundKeyPair | null {
  * for having taken a {@link backupKeyPair} first so an aborted run can restore
  * the previous key (row 5.1b).
  *
- * A malformed draw from ssh2 is discarded and retried here rather than being
- * handed to the caller, so `setup` does not fail once in every 130 runs with a
- * message about a key the user never saw (see {@link drawKeyPair}).
+ * A malformed draw is discarded and retried here rather than handed to the
+ * caller, so `setup` does not fail once in every 130 runs over a key the user
+ * never saw (see {@link validatePair}). Nothing is written until a sound pair
+ * is in hand, so the bounded failure path leaves the key directory untouched.
  */
-export function generateKeyPair(alias: string): GeneratedKeyPair {
+export function generateKeyPair(alias: string, deps: GenerateKeyPairDeps = {}): GeneratedKeyPair {
+  const generate = deps.generate ?? defaultKeyPairGenerator;
+  const comment = `${KEY_COMMENT_PREFIX}${alias}`;
+
   let sound: SoundKeyPair | null = null;
   for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS && sound === null; attempt += 1) {
-    sound = drawKeyPair(alias);
+    sound = validatePair(generate(comment));
   }
   if (sound === null) {
-    throw new Error(
-      `ssh2 produced ${String(MAX_GENERATION_ATTEMPTS)} unparseable ed25519 key pairs in a row`
+    throw new CodedError(
+      ERROR_CODES.internal_error,
+      `ssh2 ${String(MAX_GENERATION_ATTEMPTS)}회 연속으로 손상된 ed25519 키 쌍을 반환했습니다 ` +
+        '(ssh2 1.17.0의 알려진 결함: 인코딩된 본문이 3바이트 짧게 나옵니다). ' +
+        '키 파일과 hosts.json에 아무것도 쓰지 않고 중단합니다.',
+      { attempts: MAX_GENERATION_ATTEMPTS, alias }
     );
   }
 

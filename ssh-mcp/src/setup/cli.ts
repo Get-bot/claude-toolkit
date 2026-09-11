@@ -28,7 +28,7 @@ import {
 } from '../config/schema.js';
 import type { ApprovalFallback, ApprovalMode, HostEntry } from '../config/schema.js';
 import * as store from '../config/store.js';
-import { ERROR_CODES } from '../errors.js';
+import { ERROR_CODES, isCodedError } from '../errors.js';
 import { formatSnippets } from '../doctor/checks.js';
 import { sha256Fingerprint } from '../ssh/fingerprint.js';
 import { backupKeyPair, generateKeyPair, restoreKeyPair } from './keygen.js';
@@ -662,7 +662,14 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     err(formatSnippets());
     return EXIT_OK;
   } catch (error) {
-    err(`ssh-mcp setup: 예기치 않은 오류로 중단합니다 (${errorMessage(error)}).`);
+    // A CodedError carries a diagnosis worth showing verbatim (key generation
+    // gives up with `internal_error` when ssh2 keeps returning broken pairs);
+    // anything else is genuinely unexpected.
+    if (isCodedError(error)) {
+      err(`ssh-mcp setup: ${error.code}: ${error.message}`);
+    } else {
+      err(`ssh-mcp setup: 예기치 않은 오류로 중단합니다 (${errorMessage(error)}).`);
+    }
     return EXIT_FAILED;
   } finally {
     password.fill(0);

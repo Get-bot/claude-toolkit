@@ -8,19 +8,22 @@
 import fs from 'node:fs';
 
 import { utils } from 'ssh2';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { keysDirPath, privateKeyPath, publicKeyPath } from '../../src/config/paths.js';
+import { CodedError, isCodedError } from '../../src/errors.js';
 import {
   KEY_COMMENT_PREFIX,
   MAX_GENERATION_ATTEMPTS,
   OPENSSH_PRIVATE_KEY_HEADER,
   backupKeyPair,
+  defaultKeyPairGenerator,
   describePublicKey,
   generateKeyPair,
   removeKeyPair,
   restoreKeyPair,
 } from '../../src/setup/keygen.js';
+import type { KeyPairGenerator, RawKeyPair } from '../../src/setup/keygen.js';
 import { sha256Fingerprint } from '../../src/ssh/fingerprint.js';
 import { assertNoWritesOutside, createTmpHome } from '../fixtures/tmpHome.js';
 import type { TmpHome } from '../fixtures/tmpHome.js';
@@ -120,10 +123,9 @@ describe('generateKeyPair', () => {
 
 describe('malformed draws from ssh2 (1.17.0 defect)', () => {
   /**
-   * ssh2 emits a pair whose encoded body is three bytes short roughly once in
-   * every 130 calls. `generateKeyPair` must spend that flake internally: a user
-   * running `ssh-mcp setup` should never see a failure about a key they never
-   * asked about.
+   * Reproduce the defect exactly: the encoded body comes out three bytes short.
+   * The generator is injected rather than mocked, so these cases do not depend
+   * on ssh2's namespace object staying writable.
    */
   function shortenPublicBody(publicKey: string): string {
     const [algo, encoded, ...rest] = publicKey.trim().split(/\s+/);
@@ -132,65 +134,70 @@ describe('malformed draws from ssh2 (1.17.0 defect)', () => {
     return [algo, truncated, ...rest].join(' ');
   }
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('retries past a malformed pair and returns a sound one', () => {
-    const real = utils.generateKeyPairSync.bind(utils);
+  /** Count the draws so a test can assert how many regenerations happened. */
+  function countingGenerator(transform: (pair: RawKeyPair, draw: number) => RawKeyPair): {
+    generate: KeyPairGenerator;
+    draws: () => number;
+  } {
     let draws = 0;
-    vi.spyOn(utils, 'generateKeyPairSync').mockImplementation(((
-      ...args: Parameters<typeof utils.generateKeyPairSync>
-    ) => {
-      const pair = real(...args);
-      draws += 1;
-      // Corrupt the first two draws the way the defect does.
-      return draws <= 2 ? { ...pair, public: shortenPublicBody(pair.public) } : pair;
-    }) as typeof utils.generateKeyPairSync);
+    return {
+      generate: (comment) => {
+        draws += 1;
+        return transform(defaultKeyPairGenerator(comment), draws);
+      },
+      draws: () => draws,
+    };
+  }
 
-    const keys = generateKeyPair('flaky');
-
-    expect(draws).toBe(3);
-    expect(keys.fingerprint).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/);
-    // The written key is the sound one, not a corrupted earlier draw.
-    expect(describePublicKey(fs.readFileSync(keys.publicKeyPath, 'utf8')).fingerprint).toBe(
-      keys.fingerprint
+  it('regenerates once past a malformed pair and returns a sound one', () => {
+    const generator = countingGenerator((pair, draw) =>
+      draw === 1 ? { ...pair, public: shortenPublicBody(pair.public) } : pair
     );
+
+    const keys = generateKeyPair('flaky', { generate: generator.generate });
+
+    // Exactly one regeneration: the bad draw plus the good one.
+    expect(generator.draws()).toBe(2);
+    expect(keys.fingerprint).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/);
+    // What landed on disk is the sound pair, not the corrupted first draw.
+    const written = fs.readFileSync(keys.publicKeyPath, 'utf8');
+    expect(describePublicKey(written).fingerprint).toBe(keys.fingerprint);
+    expect(utils.parseKey(fs.readFileSync(keys.privateKeyPath, 'utf8'))).not.toBeInstanceOf(Error);
   });
 
-  it('rejects a pair whose halves disagree', () => {
-    const real = utils.generateKeyPairSync.bind(utils);
-    vi.spyOn(utils, 'generateKeyPairSync').mockImplementation(((
-      ...args: Parameters<typeof utils.generateKeyPairSync>
-    ) => {
-      // A private half from one pair and a public half from another: both parse,
-      // but the key would authenticate nowhere.
-      const mine = real(...args);
-      const stranger = real(...args);
-      return { private: mine.private, public: stranger.public };
-    }) as typeof utils.generateKeyPairSync);
+  it('rejects a pair whose halves came from different draws', () => {
+    // Both halves parse, so parsing alone would accept this, but the key would
+    // authenticate nowhere.
+    const generate: KeyPairGenerator = (comment) => ({
+      private: defaultKeyPairGenerator(comment).private,
+      public: defaultKeyPairGenerator(comment).public,
+    });
 
-    expect(() => generateKeyPair('mismatched')).toThrow(/unparseable ed25519 key pairs/);
+    expect(() => generateKeyPair('mismatched', { generate })).toThrow(CodedError);
     expect(fs.existsSync(privateKeyPath('mismatched'))).toBe(false);
     expect(fs.existsSync(publicKeyPath('mismatched'))).toBe(false);
   });
 
-  it('gives up with a clear message after the attempt limit', () => {
-    const real = utils.generateKeyPairSync.bind(utils);
-    let draws = 0;
-    vi.spyOn(utils, 'generateKeyPairSync').mockImplementation(((
-      ...args: Parameters<typeof utils.generateKeyPairSync>
-    ) => {
-      draws += 1;
-      const pair = real(...args);
-      return { ...pair, public: shortenPublicBody(pair.public) };
-    }) as typeof utils.generateKeyPairSync);
+  it('aborts with internal_error and writes no files when every draw is bad', () => {
+    const generator = countingGenerator((pair) => ({
+      ...pair,
+      public: shortenPublicBody(pair.public),
+    }));
 
-    expect(() => generateKeyPair('hopeless')).toThrow(
-      `ssh2 produced ${String(MAX_GENERATION_ATTEMPTS)} unparseable ed25519 key pairs in a row`
-    );
-    expect(draws).toBe(MAX_GENERATION_ATTEMPTS);
+    let thrown: unknown = null;
+    try {
+      generateKeyPair('hopeless', { generate: generator.generate });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(isCodedError(thrown)).toBe(true);
+    expect((thrown as CodedError).code).toBe('internal_error');
+    expect((thrown as CodedError).message).toContain('ssh2 1.17.0');
+    expect(generator.draws()).toBe(MAX_GENERATION_ATTEMPTS);
+    // The bounded failure path leaves the key directory as it found it (AC7.5).
     expect(fs.existsSync(privateKeyPath('hopeless'))).toBe(false);
+    expect(fs.existsSync(publicKeyPath('hopeless'))).toBe(false);
   });
 });
 
