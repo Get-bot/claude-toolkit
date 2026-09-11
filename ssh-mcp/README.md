@@ -19,6 +19,7 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 - [백그라운드(`&`) 작업](#백그라운드-작업)
 - [sudo](#sudo)
 - [바이너리 출력](#바이너리-출력)
+- [오류 코드](#오류-코드)
 - [보안 모델](#보안-모델)
 - [감사 로그](#감사-로그)
 - [진단 (`ssh-mcp doctor`)](#진단-ssh-mcp-doctor)
@@ -41,6 +42,23 @@ cmd /c npx -y @get-bot/ssh-mcp
 ```
 
 인자 없이 실행하면 stdio MCP 서버로 기동합니다. 호스트를 하나도 등록하지 않은 상태에서도 서버는 정상 기동하며, `list_hosts`가 빈 목록을 반환할 뿐입니다.
+
+### 개발
+
+이 저장소를 직접 수정할 때 씁니다(최종 사용자에게는 해당하지 않습니다).
+
+```bash
+cd ssh-mcp
+npm install
+npm run format         # Prettier로 전체 포맷팅
+npm run format:check   # 포맷 확인만 (CI가 씀)
+npm run lint            # ESLint
+npm run typecheck
+npm run build
+npm test
+```
+
+커밋 시 husky + lint-staged로 구성된 pre-commit 훅이 staged 파일을 자동으로 포맷합니다. CI나 그 밖의 비대화형 자동화 환경에서는 `npm ci`/`npm install`이 이 훅 설치를 시도하지 않도록 `HUSKY=0` 환경변수를 설정하세요 — `.github/workflows/ssh-mcp-ci.yml`의 모든 잡에 이미 적용되어 있습니다.
 
 ## setup — 호스트 등록
 
@@ -69,7 +87,7 @@ cmd /c npx @get-bot/ssh-mcp setup myhost deploy@web01.example.com
 5. 원격 `~/.ssh/authorized_keys`에 공개키를 등록합니다(멱등 — 같은 alias로 다시 실행해도 중복 추가되지 않습니다).
 6. 비밀번호 없이 새 개인키만으로 재접속을 검증합니다. **이 검증에 성공했을 때만** 다음 단계로 진행합니다.
 7. **승인 폴백을 강제로 묻습니다.** 아래 참고.
-8. (Windows만) `icacls`로 키 디렉터리를 하드닝합니다. 실패하면 생성한 키를 삭제하고 `hosts.json`에 아무것도 기록하지 않은 채 중단합니다.
+8. (Windows만) `icacls`로 키 디렉터리를 하드닝합니다. 소유자 계정과 `NT AUTHORITY\SYSTEM`을 제외한 **모든 principal을 제거**합니다 — 프로필 아래 새로 만든 디렉터리에 흔히 딸려오는 `BUILTIN\Administrators` 항목도 예외 없이 제거 대상입니다. 하드닝 후 ACL을 다시 읽어 두 principal만 남았는지 확인하며, 조금이라도 남아 있으면 생성한 키를 삭제하고 `hosts.json`에 아무것도 기록하지 않은 채 중단합니다.
 9. 여기까지 전부 통과했을 때만 `hosts.json`에 항목을 원자적으로 기록합니다.
 10. 성공하면 Claude Desktop/Claude Code 등록 스니펫을 stderr에 출력합니다.
 
@@ -103,15 +121,15 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
 
 모델이 실제로 읽는 안내문과 동일한 문구입니다.
 
-| 도구 | 설명 | 주요 인자 |
-|------|------|-----------|
-| `list_hosts` | 등록된 SSH 호스트의 alias, 접속 정보, 승인 모드, 승인 폴백을 반환한다. 다른 도구에 넘길 `host` 값을 여기서 확인한다. 비밀키 경로와 호스트 키 지문 전문은 반환하지 않는다. | (없음) |
-| `exec` | 등록된 호스트에서 셸 명령을 한 번 실행하고 stdout, stderr, exit code를 분리해 반환한다. 명령은 서버가 안전/파괴적/관리자로 분류하며 호스트의 승인 모드에 따라 확인을 요구할 수 있다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** 대화형 프로그램(vim, top, less 등)은 지원하지 않는다. 작업 디렉터리와 환경변수는 호출 간에 유지되지 않는다 — 유지가 필요하면 `open_session`을 쓴다. | `host`, `command`, `timeout_sec?`, `confirmation_token?` |
-| `upload` | 로컬 파일을 원격 경로로 SFTP 전송한다. 원격에 같은 경로가 있으면 덮어쓴다. | `host`, `local_path`, `remote_path` |
-| `download` | 원격 파일을 로컬 경로로 SFTP 전송한다. 로컬에 같은 경로가 있으면 기본적으로 실패하며, 덮어쓰려면 `overwrite: true`를 넘긴다. | `host`, `remote_path`, `local_path`, `overwrite?` |
-| `open_session` | 상태가 유지되는 원격 셸 세션을 열고 `session_id`를 반환한다. 이후 `run_in_session` 호출들이 작업 디렉터리, 환경변수, 활성화한 가상환경을 공유한다. 호스트당 최대 5개이며 30분간 쓰지 않으면 자동으로 닫힌다. 다 쓰면 `close_session`으로 닫는다. | `host` |
-| `run_in_session` | 열린 세션 안에서 명령을 실행한다. `cd`, `export`, `source venv/bin/activate`의 효과가 다음 호출까지 유지된다. 분류와 승인은 `exec`와 완전히 동일하다. **`confirmation_required`를 받으면 사용자에게 명령 전문을 보여주고 명시적 승인을 받은 뒤에만 `confirmation_token`과 함께 재호출할 것.** 대화형 프로그램은 지원하지 않는다. | `session_id`, `command`, `timeout_sec?`, `confirmation_token?` |
-| `close_session` | 세션을 닫고 원격 셸을 종료한다. 이미 닫힌 세션에 호출해도 오류가 아니다. | `session_id` |
+| 도구             | 설명                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 주요 인자                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `list_hosts`     | 등록된 SSH 호스트의 alias, 접속 정보, 승인 모드, 승인 폴백을 반환한다. 다른 도구에 넘길 `host` 값을 여기서 확인한다. 비밀키 경로와 호스트 키 지문 전문은 반환하지 않는다.                                                                                                                                                                                                                                                                                                                                                                     | (없음)                                                         |
+| `exec`           | 등록된 호스트에서 셸 명령을 한 번 실행하고 stdout, stderr, exit code를 분리해 반환한다. 명령은 서버가 안전/파괴적/관리자로 분류하며 호스트의 승인 모드에 따라 확인을 요구할 수 있다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** 대화형 프로그램(vim, top, less 등)은 지원하지 않는다. 작업 디렉터리와 환경변수는 호출 간에 유지되지 않는다 — 유지가 필요하면 `open_session`을 쓴다. | `host`, `command`, `timeout_sec?`, `confirmation_token?`       |
+| `upload`         | 로컬 파일을 원격 경로로 SFTP 전송한다. 원격에 같은 경로가 있으면 덮어쓴다.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `host`, `local_path`, `remote_path`                            |
+| `download`       | 원격 파일을 로컬 경로로 SFTP 전송한다. 로컬에 같은 경로가 있으면 기본적으로 실패하며, 덮어쓰려면 `overwrite: true`를 넘긴다.                                                                                                                                                                                                                                                                                                                                                                                                                  | `host`, `remote_path`, `local_path`, `overwrite?`              |
+| `open_session`   | 상태가 유지되는 원격 셸 세션을 열고 `session_id`를 반환한다. 이후 `run_in_session` 호출들이 작업 디렉터리, 환경변수, 활성화한 가상환경을 공유한다. 호스트당 최대 5개이며 30분간 쓰지 않으면 자동으로 닫힌다. 다 쓰면 `close_session`으로 닫는다.                                                                                                                                                                                                                                                                                              | `host`                                                         |
+| `run_in_session` | 열린 세션 안에서 명령을 실행한다. `cd`, `export`, `source venv/bin/activate`의 효과가 다음 호출까지 유지된다. 분류와 승인은 `exec`와 완전히 동일하다. **`confirmation_required`를 받으면 사용자에게 명령 전문을 보여주고 명시적 승인을 받은 뒤에만 `confirmation_token`과 함께 재호출할 것.** 대화형 프로그램은 지원하지 않는다.                                                                                                                                                                                                              | `session_id`, `command`, `timeout_sec?`, `confirmation_token?` |
+| `close_session`  | 세션을 닫고 원격 셸을 종료한다. 이미 닫힌 세션에 호출해도 오류가 아니다.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `session_id`                                                   |
 
 `exec`, `run_in_session` 두 도구에만 `_meta: { "anthropic/requiresUserInteraction": true }`가 붙어 있습니다. Claude Code에서 always-allow·bypassPermissions 설정을 무력화하고 매 호출마다 사람에게 확인을 강제하는 비표준 Anthropic 확장입니다. 필요하면 `SSH_MCP_REQUIRE_USER_INTERACTION=0`으로 끌 수 있습니다.
 
@@ -121,20 +139,26 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
 
 승인 모드는 호스트마다 `auto` / `ask-destructive`(기본값) / `ask-all` / `deny` 중 하나이고, 실제 동작은 클라이언트가 elicitation을 지원하는지와 그 호스트의 `approvalFallback` 값에 따라 갈립니다.
 
-| 클라이언트 | 모드 | 등급 | 동작 |
-|-----------|------|------|------|
-| Claude Code (elicitation 지원) | `ask-destructive` | safe | 즉시 실행 |
-| Claude Code | `ask-destructive` | destructive / privileged | elicitation 확인창 1회 → 사람이 결정 |
-| Claude Code | `ask-all` | 전부 | elicitation 확인창 1회 |
-| Claude Desktop (elicitation 미지원) | `ask-destructive` | safe | 즉시 실행 |
-| Claude Desktop, `approvalFallback: token` | `ask-destructive` | destructive / privileged | `confirmation_required` + 토큰 반환 → 모델이 사용자 승인을 받은 뒤 재호출. **사람 개입은 Desktop의 도구 승인 대화상자에만 의존한다** |
-| Claude Desktop, `approvalFallback: fail-closed` | `ask-destructive` / `ask-all` | destructive / privileged | `approval_unavailable`로 거부. 토큰 미발급 |
-| Claude Desktop, `approvalFallback: fail-closed` | `ask-all` | safe | 토큰 경로(안전 등급도 확인을 요구하는 모드이므로) |
-| **`approvalFallback` 필드가 없음(손편집 등)** | `ask-*` | destructive / privileged | `fail-closed`와 동일하게 처리. 기동 시 경고 1회 |
-| 아무 클라이언트 | `deny` | destructive / privileged | `command_denied`. 토큰 미발급 |
-| 아무 클라이언트 | `auto` | 전부 | 즉시 실행. 기동 시 경고 1회 |
+| 클라이언트                                      | 모드                          | 등급                     | 동작                                                                                                                                 |
+| ----------------------------------------------- | ----------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code (elicitation 지원)                  | `ask-destructive`             | safe                     | 즉시 실행                                                                                                                            |
+| Claude Code                                     | `ask-destructive`             | destructive / privileged | elicitation 확인창 1회 → 사람이 결정                                                                                                 |
+| Claude Code                                     | `ask-all`                     | 전부                     | elicitation 확인창 1회                                                                                                               |
+| Claude Desktop (elicitation 미지원)             | `ask-destructive`             | safe                     | 즉시 실행                                                                                                                            |
+| Claude Desktop, `approvalFallback: token`       | `ask-destructive`             | destructive / privileged | `confirmation_required` + 토큰 반환 → 모델이 사용자 승인을 받은 뒤 재호출. **사람 개입은 Desktop의 도구 승인 대화상자에만 의존한다** |
+| Claude Desktop, `approvalFallback: fail-closed` | `ask-destructive` / `ask-all` | destructive / privileged | `approval_unavailable`로 거부. 토큰 미발급                                                                                           |
+| Claude Desktop, `approvalFallback: fail-closed` | `ask-all`                     | safe                     | 토큰 경로(안전 등급도 확인을 요구하는 모드이므로)                                                                                    |
+| **`approvalFallback` 필드가 없음(손편집 등)**   | `ask-*`                       | destructive / privileged | `fail-closed`와 동일하게 처리. 기동 시 경고 1회                                                                                      |
+| 아무 클라이언트                                 | `deny`                        | destructive / privileged | `command_denied`. 토큰 미발급                                                                                                        |
+| 아무 클라이언트                                 | `auto`                        | 전부                     | 즉시 실행. 기동 시 경고 1회                                                                                                          |
 
 **서버가 실제로 강제할 수 있는 것은 `fail-closed`와 Claude Code의 `requiresUserInteraction`뿐입니다.** 그 외에는 클라이언트 쪽 UI(대화상자, elicitation 창)를 신뢰해야 합니다. 자세한 내용은 [보안 모델](#보안-모델)을 보세요.
+
+**elicitation 요청의 스키마.** Claude Code로 보내는 elicitation 요청은 불리언 필드 `confirm` 하나(`{ "confirm": { "type": "boolean", "title": "이 명령을 실행합니다" } }`)만 요구합니다. `confirm`이 정확히 `true`로 승인된 경우에만 실행되고, 그 외(거절·취소·타임아웃·`confirm: false`)는 전부 `command_denied`로 처리됩니다.
+
+**`confirmation_required` 응답은 명령 전문을 그대로 담습니다.** 토큰 발급 경로(`confirmation_required`)의 응답 본문에는 `confirmation_token`과 함께 명령 문자열이 최대 8192자까지(분류기의 명령 길이 상한과 동일) 잘리지 않고 담깁니다 — 모델이 사용자에게 보여줄 재료를 완제품으로 주기 위함입니다.
+
+**토큰 검증 실패는 `command_denied`가 아닙니다.** 잘못되었거나(`confirmation_token_invalid`), 이미 쓰였거나(`confirmation_token_used`), 만료되었거나(`confirmation_token_expired`), 다른 명령/호스트에 발급된(`confirmation_token_mismatch`) 토큰은 각각 전용 오류 코드로 구분됩니다. `command_denied`는 `deny` 모드이거나 사람이 명시적으로 거절한 경우에만 씁니다 — 둘을 같은 코드로 뭉치면 "승인 절차 자체가 실패했다"와 "사람이 거절했다"를 로그에서 구분할 수 없기 때문입니다.
 
 ## `hosts.json` 스키마
 
@@ -149,41 +173,47 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
       "port": 22,
       "user": "deploy",
       "privateKeyPath": "C:\\Users\\me\\.ssh-mcp\\keys\\prod-web",
-      "hostKey": { "algo": "ssh-ed25519", "sha256": "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU" },
+      "hostKey": {
+        "algo": "ssh-ed25519",
+        "sha256": "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU",
+      },
       "approvalMode": "ask-destructive",
       "approvalFallback": "fail-closed",
       "auditMode": "full",
       "patternOverrides": {
-        "destructive": { "add": ["^helm\\s+uninstall\\b"], "remove": ["^git\\s+push\\b.*\\s--force\\b"] },
-        "privileged":  { "add": [], "remove": [] }
+        "destructive": {
+          "add": ["^helm\\s+uninstall\\b"],
+          "remove": ["^git\\s+push\\b.*\\s--force\\b"],
+        },
+        "privileged": { "add": [], "remove": [] },
       },
       "defaultTimeoutSec": 60,
       "maxOutputBytes": 1048576,
       "label": "프로덕션 웹",
-      "createdAt": "2026-09-11T12:00:00.000Z"
-    }
-  }
+      "createdAt": "2026-09-11T12:00:00.000Z",
+    },
+  },
 }
 ```
 
-| 필드 | 타입 / 제약 | 기본값 |
-|------|------------|--------|
-| `schemaVersion` | `1` 고정. 다른 값이면 로드 거부 | 필수 |
-| alias(키) | `/^[a-z0-9][a-z0-9._-]{0,63}$/i` | 필수 |
-| `hostname` | 문자열, 1~253자 | 필수 |
-| `port` | 정수, 1~65535 | `22` |
-| `user` | 문자열, 공백/콜론 불가 | 필수 |
-| `privateKeyPath` | 문자열 | 필수 |
-| `hostKey.algo` | 문자열 | 필수 |
-| `hostKey.sha256` | `SHA256:` + base64 43자 | 필수 |
-| `approvalMode` | `auto` \| `ask-destructive` \| `ask-all` \| `deny` | `ask-destructive` |
-| `approvalFallback` | `token` \| `fail-closed` — **명시적으로 optional이며 zod 기본값이 없다.** `setup`이 쓰는 항목에는 항상 값이 들어간다. 손편집으로 누락되면 로드 시 `fail-closed`로 정규화되고 `warn` 1회를 남긴다 | (기본값 없음. 누락 시 동작은 `fail-closed`와 동일) |
-| `auditMode` | `full` \| `metadata-only` — 감사 줄에 명령 문자열을 남길지 | `full` |
-| `patternOverrides.destructive.add/remove`, `patternOverrides.privileged.add/remove` | 정규식 문자열 배열, 각 512자 이하 | `[]` |
-| `defaultTimeoutSec` | 정수, 1~3600 | `60` |
-| `maxOutputBytes` | 정수, 1024~4194304(4 MiB) | `1048576` |
-| `label` | 문자열, 128자 이하, optional | — |
-| `createdAt` | ISO 8601 datetime | 필수 |
+| 필드                                                                                | 타입 / 제약                                                                                                                                                                                      | 기본값                                             |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| `schemaVersion`                                                                     | `1` 고정. 다른 값이면 로드 거부                                                                                                                                                                  | 필수                                               |
+| alias(키)                                                                           | `/^[a-z0-9][a-z0-9._-]{0,63}$/i`                                                                                                                                                                 | 필수                                               |
+| `hostname`                                                                          | 문자열, 1~253자                                                                                                                                                                                  | 필수                                               |
+| `port`                                                                              | 정수, 1~65535                                                                                                                                                                                    | `22`                                               |
+| `user`                                                                              | 문자열, 공백/콜론 불가                                                                                                                                                                           | 필수                                               |
+| `privateKeyPath`                                                                    | 문자열                                                                                                                                                                                           | 필수                                               |
+| `hostKey.algo`                                                                      | 문자열                                                                                                                                                                                           | 필수                                               |
+| `hostKey.sha256`                                                                    | `SHA256:` + base64 43자                                                                                                                                                                          | 필수                                               |
+| `approvalMode`                                                                      | `auto` \| `ask-destructive` \| `ask-all` \| `deny`                                                                                                                                               | `ask-destructive`                                  |
+| `approvalFallback`                                                                  | `token` \| `fail-closed` — **명시적으로 optional이며 zod 기본값이 없다.** `setup`이 쓰는 항목에는 항상 값이 들어간다. 손편집으로 누락되면 로드 시 `fail-closed`로 정규화되고 `warn` 1회를 남긴다 | (기본값 없음. 누락 시 동작은 `fail-closed`와 동일) |
+| `auditMode`                                                                         | `full` \| `metadata-only` — 감사 줄에 명령 문자열을 남길지                                                                                                                                       | `full`                                             |
+| `patternOverrides.destructive.add/remove`, `patternOverrides.privileged.add/remove` | 정규식 문자열 배열, 각 512자 이하                                                                                                                                                                | `[]`                                               |
+| `defaultTimeoutSec`                                                                 | 정수, 1~3600                                                                                                                                                                                     | `60`                                               |
+| `maxOutputBytes`                                                                    | 정수, 1024~4194304(4 MiB)                                                                                                                                                                        | `1048576`                                          |
+| `label`                                                                             | 문자열, 128자 이하, optional                                                                                                                                                                     | —                                                  |
+| `createdAt`                                                                         | ISO 8601 datetime                                                                                                                                                                                | 필수                                               |
 
 모든 객체는 `.strict()`로 검증됩니다. 정의되지 않은 키(예: 과거 계획에 있던 `patternOverrides.allow`)가 남아 있으면 **조용히 무시되지 않고 검증에서 거부**됩니다. `allow`류 임의 안전 선언 필드는 v1에 없습니다 — 내장 파괴적/관리자 패턴을 개별적으로 끄는 것(`remove`)은 허용하지만, 임의 정규식을 "안전하다"고 선언하는 길은 의도적으로 열어두지 않았습니다.
 
@@ -240,24 +270,46 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 - **네이티브 빌드 도구가 없어도 됩니다.** `npm install --omit=optional`(또는 `npm ci --omit=optional`)로 선택적 네이티브 의존성 설치를 건너뛸 수 있습니다. `ssh2`는 순수 JS이므로 필수 기능에 영향이 없습니다.
 - **`npx`를 MCP 호스트의 `command`로 직접 지정하지 마세요.** Windows에서 `npx`는 실제로 `npx.cmd` 배치 파일입니다. MCP 호스트 대부분은 `child_process.spawn(cmd, args, { shell: false })`로 서버를 띄우는데, `shell: false`에서는 `.cmd` 셸 확장자 연결이 적용되지 않아 스폰이 `ENOENT`로 실패합니다. `cmd /c npx ...`로 감싸면 `cmd.exe`가 `.cmd` 확장자를 직접 해석하므로 문제가 사라집니다. 이 사실은 CI의 `windows-spawn` 잡이 두 가지 스폰을 모두 재현해 검증합니다.
 - 연결이 안 될 때는 가장 먼저 `node dist/index.js doctor`(또는 `npx @get-bot/ssh-mcp doctor`)를 실행하세요. 15개 항목을 점검합니다.
-- 키 디렉터리는 `icacls`로 하드닝됩니다. `setup` 중 하드닝이 실패하면 생성된 키를 정리하고 등록을 중단합니다.
+- 키 디렉터리는 `icacls`로 하드닝됩니다. 계정 소유자와 `NT AUTHORITY\SYSTEM`을 제외한 모든 principal(상속된 `BUILTIN\Administrators` 포함)을 제거합니다. `setup` 중 하드닝이 실패하면 생성된 키를 정리하고 등록을 중단합니다.
 - 원격 셸이 `cmd`나 `powershell`로 감지되면(즉 원격도 Windows OpenSSH인 경우) 상태 유지 세션(`open_session`)을 지원하지 않습니다. [원격 셸 지원 범위](#원격-셸-지원-범위)를 보세요.
 
 ## 대화형 프로그램은 지원하지 않습니다
 
 v1은 PTY(가상 터미널)를 할당하지 않습니다. 그래서 화면을 다시 그리거나 실시간 키 입력을 기다리는 프로그램은 동작하지 않습니다.
 
-명령이 대화형 프로그램으로 감지되면 `isError: true`, 오류 코드 `interactive_program_refused`와 함께 대안이 함께 반환됩니다.
+명령이 대화형 프로그램으로 감지되면 `isError: true`, 오류 코드 `interactive_program_refused`와 함께 감지된 프로그램명과 대안이 반환됩니다. 판정은 두 그룹으로 나뉩니다.
 
-| 감지된 프로그램 | 대안 |
-|-----------------|------|
-| `less`, `more` | `sed -n '1,200p' <file>` |
-| `top` | `ps aux --sort=-%cpu \| head -20` |
-| `vim`, `nano` | `download`로 받아 로컬에서 편집한 뒤 `upload` |
-| `watch` | `run_in_session`을 반복 호출 |
-| `man` | `<명령> --help` |
+**무조건 거부(21개).** 인자와 무관하게 항상 거부됩니다.
 
-**이 감지는 위험도 판정이 아닙니다.** 파괴적/관리자 분류와는 완전히 별개의 검사이며, 대화형 프로그램이 아니라는 이유로 명령이 "안전"으로 승격되지는 않습니다.
+| 프로그램                                            | 대안                                                                                                     |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `vim`, `vi`, `nvim`, `emacs`, `nano`, `pico`, `joe` | 파일을 `download`로 받아 로컬에서 편집한 뒤 `upload`. 또는 `cat > <file> <<'EOF' ... EOF`로 한 번에 작성 |
+| `less`, `more`                                      | `sed -n '1,200p' <file>`, `head -n 200 <file>`, `tail -n 200 <file>`, `grep -n <패턴> <file>`            |
+| `htop`, `btop`, `atop`, `iotop`                     | `ps aux --sort=-%cpu \| head -20` (배치 모드가 없어 `top`과 달리 항상 무조건 거부)                       |
+| `man`                                               | `<명령> --help`, `<명령> -h`                                                                             |
+| `watch`                                             | `run_in_session`을 반복 호출                                                                             |
+| `tmux`, `screen`                                    | `open_session`이 호출 간 작업 디렉터리·환경변수를 유지해준다                                             |
+| `dialog`, `whiptail`                                | 모든 응답을 커맨드라인 플래그로 직접 전달                                                                |
+| `visudo`                                            | 검증된 파일을 `/etc/sudoers.d/<name>`에 업로드하고 `visudo -c -f <file>`로 검사                          |
+| `passwd`                                            | `chpasswd <<< "<user>:<password>"` (여전히 관리자로 분류됨)                                              |
+
+**조건부 거부(13개).** 인자 형태에 따라 대화형 여부가 갈립니다. 아래 조건을 만족하면 실행되고, 아니면 거부됩니다.
+
+| 프로그램            | 거부 조건                                                                                        | 대안                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| `top`               | `-b`, `-bn1`, `--batch-mode` 등 배치 플래그가 없으면 거부(있으면 한 번 출력하고 종료하므로 허용) | `top -b -n 1`, 이후 `ps aux --sort=-%cpu \| head -20`     |
+| `mysql`             | `-e`/`--execute` 없으면 거부                                                                     | `mysql -e "<SQL>"`                                        |
+| `psql`              | `-c`/`-f` 없으면 거부                                                                            | `psql -c "<SQL>"`, `psql -f <file>`                       |
+| `redis-cli`         | 인자 없이 호출하면 거부                                                                          | `redis-cli <command>`, `redis-cli --scan`                 |
+| `python`, `python3` | 스크립트나 `-c` 없이(REPL) 호출하면 거부                                                         | `python3 -c "<code>"`, 또는 스크립트 업로드 후 실행       |
+| `node`              | 스크립트나 `-e` 없이 호출하면 거부                                                               | `node -e "<code>"`, 또는 스크립트 업로드 후 실행          |
+| `irb`, `ruby`       | REPL 호출이면 거부                                                                               | `ruby -e "<code>"`                                        |
+| `git`               | `commit`(메시지 플래그 없음), `rebase -i`, `add -i/-p`, `mergetool`, `difftool`                  | `-m`/`-F`/`--no-edit` 등 비대화형 플래그 사용             |
+| `crontab`           | `-e`(편집기 실행)면 거부                                                                         | `crontab -l > /tmp/cron && <편집> && crontab /tmp/cron`   |
+| `systemctl`         | `edit` 서브커맨드면 거부                                                                         | drop-in을 업로드하고 `systemctl daemon-reload`            |
+| `ssh`               | 원격 명령 없이(로그인 셸) 호출하면 거부                                                          | 두 번째 호스트를 `ssh-mcp setup`으로 등록하고 직접 `exec` |
+
+**이 감지는 위험도 판정이 아닙니다.** 파괴적/관리자 분류와는 완전히 별개의 검사이며, 대화형 프로그램이 아니라는 이유로 명령이 "안전"으로 승격되지는 않습니다. 예를 들어 `mysql -e "DROP DATABASE prod"`는 이 검사를 통과하지만, 이어서 분류기가 관리자/파괴적 여부를 판단합니다.
 
 ## 백그라운드(`&`) 작업
 
@@ -279,6 +331,32 @@ v1은 PTY(가상 터미널)를 할당하지 않습니다. 그래서 화면을 �
 
 stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인코딩해 반환하고, 응답에 `encoding: "base64"`를 포함합니다. UTF-8이면 `encoding: "utf8"`입니다. 비-UTF-8 출력에서는 줄 기반 발췌가 의미가 없으므로 앞·뒤를 **바이트** 단위로 보존하며 `omitted_lines: null`, `omitted_bytes`는 정확한 값을 반환합니다.
 
+## 오류 코드
+
+도구 응답의 `error` 필드에 담기는 코드입니다. `confirmation_required`만 `isError: false`인 정상 흐름이고 나머지는 `isError: true`입니다.
+
+| 코드                                                                                                                    | 의미                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config_invalid`                                                                                                        | `hosts.json` 파싱/검증 실패                                                                                                                                         |
+| `host_not_found`                                                                                                        | 등록되지 않은 alias                                                                                                                                                 |
+| `host_key_mismatch`                                                                                                     | 핀 고정된 호스트 키 지문과 불일치                                                                                                                                   |
+| `connection_failed`                                                                                                     | TCP 연결 또는 SSH 핸드셰이크가 인증 전에 실패(호스트에 닿지 않음, 포트 거부, 프로토콜 오류). `auth_failed`(자격증명 거부)나 내부 오류와 원인을 구분하기 위한 코드다 |
+| `auth_failed`                                                                                                           | 공개키 인증 실패                                                                                                                                                    |
+| `command_denied`                                                                                                        | `deny` 모드이거나, 사람이 elicitation 확인창에서 명시적으로 거절함                                                                                                  |
+| `approval_unavailable`                                                                                                  | `approvalFallback: "fail-closed"`인 호스트에서 클라이언트가 elicitation을 지원하지 않음                                                                             |
+| `confirmation_required`                                                                                                 | 2단계 승인 시작(오류 아님)                                                                                                                                          |
+| `confirmation_token_invalid` / `confirmation_token_used` / `confirmation_token_expired` / `confirmation_token_mismatch` | 토큰 검증 실패 — `command_denied`와는 별개 코드다([승인 모드](#승인-모드) 참고)                                                                                     |
+| `interactive_program_refused`                                                                                           | 대화형 프로그램으로 감지됨                                                                                                                                          |
+| `command_timeout`                                                                                                       | 실행 시간 초과                                                                                                                                                      |
+| `command_too_long`                                                                                                      | 명령이 8192자를 초과                                                                                                                                                |
+| `session_not_found` / `session_expired` / `session_terminated` / `session_limit_exceeded`                               | 세션 관련 오류                                                                                                                                                      |
+| `shell_incompatible`                                                                                                    | POSIX 계열로 보이지만 마커 핸드셰이크가 실패함                                                                                                                      |
+| `unsupported_shell`                                                                                                     | 셸이 fish/cmd/powershell로 감지됨                                                                                                                                   |
+| `local_file_exists`                                                                                                     | `download`가 `overwrite` 없이 기존 파일과 충돌                                                                                                                      |
+| `sftp_failed`                                                                                                           | SFTP 오류                                                                                                                                                           |
+| `sudo_password_required`                                                                                                | `sudo`가 비밀번호를 요구함(NOPASSWD 아님)                                                                                                                           |
+| `alias_exists`                                                                                                          | `--force` 없이 기존 alias로 `setup` 실행                                                                                                                            |
+
 ## 보안 모델
 
 - **서버가 실제로 강제할 수 있는 것은 두 가지뿐입니다.** 호스트의 `approvalFallback: "fail-closed"`, 그리고 Claude Code에서만 동작하는 `_meta`의 `anthropic/requiresUserInteraction`. 그 외의 모든 승인 전달은 클라이언트 쪽 UI를 신뢰하는 구조입니다. [승인 모드](#승인-모드) 표를 참고하세요.
@@ -296,29 +374,29 @@ stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인�
 
 한 도구 호출마다 성공·실패·거부와 무관하게 정확히 한 줄이 추가됩니다. 2단계 토큰 승인(요청 → 재호출)은 두 줄로 남습니다.
 
-| 필드 | 설명 |
-|------|------|
-| `schemaVersion` | 항상 `1`. 향후 `history` 도구가 v1/v1.1 혼재 파일을 읽을 수 있게 한다 |
-| `ts` | ISO 8601 UTC, 밀리초 |
-| `tool` | 7개 도구 이름 중 하나 |
-| `host` | alias 또는 `null` (`run_in_session`/`close_session`은 `session_id`로 역조회) |
-| `session_id` | 문자열 또는 `null` |
-| `command` | 리댁션 통과 문자열, 2 KiB 절단. `auditMode: "metadata-only"`면 `null` |
-| `command_grade` | `safe` / `privileged` / `destructive` / `null` |
-| `reasons` | 매칭된 패턴 id 배열 |
-| `approval_mode` | 호출 시점 호스트의 `approvalMode` |
-| `approval_outcome` | 아래 8개 값 중 하나 |
-| `approval_fallback` | `token` / `fail-closed` / `null` |
-| `server_cannot_verify_human_approval` | `approval_outcome === "token-approved"`일 때 `true` |
-| `exit_code` | 숫자 또는 `null` |
-| `error_code` | 오류 코드 또는 `null` |
-| `exec_duration_ms` | 실제 원격 실행 시간(ms) |
-| `approval_wait_ms` | 승인 대기 시간(ms). 느린 실행과 사람의 긴 고민 시간을 구분하기 위해 별도 필드로 둔다 |
-| `stdout_bytes` / `stderr_bytes` | 발췌 전 원본 총 바이트 |
-| `truncated` | 발췌 여부 |
-| `normalized_command` / `segments` | 분류기가 실제로 매칭에 쓴 정규화 문자열·세그먼트. `metadata-only`면 `null` |
-| `client` | `{name, version}` 또는 `null` |
-| `audit_mode` | 이 줄이 기록된 모드(`full`/`metadata-only`) |
+| 필드                                  | 설명                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------ |
+| `schemaVersion`                       | 항상 `1`. 향후 `history` 도구가 v1/v1.1 혼재 파일을 읽을 수 있게 한다                |
+| `ts`                                  | ISO 8601 UTC, 밀리초                                                                 |
+| `tool`                                | 7개 도구 이름 중 하나                                                                |
+| `host`                                | alias 또는 `null` (`run_in_session`/`close_session`은 `session_id`로 역조회)         |
+| `session_id`                          | 문자열 또는 `null`                                                                   |
+| `command`                             | 리댁션 통과 문자열, 2 KiB 절단. `auditMode: "metadata-only"`면 `null`                |
+| `command_grade`                       | `safe` / `privileged` / `destructive` / `null`                                       |
+| `reasons`                             | 매칭된 패턴 id 배열                                                                  |
+| `approval_mode`                       | 호출 시점 호스트의 `approvalMode`                                                    |
+| `approval_outcome`                    | 아래 8개 값 중 하나                                                                  |
+| `approval_fallback`                   | `token` / `fail-closed` / `null`                                                     |
+| `server_cannot_verify_human_approval` | `approval_outcome === "token-approved"`일 때 `true`                                  |
+| `exit_code`                           | 숫자 또는 `null`                                                                     |
+| `error_code`                          | 오류 코드 또는 `null`                                                                |
+| `exec_duration_ms`                    | 실제 원격 실행 시간(ms)                                                              |
+| `approval_wait_ms`                    | 승인 대기 시간(ms). 느린 실행과 사람의 긴 고민 시간을 구분하기 위해 별도 필드로 둔다 |
+| `stdout_bytes` / `stderr_bytes`       | 발췌 전 원본 총 바이트                                                               |
+| `truncated`                           | 발췌 여부                                                                            |
+| `normalized_command` / `segments`     | 분류기가 실제로 매칭에 쓴 정규화 문자열·세그먼트. `metadata-only`면 `null`           |
+| `client`                              | `{name, version}` 또는 `null`                                                        |
+| `audit_mode`                          | 이 줄이 기록된 모드(`full`/`metadata-only`)                                          |
 
 **`approval_outcome`의 8개 값**: `not-required`, `auto`, `elicitation-approved`, `token-approved`, `pending-confirmation`, `declined`, `denied`, `approval_unavailable`.
 
@@ -351,23 +429,23 @@ npx @get-bot/ssh-mcp doctor --patterns
 
 **연결이 안 되면 가장 먼저 이 명령을 돌리세요.** 결과는 stdout에 출력됩니다(서버 모드가 아니므로 stdout을 JSON-RPC 전용으로 쓸 필요가 없습니다).
 
-| # | 항목 | 비고 |
-|---|------|------|
-| 1 | Node 버전 ≥ 20 | 미만이면 FAIL |
-| 2 | `ssh2` 로드 | 네이티브 `cpu-features` 바인딩 유무는 정보로만 표시 |
-| 3 | `~/.ssh-mcp/` 레이아웃 | 없지만 생성 가능하면 PASS(신규 설치). 생성도 불가할 때만 FAIL |
-| 4 | 디렉터리·키 파일 권한 | POSIX `0700`/`0600` 또는 Windows `icacls` 확인 |
-| 5 | `hosts.json` 스키마 | 파싱/zod 검증 실패 시 FAIL, issue 경로 표시 |
-| 6 | `audit.jsonl` 쓰기 가능 | 현재 크기·회전 파일 수 함께 표시 |
-| 7 | 호스트별 키 파일 존재·권한 | 파일 없으면 FAIL |
-| 8 | 호스트별 TCP 연결(5초) | 실패 시 FAIL |
-| 9 | 호스트별 호스트 키 지문 일치 | 불일치 시 FAIL |
-| 10 | 호스트별 키 전용 인증 | 인증 실패 시 FAIL. **명령은 실행하지 않는다** |
-| 11 | 호스트별 승인 설정 | FAIL 없음. `auto`/`token`/필드 누락은 WARN |
-| 12 | 마지막 클라이언트의 elicitation 지원 여부 | FAIL 없음. 기록 없으면 "미기록" |
-| 13 | 원격 셸 분류 커버리지 | FAIL 없음. `cmd`/`powershell`로 관측된 호스트는 WARN, 미관측은 "미확인" 정보 행 |
-| 14 | 분류 패턴 목록 | 항상 PASS(정보 행). `--patterns`로 단독 출력 가능 |
-| 15 | 호스트 설정 스니펫 출력 | 항상 PASS. Windows에서는 `cmd /c` 변형도 함께 출력 |
+| #   | 항목                                      | 비고                                                                                                                                                                                                     |
+| --- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Node 버전 ≥ 20                            | 미만이면 FAIL                                                                                                                                                                                            |
+| 2   | `ssh2` 로드                               | 네이티브 `cpu-features` 바인딩 유무는 정보로만 표시                                                                                                                                                      |
+| 3   | `~/.ssh-mcp/` 레이아웃                    | 없지만 생성 가능하면 PASS(신규 설치). 생성도 불가할 때만 FAIL                                                                                                                                            |
+| 4   | 디렉터리·키 파일 권한                     | POSIX `0700`/`0600` 확인. Windows는 등록된 개인키가 하나도 없으면 **`icacls`를 실행하지 않고 PASS**(아직 `setup`을 안 한 새 머신을 FAIL로 만들지 않기 위함) — 개인키가 있으면 `icacls`로 ACL을 읽어 확인 |
+| 5   | `hosts.json` 스키마                       | 파싱/zod 검증 실패 시 FAIL, issue 경로 표시                                                                                                                                                              |
+| 6   | `audit.jsonl` 쓰기 가능                   | 현재 크기·회전 파일 수 함께 표시                                                                                                                                                                         |
+| 7   | 호스트별 키 파일 존재·권한                | 파일 없으면 FAIL                                                                                                                                                                                         |
+| 8   | 호스트별 TCP 연결(5초)                    | 실패 시 FAIL                                                                                                                                                                                             |
+| 9   | 호스트별 호스트 키 지문 일치              | 불일치 시 FAIL                                                                                                                                                                                           |
+| 10  | 호스트별 키 전용 인증                     | 인증 실패 시 FAIL. **명령은 실행하지 않는다**                                                                                                                                                            |
+| 11  | 호스트별 승인 설정                        | FAIL 없음. `auto`/`token`/필드 누락은 WARN                                                                                                                                                               |
+| 12  | 마지막 클라이언트의 elicitation 지원 여부 | FAIL 없음. 기록 없으면 "미기록"                                                                                                                                                                          |
+| 13  | 원격 셸 분류 커버리지                     | FAIL 없음. `cmd`/`powershell`로 관측된 호스트는 WARN, 미관측은 "미확인" 정보 행                                                                                                                          |
+| 14  | 분류 패턴 목록                            | 항상 PASS(정보 행). `--patterns`로 단독 출력 가능                                                                                                                                                        |
+| 15  | 호스트 설정 스니펫 출력                   | 항상 PASS. Windows에서는 `cmd /c` 변형도 함께 출력                                                                                                                                                       |
 
 **종료 코드.** FAIL이 하나라도 있으면 `1`, 없으면 `0`. WARN은 종료 코드에 영향을 주지 않습니다.
 
@@ -377,17 +455,26 @@ npx @get-bot/ssh-mcp doctor --patterns
 
 `open_session`은 접속 직후 짧은 프로브로 원격 로그인 셸을 자동 감지합니다.
 
-| 분류 | 셸 | 상태 유지 세션(`open_session`) |
-|------|-----|-------------------------------|
-| 지원 | `bash`, `zsh`, `sh`/`dash`, busybox `ash` | 지원 |
-| 미지원 | `fish` | `unsupported_shell` 오류. `exec` 도구는 셸과 무관하게 계속 동작함 |
-| 미지원 | Windows `cmd`, PowerShell | `unsupported_shell` 오류. `classification_coverage: "reduced"`가 함께 표시됨 |
+| 분류   | 셸                                        | 상태 유지 세션(`open_session`)                                               |
+| ------ | ----------------------------------------- | ---------------------------------------------------------------------------- |
+| 지원   | `bash`, `zsh`, `sh`/`dash`, busybox `ash` | 지원                                                                         |
+| 미지원 | `fish`                                    | `unsupported_shell` 오류. `exec` 도구는 셸과 무관하게 계속 동작함            |
+| 미지원 | Windows `cmd`, PowerShell                 | `unsupported_shell` 오류. `classification_coverage: "reduced"`가 함께 표시됨 |
 
 미지원 셸에서는 다음 대안이 오류 응답에 함께 담깁니다.
 
 - `exec` 도구로 단발 명령을 실행한다. `exec`는 모든 셸에서 동작한다.
 - 작업 디렉터리 유지가 필요하면 명령을 `cd /path && <명령>` 형태로 합친다.
 - 원격 사용자의 로그인 셸을 바꿀 수 있다면 `chsh -s /bin/bash`로 지원 셸로 전환한다(fish 등 POSIX 계열 유닉스에 한함. Windows OpenSSH에는 해당하지 않는다).
+
+**세션 프리앰블은 `set +e; set +u` 두 개뿐입니다.** `set`은 POSIX 특수 내장 명령이라 인자 오류가 비대화형 셸을 즉시 종료시키므로, `set -o pipefail`처럼 셸마다 지원 여부가 갈리는 옵션은 애초에 보내지 않습니다(구버전 dash·busybox ash는 알 수 없는 옵션을 치명적 오류로 거부합니다 — 참고로 dash 0.5.12 이상은 Git for Windows에 포함된 버전을 포함해 `pipefail`을 지원하지만, 그 사실에 기대지 않고 아예 보내지 않는 쪽을 택했습니다). 대신 프레임은 `eval` 직후 `$?`를 읽으므로, 사용자가 세션 안에서 스스로 `set -o pipefail`을 켜둔 값은 그대로 존중됩니다.
+
+**문법 오류가 있는 명령을 `run_in_session`에 보내면 셸에 따라 결과가 다릅니다.** `eval`은 POSIX 특수 내장 명령이라 그 안의 문법 오류가 비대화형 셸을 끝낼 수 있습니다.
+
+- `bash`, `zsh`는 살아남습니다 — exit code `2`와 함께 세션이 계속됩니다.
+- `dash`, busybox `ash`는 POSIX 규칙을 문자 그대로 따르므로 **세션 채널 자체가 종료됩니다.** 서버는 채널이 닫히는 것을 즉시 감지해 그 호출과 이후 같은 세션에 대한 호출을 `session_terminated`로 응답합니다. 데이터가 어긋나거나 멈추지 않으며, 그냥 세션이 끝난 것으로 취급됩니다 — 사용자는 `open_session`으로 새 세션을 열면 됩니다.
+
+**세션 안에서 `exit`만 단독으로 실행하면 그 세션은 설계대로 끝납니다** (`session_terminated`, 오류가 아니라 예상된 동작). 명령의 종료 상태만 확인하고 싶다면 세션을 끝내지 않는 서브셸 형태로 감싸세요: `(exit 3)`.
 
 **출력 발췌 규칙(AC12).** `exec`/`run_in_session`의 stdout·stderr가 호스트의 `maxOutputBytes`(기본 1 MiB)를 넘으면, 단순 절단 대신 앞부분(head)과 뒷부분(tail)을 보존하고 가운데를 한 줄로 대체합니다.
 

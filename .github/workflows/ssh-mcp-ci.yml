@@ -32,6 +32,9 @@ env:
   # they reach child processes. Disable that rewriting for every job so ssh-mcp's own path/command
   # handling is what's under test, not MSYS's path mangling.
   MSYS_NO_PATHCONV: 1
+  # `prepare` runs `husky ssh-mcp/.husky` on every `npm ci`/`npm install`. Runners have no git
+  # hooks to install into for this checkout style and no interactive commit flow, so skip it.
+  HUSKY: 0
 
 jobs:
   build-test:
@@ -53,6 +56,12 @@ jobs:
 
       - name: npm ci
         run: npm ci
+
+      - name: format check (prettier)
+        run: npm run format:check
+
+      - name: lint (eslint)
+        run: npm run lint
 
       - name: typecheck
         run: npm run typecheck
