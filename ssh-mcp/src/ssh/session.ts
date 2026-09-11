@@ -401,6 +401,17 @@ function lookup(sessionId: string): SessionRecord {
   });
 }
 
+/**
+ * Result of {@link lookupSession}.
+ *
+ * `reason` is optional and only present on `unknown`, so a caller that
+ * switches on `state` alone stays exhaustive.
+ */
+export type SessionLookup =
+  | { state: 'active'; host: string; detected_shell: PosixShell }
+  | { state: 'expired' }
+  | { state: 'unknown'; reason?: 'closed' | 'terminated' };
+
 /** Live sessions, for one alias or in total. */
 export function sessionCount(alias?: string): number {
   if (alias === undefined) return sessions.size;
@@ -937,6 +948,32 @@ export function closeSession(sessionId: string): { session_id: string; host: str
   const record = lookup(sessionId);
   destroySession(record, 'closed');
   return { session_id: record.id, host: record.alias };
+}
+
+/**
+ * What a session id currently means, without running anything.
+ *
+ * The tool layer needs three things before the approval gate: whether the id
+ * is usable at all, which host it belongs to (the approval mode is per host),
+ * and whether a dead id should be reported as `session_expired` or
+ * `session_not_found`. Asking for that must not have side effects, which is
+ * why this exists alongside {@link closeSession}.
+ *
+ * Tombstones fold in as follows: an idle-reaped session is `expired`, and a
+ * session that was closed on request or lost with its channel is `unknown`,
+ * carrying `reason` so the caller can still be specific. An id that was never
+ * issued, or whose tombstone has aged out, is `unknown` with no reason.
+ */
+export function lookupSession(sessionId: string): SessionLookup {
+  const record = sessions.get(sessionId);
+  if (record !== undefined && !record.closed) {
+    return { state: 'active', host: record.alias, detected_shell: record.shell };
+  }
+
+  const tombstone = tombstones.get(sessionId);
+  if (tombstone === undefined) return { state: 'unknown' };
+  if (tombstone.reason === 'expired') return { state: 'expired' };
+  return { state: 'unknown', reason: tombstone.reason };
 }
 
 /** Read-only view of a live session, for `doctor` and tests. */

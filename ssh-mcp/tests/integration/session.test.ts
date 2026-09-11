@@ -19,6 +19,7 @@ import {
   MAX_SESSIONS_PER_HOST,
   closeSession,
   configureSessions,
+  lookupSession,
   openSession,
   resetSessions,
   runInSession,
@@ -425,6 +426,65 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))('lifecycle (AC15)', () => 
   it('reports an unknown session id as not found', async () => {
     await expect(runInSession('sess_deadbeef', 'echo x', budget)).rejects.toMatchObject({
       code: 'session_not_found',
+    });
+  });
+
+  /**
+   * The tool layer reads this before the approval gate, so it has to answer
+   * without side effects and has to distinguish the ways an id can be dead.
+   */
+  describe('lookupSession', () => {
+    it('describes a live session and its host', async () => {
+      const { endpoint, conn, alias } = await connect({ shell: SHELL });
+      const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
+
+      const found = lookupSession(session.session_id);
+      expect(found.state).toBe('active');
+      if (found.state === 'active') {
+        expect(found.host).toBe(alias);
+        expect(found.detected_shell).toBe(session.detected_shell);
+      }
+      // Reading must not consume the session.
+      expect(sessionCount(alias)).toBe(1);
+      expect(lookupSession(session.session_id).state).toBe('active');
+    });
+
+    it('marks an id closed on request as unknown with a reason', async () => {
+      const { endpoint, conn, alias } = await connect({ shell: SHELL });
+      const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
+      closeSession(session.session_id);
+
+      const found = lookupSession(session.session_id);
+      expect(found.state).toBe('unknown');
+      if (found.state === 'unknown') expect(found.reason).toBe('closed');
+    });
+
+    it('marks an idle-reaped id as expired', async () => {
+      configureSessions({ idleMs: 800, reaperIntervalMs: 150, tombstoneMs: 60000 });
+      const { endpoint, conn, alias } = await connect({ shell: SHELL });
+      const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
+
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      expect(lookupSession(session.session_id).state).toBe('expired');
+    });
+
+    it('marks a session whose shell exited as terminated', async () => {
+      const { endpoint, conn, alias } = await connect({ shell: SHELL });
+      const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
+
+      await expect(
+        runInSession(session.session_id, 'exit 0', { ...budget, timeoutMs: 15000 })
+      ).rejects.toMatchObject({ code: 'session_terminated' });
+
+      const found = lookupSession(session.session_id);
+      expect(found.state).toBe('unknown');
+      if (found.state === 'unknown') expect(found.reason).toBe('terminated');
+    });
+
+    it('reports an id that was never issued as unknown with no reason', () => {
+      const found = lookupSession('sess_never_issued');
+      expect(found.state).toBe('unknown');
+      if (found.state === 'unknown') expect(found.reason).toBeUndefined();
     });
   });
 
