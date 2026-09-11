@@ -11,9 +11,9 @@ import { z } from 'zod';
 import { toToolResult } from '../errors.js';
 import type { ToolTextResult } from '../errors.js';
 import { openSession } from '../ssh/session.js';
-import { connectHost, fallbackOf, requireHost, type ToolContext } from './context.js';
+import { connectHost, requireHost, type ToolContext } from './context.js';
 import type { ToolDefinition } from './define.js';
-import type { AuditDraft } from './wrap.js';
+import { applyHostToAudit, type AuditDraft } from './wrap.js';
 
 export const OPEN_SESSION_DESCRIPTION =
   '상태가 유지되는 원격 셸 세션을 열고 `session_id`를 반환한다. ' +
@@ -33,22 +33,20 @@ async function handler(
 ): Promise<ToolTextResult> {
   const args = openSessionArgs.parse(raw);
   const host = requireHost(ctx.loadConfig(), args.host);
-  audit.host = host.alias;
-  audit.approval_mode = host.approvalMode;
-  audit.approval_fallback = fallbackOf(host);
-  audit.audit_mode = host.auditMode;
+  applyHostToAudit(audit, host);
 
   const conn = await connectHost(host);
   const started = Date.now();
   try {
     const session = await openSession(host, conn);
     audit.session_id = session.session_id;
-    return toToolResult({
-      ...session,
-      // A POSIX shell we accepted is exactly the case the built-in patterns
-      // were written for, so nothing about classification is reduced (R23).
-      classification_coverage: 'none',
-    });
+    // No `classification_coverage` field: a POSIX shell we accepted is exactly
+    // what the built-in patterns were written for, so there is no reduction to
+    // report. The field appears only when coverage is actually reduced, which
+    // is the same shape `exec` and `run_in_session` use (R23, CR-7). The
+    // `unsupported_shell` error still carries it, because there the reduction
+    // is the reason for the refusal.
+    return toToolResult({ ...session });
   } finally {
     audit.exec_duration_ms = Date.now() - started;
   }

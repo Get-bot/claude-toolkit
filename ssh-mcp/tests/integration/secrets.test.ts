@@ -110,10 +110,10 @@ describe('AC19: no secret reaches a log, a response or the audit file', () => {
     };
 
     harness = await startMcpTestClient({ elicitation: 'none' });
-    const local = path.join(endpoint.homeDir, 'secrets-local.txt');
+    const local = path.join(endpoint.localSandboxDir, 'secrets-local.txt');
     fs.writeFileSync(local, 'secret-free payload\n', 'utf8');
-    const remote = `${endpoint.homeDir.replace(/\\/g, '/')}/secrets-remote.txt`;
-    const back = path.join(endpoint.homeDir, 'secrets-back.txt');
+    const remote = `${endpoint.remoteHomeDir.replace(/\\/g, '/')}/secrets-remote.txt`;
+    const back = path.join(endpoint.localSandboxDir, 'secrets-back.txt');
 
     record((await harness.callTool('list_hosts')).text);
     record((await harness.callTool('exec', { host: ALIAS, command: 'echo SAFE' })).text);
@@ -203,7 +203,7 @@ describe('AC19: no secret reaches a log, a response or the audit file', () => {
 
     // Replace the authorised key so authentication fails with a real PEM on
     // disk: the failure path is where an error message might quote it.
-    fs.writeFileSync(path.join(endpoint.homeDir, '.ssh', 'authorized_keys'), '', 'utf8');
+    fs.writeFileSync(path.join(endpoint.remoteHomeDir, '.ssh', 'authorized_keys'), '', 'utf8');
     closeAll();
 
     harness = await startMcpTestClient({ elicitation: 'none' });

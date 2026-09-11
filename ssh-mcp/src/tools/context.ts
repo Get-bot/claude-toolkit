@@ -8,8 +8,10 @@
  * including an edit that tightens `approvalMode`.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import type { Client } from 'ssh2';
 
+import { homePath } from '../config/paths.js';
 import type { ApprovalFallback, HostEntry } from '../config/schema.js';
 import { getHost, load, resolveApprovalFallback } from '../config/store.js';
 import type { ConfigLoadResult, ConfigValid } from '../config/store.js';
@@ -110,6 +112,66 @@ export async function connectHost(host: PoolHost): Promise<Client> {
     );
   }
   return getConnection(host, privateKey);
+}
+
+/**
+ * Absolute, symlink-resolved form of a local transfer path.
+ *
+ * `path.resolve` alone is not enough: it collapses `..` lexically, so
+ * `/tmp/link/../hosts.json` can still land somewhere else once `link` is
+ * followed. The directory is resolved with `realpathSync` and the basename is
+ * re-joined, which also keeps the answer correct for a file that does not
+ * exist yet (a `download` target). When the parent does not exist either, the
+ * nearest existing ancestor is resolved and the rest appended.
+ */
+export function realResolve(target: string): string {
+  const absolute = path.resolve(target);
+  const parts: string[] = [];
+  let current = path.dirname(absolute);
+  parts.push(path.basename(absolute));
+
+  for (;;) {
+    try {
+      return path.resolve(fs.realpathSync(current), ...parts.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return absolute;
+      parts.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** True when `candidate` is `root` or sits under it. */
+export function isInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  if (relative === '') return true;
+  return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/**
+ * Check a model-supplied local path before any transfer (finding F1).
+ *
+ * `~/.ssh-mcp` holds the registry, the private keys, the observed state and the
+ * audit log. A `download` that overwrote `hosts.json` could set every host to
+ * `approvalMode: auto` and disarm every later prompt, and an `upload` could
+ * carry a private key off the machine. That is not a decision to put to a
+ * person at an approval prompt — it is the mechanism those prompts depend on,
+ * so it is refused outright. Everything outside that subtree stays the user's
+ * business and goes to the approval gate instead.
+ */
+export function requireLocalPathAllowed(localPath: string, operation: string): string {
+  const resolved = realResolve(localPath);
+  const home = realResolve(homePath());
+  if (isInside(home, resolved)) {
+    throw new CodedError(
+      ERROR_CODES.local_path_forbidden,
+      `ssh-mcp의 설정 디렉터리 안의 경로는 ${operation}할 수 없습니다. ` +
+        '레지스트리·개인키·상태·감사 로그는 도구로 읽거나 덮어쓸 수 없습니다.',
+      { operation, local_path: localPath }
+    );
+  }
+  return resolved;
 }
 
 /**

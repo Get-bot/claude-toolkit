@@ -73,7 +73,10 @@ export function expectedOutcome(
   if (mode === 'deny') return grade === 'safe' ? 'execute' : 'denied';
   if (mode === 'ask-destructive' && grade === 'safe') return 'execute';
   if (hasForm) return 'elicit';
-  if (fallback === 'fail-closed' && grade !== 'safe') return 'approval_unavailable';
+  // No carve-out for `safe` here (security finding F9): under `ask-all` the
+  // operator asked for a human on every call, so letting a safe command take
+  // the token path would quietly turn `ask-all` into `ask-destructive`.
+  if (fallback === 'fail-closed') return 'approval_unavailable';
   return 'confirmation_required';
 }
 
@@ -524,13 +527,19 @@ describe('token branch (AC17.2-AC17.8, AC18)', () => {
     expect(tokenStoreSize()).toBe(sizeBefore);
   });
 
-  it('still uses the token path for a safe command on a fail-closed ask-all host (AC17.7)', async () => {
+  it('refuses even a safe command on a fail-closed ask-all host (F9)', async () => {
+    // AC17.7's own wording sends this case down the token path. Security review
+    // rejected that: `ask-all` means "ask a person every time", and handing the
+    // model a token instead reduces it to `ask-destructive` for safe commands.
+    // The stricter reading is the one implemented.
+    const sizeBefore = tokenStoreSize();
     const result = await harness.callTool('exec', {
       host: 'askall-closed',
       command: COMMANDS.safe,
     });
-    expect(result.isError).toBe(false);
-    expect(result.body.status).toBe('confirmation_required');
+    expect(result.isError).toBe(true);
+    expect(bodyError(result.body)).toBe(ERROR_CODES.approval_unavailable);
+    expect(tokenStoreSize()).toBe(sizeBefore);
   });
 
   it('treats a missing approvalFallback field as fail-closed (AC17.11, D2)', async () => {

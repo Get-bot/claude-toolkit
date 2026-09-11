@@ -139,22 +139,25 @@ describe('descriptions (§5.6b, M2)', () => {
     expect(byName.get('close_session')).toBe(CLOSE_SESSION_DESCRIPTION);
   });
 
-  it('carries the approval rule in both command tools', async () => {
+  it('carries the approval rule in every tool that can be gated', async () => {
     harness = await startMcpTestClient();
     const tools = await harness.listTools();
 
-    for (const name of ['exec', 'run_in_session']) {
+    // `upload` and `download` joined the two command tools when transfers were
+    // put behind the approval gate (security finding F1).
+    for (const name of ['exec', 'run_in_session', 'upload', 'download']) {
       const tool = tools.find((candidate) => candidate.name === name);
       expect(tool?.description).toContain(TOOL_DESCRIPTION_APPROVAL_RULE);
     }
   });
 
-  it('keeps the approval rule out of the five tools that cannot run a command', async () => {
+  it('keeps the approval rule out of the three tools that cannot be gated', async () => {
     harness = await startMcpTestClient();
     const tools = await harness.listTools();
+    const gated = new Set(['exec', 'run_in_session', 'upload', 'download']);
 
     for (const tool of tools) {
-      if (tool.name === 'exec' || tool.name === 'run_in_session') continue;
+      if (gated.has(tool.name)) continue;
       expect(tool.description).not.toContain(TOOL_DESCRIPTION_APPROVAL_RULE);
     }
   });

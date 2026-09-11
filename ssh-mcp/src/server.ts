@@ -20,16 +20,22 @@ import type { ClientCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import { TOOL_NAMES, type ToolName } from './audit.js';
 import { recordClient } from './config/state.js';
 import { load, resolveApprovalFallback } from './config/store.js';
-import { installStdoutGuard, logger } from './log.js';
+import { captureProcessStdout, installStdoutGuard, logger, protocolStdoutStream } from './log.js';
 import {
   ELICITATION_TIMEOUT_MS,
   interpretElicitResult,
   type ElicitOutcome,
   type ElicitRequest,
 } from './safety/approval.js';
+import { stopSweep } from './safety/tokens.js';
 import { closeAll } from './ssh/pool.js';
 import { resetSessions } from './ssh/session.js';
-import { TOOL_ANNOTATIONS, toolMeta } from './tools/annotations.js';
+import {
+  REQUIRE_USER_INTERACTION_ENV,
+  requiresUserInteractionEnabled,
+  TOOL_ANNOTATIONS,
+  toolMeta,
+} from './tools/annotations.js';
 import { closeSessionTool } from './tools/closeSession.js';
 import { createToolContext, type ClientInfo, type ToolContext } from './tools/context.js';
 import type { ToolDefinition } from './tools/define.js';
@@ -90,6 +96,34 @@ function warnAutoApprovalHosts(): void {
   logger.warn('hosts with approvalMode: auto run every command without asking for approval', {
     hosts: aliases,
   });
+}
+
+/**
+ * F10: the two controls the server can actually enforce are both off.
+ *
+ * `requiresUserInteraction` is the one hint Claude Code enforces (it prompts
+ * per call even under always-allow), and `approvalFallback: "fail-closed"` is
+ * the one refusal the server can make on its own. With the opt-out set and a
+ * host on `token`, neither is in force: approval rests entirely on the model
+ * asking the user. That is a legitimate configuration for a non-interactive
+ * run, so it is said out loud once rather than refused.
+ */
+function warnUserInteractionOptOut(): void {
+  if (requiresUserInteractionEnabled()) return;
+  const config = load();
+  if (!config.ok) return;
+  const tokenHosts = Object.entries(config.file.hosts)
+    .filter(([, entry]) => resolveApprovalFallback(entry) === 'token')
+    .map(([alias]) => alias);
+  if (tokenHosts.length === 0) return;
+  logger.warn(
+    `${REQUIRE_USER_INTERACTION_ENV}=0 with approvalFallback: token hosts: ` +
+      'neither the per-call prompt nor a fail-closed refusal is in force',
+    {
+      hosts: tokenHosts,
+      note: 'approval now depends entirely on the model asking the user; use approvalFallback: fail-closed to make the server refuse instead',
+    }
+  );
 }
 
 /**
@@ -202,6 +236,7 @@ export function createServer(options: CreateServerOptions = {}): ServerHandle {
   };
 
   warnAutoApprovalHosts();
+  warnUserInteractionOptOut();
 
   return { mcp, toolNames: registered, clientInfo: () => clientInfo };
 }
@@ -223,7 +258,7 @@ export function assertSevenTools(names: readonly string[]): void {
   }
 }
 
-/** Close pooled connections and sessions on shutdown. */
+/** Close pooled connections and sessions and stop timers on shutdown. */
 function shutdown(): void {
   try {
     resetSessions();
@@ -233,6 +268,10 @@ function shutdown(): void {
     });
   }
   closeAll();
+  // The token sweep interval is unref'd, so it cannot hold the process open,
+  // but leaving it running after the transport closes keeps a timer alive for
+  // no reason (CR-12).
+  stopSweep();
 }
 
 /**
@@ -245,7 +284,15 @@ export async function startServer(): Promise<void> {
   installStdoutGuard();
 
   const handle = createServer();
-  const transport = new StdioServerTransport();
+
+  // Belt and braces on top of the console replacement (F19): capture the real
+  // writer first, hand that writer to the transport, then redirect everything
+  // else that reaches `process.stdout` to stderr. Order matters — the JSON-RPC
+  // frames must keep the original stdout while a stray `process.stdout.write`
+  // from anywhere else cannot corrupt the stream.
+  const protocolStdout = protocolStdoutStream();
+  captureProcessStdout();
+  const transport = new StdioServerTransport(process.stdin, protocolStdout);
 
   const closed = new Promise<void>((resolve) => {
     handle.mcp.server.onclose = (): void => {

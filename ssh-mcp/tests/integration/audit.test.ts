@@ -64,7 +64,7 @@ let keyPath: string;
 let localDir: string;
 
 function remotePath(name: string): string {
-  return `${endpoint.homeDir.replace(/\\/g, '/')}/${name}`;
+  return `${endpoint.remoteHomeDir.replace(/\\/g, '/')}/${name}`;
 }
 
 function readAudit(): Record<string, unknown>[] {
@@ -101,7 +101,7 @@ beforeAll(async () => {
   authorizeKey(endpoint, clientKey.publicKey);
   keyPath = path.join(ensureKeysDir(), 'fixture');
   fs.writeFileSync(keyPath, clientKey.privateKey, { encoding: 'utf8', mode: 0o600 });
-  localDir = fs.mkdtempSync(path.join(endpoint.homeDir, 'local-'));
+  localDir = fs.mkdtempSync(path.join(endpoint.localSandboxDir, 'local-'));
 
   const auto = hostEntryFor(endpoint, { alias: 'auto', privateKeyPath: keyPath });
   const askToken = hostEntryFor(endpoint, {
@@ -402,6 +402,66 @@ describe('two-step approval leaves two lines (§5.10, AC20.4)', () => {
   });
 });
 
+describe('credentials on a command line (F11)', () => {
+  /** A password typed as a flag: the shape the finding names. */
+  const SECRET = 'HUNTER2-SENTINEL-4b1c';
+  const SECRET_COMMAND = `mysql -p${SECRET} -e "DROP DATABASE prod"`;
+
+  it('masks the password in the audit file while the token round trip still works', async () => {
+    await withClient({ elicitation: 'none' }, async (harness) => {
+      const asked = await harness.callTool('exec', {
+        host: 'ask-token',
+        command: SECRET_COMMAND,
+      });
+      expect(asked.body.status).toBe('confirmation_required');
+
+      const done = await harness.callTool('exec', {
+        host: 'ask-token',
+        command: SECRET_COMMAND,
+        confirmation_token: asked.body.confirmation_token as string,
+      });
+      // The binding hashes the real command, so the retry matches even though
+      // what gets written down is masked.
+      expect(done.body.error).not.toBe('confirmation_token_mismatch');
+    });
+
+    const raw = fs.readFileSync(auditFilePath(), 'utf8');
+    expect(raw).not.toContain(SECRET);
+
+    const lines = readAudit();
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(String(line.command)).toContain('mysql');
+      expect(String(line.command)).not.toContain(SECRET);
+      expect(String(line.normalized_command)).not.toContain(SECRET);
+      expect(JSON.stringify(line.segments)).not.toContain(SECRET);
+      // Masking must not cost the grade: this is still a dropped database.
+      expect(line.command_grade).toBe('destructive');
+    }
+    expect(lines[1]?.approval_outcome).toBe('token-approved');
+  });
+
+  it('masks the password in the elicitation prompt', async () => {
+    const seen: string[] = [];
+    await withClient(
+      {
+        elicitation: 'form',
+        onElicit: (request) => {
+          seen.push(request.message);
+          return { action: 'decline' };
+        },
+      },
+      async (harness) => {
+        await harness.callTool('exec', { host: 'ask-token', command: SECRET_COMMAND });
+      }
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('mysql');
+    expect(seen[0]).not.toContain(SECRET);
+  });
+});
+
 describe('all eight approval outcomes (AC20.4)', () => {
   it('observes each of the eight at least once', async () => {
     await withClient({ elicitation: 'none' }, async (harness) => {
@@ -450,7 +510,7 @@ describe('what the file must not contain (AC20.5)', () => {
     // The sentinel lives in a file, so it appears in the output and nowhere in
     // the command: a hit in the audit file could only have come from stdout.
     const sentinel = 'AUDIT-OUTPUT-SENTINEL-8f21c';
-    const payload = path.join(endpoint.homeDir, 'audit-sentinel.txt');
+    const payload = path.join(endpoint.remoteHomeDir, 'audit-sentinel.txt');
     fs.writeFileSync(payload, `${sentinel}\n`, 'utf8');
     const command = `cat ${payload.replace(/\\/g, '/')}`;
 

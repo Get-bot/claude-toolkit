@@ -12,7 +12,9 @@
  * the command and the approval decision on the record.
  */
 import type { ApprovalFallback, ApprovalMode, AuditMode, CommandGrade } from '../config/schema.js';
+import { resolveApprovalFallback } from '../config/store.js';
 import { appendAudit, type ApprovalOutcome, type ToolName } from '../audit.js';
+import type { PoolHost } from '../ssh/pool.js';
 import { ERROR_CODES, isCodedError, toToolError } from '../errors.js';
 import type { ToolTextResult } from '../errors.js';
 import { logger } from '../log.js';
@@ -72,17 +74,38 @@ export function newAuditDraft(): AuditDraft {
   };
 }
 
-/** Copy the gate's verdict onto the record (all six `GateResult` kinds). */
+/**
+ * Copy the host's identity and policy onto the record.
+ *
+ * Every host-bound tool needs the same four fields, and an audit line that
+ * lost `approval_fallback` would no longer say what protection was in force at
+ * the time (§5.10, Architect N11).
+ */
+export function applyHostToAudit(audit: AuditDraft, host: PoolHost): void {
+  audit.host = host.alias;
+  audit.approval_mode = host.approvalMode;
+  audit.approval_fallback = resolveApprovalFallback(host);
+  audit.audit_mode = host.auditMode;
+}
+
+/**
+ * Copy the gate's verdict onto the record (all six `GateResult` kinds).
+ *
+ * The three text fields come from `gate.audit`, not from the classification:
+ * the classifier needs the command verbatim, while what is persisted has
+ * credentials masked out of it (F11).
+ */
 export function applyGateToAudit(audit: AuditDraft, gate: GateResult): void {
   audit.approval_outcome = gate.approvalOutcome;
   audit.approval_wait_ms = gate.approvalWaitMs;
   audit.error_code = gate.errorCode;
   audit.server_cannot_verify_human_approval = gate.approvalOutcome === 'token-approved';
+  audit.command = gate.audit.command;
+  audit.normalized_command = gate.audit.normalizedCommand;
+  audit.segments = gate.audit.segments;
   if (gate.classification !== null) {
     audit.command_grade = gate.classification.grade;
     audit.reasons = gate.classification.reasons;
-    audit.normalized_command = gate.classification.normalized;
-    audit.segments = gate.classification.segments;
   }
 }
 

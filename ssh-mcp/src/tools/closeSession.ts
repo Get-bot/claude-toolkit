@@ -11,9 +11,9 @@ import { z } from 'zod';
 import { ERROR_CODES, isCodedError, toToolResult } from '../errors.js';
 import type { ToolTextResult } from '../errors.js';
 import { closeSession, lookupSession } from '../ssh/session.js';
-import { fallbackOf, type ToolContext } from './context.js';
+import type { ToolContext } from './context.js';
 import type { ToolDefinition } from './define.js';
-import type { AuditDraft } from './wrap.js';
+import { applyHostToAudit, type AuditDraft } from './wrap.js';
 
 export const CLOSE_SESSION_DESCRIPTION =
   '세션을 닫고 원격 셸을 종료한다. 이미 닫힌 세션에 호출해도 오류가 아니다.';
@@ -46,11 +46,7 @@ async function handler(
     const config = ctx.loadConfig();
     if (config.ok) {
       const entry = config.file.hosts[found.host];
-      if (entry !== undefined) {
-        audit.approval_mode = entry.approvalMode;
-        audit.approval_fallback = fallbackOf(entry);
-        audit.audit_mode = entry.auditMode;
-      }
+      if (entry !== undefined) applyHostToAudit(audit, { ...entry, alias: found.host });
     }
   }
 

@@ -49,6 +49,15 @@ export const ERROR_CODES = {
   unsupported_shell: 'unsupported_shell',
   /** `download` target exists and `overwrite` was not set (AC13.2). */
   local_file_exists: 'local_file_exists',
+  /**
+   * A transfer named a local path inside `~/.ssh-mcp` (security finding F1).
+   *
+   * Not in the §5.3 table: added during team-verify. The server's own registry,
+   * keys, state and audit log are the one place a hard block is right rather
+   * than an approval — a `download` over `hosts.json` could set every host to
+   * `approvalMode: auto`, which would disarm every later approval prompt.
+   */
+  local_path_forbidden: 'local_path_forbidden',
   sftp_failed: 'sftp_failed',
   /** `sudo` asked for a password; stdin is always closed so it cannot answer. */
   sudo_password_required: 'sudo_password_required',
