@@ -1,6 +1,6 @@
 {
   "name": "@get-bot/ssh-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that lets Claude run commands, transfer files and hold shell sessions on remote hosts over SSH",
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "mcp",
