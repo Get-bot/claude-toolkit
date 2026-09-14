@@ -18,6 +18,7 @@ import {
   runChecks,
 } from './checks.js';
 import type { CheckRow, CheckStatus, DoctorOptions, PatternRow } from './checks.js';
+import { INSTALL_HINT } from '../config/registration.js';
 import type { ArgvRuleDef } from '../safety/classify.js';
 
 export const EXIT_OK = 0;
@@ -247,6 +248,9 @@ export async function runDoctor(argv: string[], options: DoctorOptions = {}): Pr
   out(summarise(rows));
   out('');
   out(formatSnippets());
+  // Table mode only. The `--json` payload above is a contract for machines and
+  // gets no prose added to it.
+  out(INSTALL_HINT);
   if (failures > 0) {
     out('');
     out(`FAIL ${String(failures)}건 — 위 내용을 고친 뒤 다시 실행하세요.`);

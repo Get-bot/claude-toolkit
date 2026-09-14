@@ -13,5 +13,5 @@ export default defineConfig({
   dts: false,
   sourcemap: false,
   banner: { js: '#!/usr/bin/env node' },
-  external: ['ssh2', '@modelcontextprotocol/sdk', 'zod'],
+  external: ['ssh2', '@modelcontextprotocol/sdk', 'zod', '@inquirer/select', '@inquirer/input'],
 });

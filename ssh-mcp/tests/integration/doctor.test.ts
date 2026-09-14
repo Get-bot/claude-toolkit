@@ -13,6 +13,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { homePath, hostsFilePath, keysDirPath, privateKeyPath } from '../../src/config/paths.js';
+import { INSTALL_HINT } from '../../src/config/registration.js';
 import { CHECK_KINDS, loadPatternRows } from '../../src/doctor/checks.js';
 import { classify } from '../../src/safety/classify.js';
 import { CORE_PATTERN_IDS, PATTERNS, missingCorePatterns } from '../../src/safety/patterns.js';
@@ -179,6 +180,24 @@ describe('a clean machine with no hosts', () => {
     if (process.platform === 'win32') {
       expect(captured).toContain('cmd /c npx -y @get-bot/ssh-mcp');
     }
+  });
+
+  // The hint points at `ssh-mcp install`, which is what most readers of this
+  // table actually want. It belongs to the table, not to `formatSnippets()`:
+  // that function's output is a contract this file pins above, and `--json` is
+  // read by machines that have no use for prose.
+  it('points at the install command from the table but never from --json', async () => {
+    await runDoctor([]);
+    expect(captured).toContain(INSTALL_HINT);
+    expect(captured.indexOf(INSTALL_HINT)).toBeGreaterThan(
+      captured.indexOf('claude mcp add ssh-mcp -- npx -y @get-bot/ssh-mcp')
+    );
+
+    captured = '';
+    await runDoctor(['--json']);
+    expect(captured).not.toContain(INSTALL_HINT);
+    expect(captured).not.toContain('붙여넣기 대신');
+    expect(JSON.stringify(parseJson())).not.toContain('install claude-code');
   });
 });
 

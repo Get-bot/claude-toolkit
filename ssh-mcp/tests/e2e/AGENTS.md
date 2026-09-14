@@ -42,7 +42,7 @@
 ```bash
 npm run build
 npm pack
-SSH_MCP_TGZ=$(pwd)/get-bot-ssh-mcp-0.1.0.tgz npm run test:e2e
+SSH_MCP_TGZ=$(pwd)/get-bot-ssh-mcp-<package.json의 version>.tgz npm run test:e2e
 SSH_MCP_E2E_HOST=myhost npm run test:e2e     # 실제 호스트 레그까지
 ```
 

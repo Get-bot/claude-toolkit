@@ -2,8 +2,10 @@
  * `ssh-mcp` bin entry point (plan row 0.7).
  *
  * Node version guard, then argv routing:
- *   `setup ...`   -> setup CLI      (exit code from `runSetup`)
+ *   `host ...`    -> host group     (`add` = the setup CLI, `list`)
+ *   `setup ...`   -> setup CLI      (silent alias of `host add`; see `host/cli.ts`)
  *   `doctor ...`  -> doctor CLI     (exit code from `runDoctor`)
+ *   `install ...` -> install CLI    (exit code from `runInstall`)
  *   `--version`   -> version to stdout
  *   anything else -> stdio MCP server
  *
@@ -13,7 +15,16 @@
 import { installStdoutGuard } from './log.js';
 import { readPackageVersion } from './version.js';
 
-/** Lower bound from `engines.node` and the spec's tech stack (AC1.1). */
+/**
+ * The floor for the **server**, which is what AC1.1 fixes at Node 20.
+ *
+ * `engines.node` is stricter (`^20.17.0 || ^22.13.0 || >=23.5.0`) because the
+ * interactive questions in `install` and `host add` load `@inquirer`, which
+ * needs 20.17. The two numbers are deliberately different: a Node between 20.0
+ * and 20.16 runs the server and every non-interactive command, and is told what
+ * it is missing only if it asks for a question. So this guard stays at 20 —
+ * raising it here would refuse to start a server that works.
+ */
 export const MIN_NODE_MAJOR = 20;
 
 function nodeMajor(): number {
@@ -37,6 +48,14 @@ export async function run(argv: string[]): Promise<number> {
 
   const command = argv[0];
 
+  if (command === 'host') {
+    const { runHost } = await import('./host/cli.js');
+    return runHost(argv.slice(1));
+  }
+
+  // `setup` predates the `host` group and keeps working with no warning: an
+  // 0.1.0 user upgrades automatically through `npx -y`, so breaking or nagging
+  // here would break a working setup for no benefit.
   if (command === 'setup') {
     const { runSetup } = await import('./setup/cli.js');
     return runSetup(argv.slice(1));
@@ -45,6 +64,11 @@ export async function run(argv: string[]): Promise<number> {
   if (command === 'doctor') {
     const { runDoctor } = await import('./doctor/cli.js');
     return runDoctor(argv.slice(1));
+  }
+
+  if (command === 'install') {
+    const { runInstall } = await import('./install/cli.js');
+    return runInstall(argv.slice(1));
   }
 
   if (command === '--version' || command === '-v' || command === 'version') {

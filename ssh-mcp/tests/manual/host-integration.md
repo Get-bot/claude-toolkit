@@ -34,6 +34,22 @@
 - [ ] 도구 목록에 **정확히 7개**(`list_hosts`, `exec`, `upload`, `download`, `open_session`, `run_in_session`, `close_session`)가 보인다.
 - [ ] (참고용) `command: "npx"` 형태(감싸지 않은 버전)도 한 번 시도해 실제로 실패/성공 여부를 기록한다. README의 `cmd /c` 권고가 실제로 필요한지 재확인하는 목적이다.
 
+### AC4 추가 항목(계획 외) — `install claude-desktop` 자동 경로
+
+> `install`은 계획서 §8.5에 없는 2026-09-14 추가분이라 AC 번호가 없습니다. AC4의 하위 항목으로 함께 확인하세요.
+
+손으로 편집하는 대신 아래 명령으로 등록한다. **패키지 디렉터리 밖**에서 실행한다(`ssh-mcp/` 안에서는 npx가 같은 이름의 로컬 프로젝트를 집는다).
+
+```bash
+npx @get-bot/ssh-mcp install claude-desktop
+```
+
+- [ ] `%APPDATA%\Claude\claude_desktop_config.json`에 `"command": "cmd"`, `"args": ["/c", "npx", "-y", "@get-bot/ssh-mcp"]` 항목이 생긴다.
+- [ ] 기존에 다른 MCP 서버가 등록돼 있었다면 그 항목과 `mcpServers` 밖의 다른 키가 모두 그대로 남아 있다.
+- [ ] 기존 파일이 있었다면 같은 디렉터리에 `claude_desktop_config.json.bak-<YYYYMMDD-HHmmss>` 백업이 생긴다.
+- [ ] 같은 명령을 한 번 더 실행하면 종료 코드 1로 거부하고 파일이 바뀌지 않는다. `--force`를 주면 교체되고 백업이 하나 더 생긴다. 같은 초 안에 `--force`를 두 번 실행해도 첫 백업이 남고 `-1` 접미사가 붙은 백업이 추가된다.
+- [ ] Claude Desktop을 완전히 재시작하면 도구 목록에 **정확히 7개**가 보인다.
+
 ## AC5 — Claude Code 등록
 
 ```bash
@@ -41,6 +57,65 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 ```
 
 - [ ] `/mcp` 명령에서 같은 7개 도구가 보인다.
+- [ ] 감싸지 않은 `claude mcp add ssh-mcp -- npx -y @get-bot/ssh-mcp` 형태도 연결된다(2.1.270 / Windows 11에서 2026-09-14 실측). 사용한 Claude Code 버전과 결과를 기록한다.
+
+### AC5 추가 항목(계획 외) — `install claude-code` 자동 경로
+
+> `install`은 계획서 §8.5에 없는 2026-09-14 추가분이라 AC 번호가 없습니다. AC5의 하위 항목으로 함께 확인하세요.
+
+**패키지 디렉터리 밖**에서 실행한다.
+
+```bash
+npx @get-bot/ssh-mcp install claude-code --dry-run
+npx @get-bot/ssh-mcp install claude-code
+```
+
+- [ ] `--dry-run`이 scope 질문 뒤에 아래 두 줄만 출력하고 아무것도 바꾸지 않는다(Windows 기준, Enter로 local 선택 시).
+
+  ```
+  [dry-run] 아무것도 바꾸지 않았습니다. 실행할 명령:
+    claude mcp add ssh-mcp -s local -- cmd /c npx -y @get-bot/ssh-mcp
+  ```
+
+- [ ] `--scope` 없이 실행하면 "Claude Code 어디에 등록할까요?" 메뉴가 뜨고, `local` 줄에 **현재 디렉터리의 절대 경로**가 보인다. `↑`/`↓`로 커서(`❯`)가 움직이고 화면이 위로 밀리지 않는다. Enter만 누르면 `local`로 진행한다.
+- [ ] 메뉴에서 `2`를 누르면 Enter 없이 즉시 `-s user`로 등록되고, 다른 디렉터리에서 Claude Code를 열어도 7개 도구가 보인다.
+- [ ] 메뉴가 확정되면 메뉴가 지워지고 `선택: ...` 한 줄만 남는다.
+- [ ] **창을 80칸 이하로 좁혀서** 메뉴를 띄우고 키를 여러 번 눌러도 제목이 누적되거나 메뉴가 화면을 타고 내려가지 않는다. 긴 줄은 끝이 `…`로 잘린다. (WSL에서는 `stty cols 60`으로 좁힐 수 있다.)
+- [ ] `--scope user`를 붙이면 질문이 **뜨지 않는다**.
+- [ ] `npx @get-bot/ssh-mcp install claude-code < /dev/null`(비TTY)은 묻지 않고 `local`로 진행하며 "--scope를 지정하지 않아 ..." 한 줄을 남긴다.
+- [ ] 성공 메시지에 scope의 의미가 한 줄 나온다(`local`이면 현재 디렉터리 경로가 포함된다).
+- [ ] `--dry-run` 없이 실행하면 `claude mcp list`에 `ssh-mcp`가 나타나고 `/mcp`에서 7개 도구가 보인다.
+- [ ] 같은 명령을 한 번 더 실행하면 `claude`가 중복 등록을 거부하고 종료 코드 1로 끝난다. `--force`를 주면 remove 후 add가 진행되어 성공한다.
+- [ ] `install claude-desktop --config <임시경로> --home --dry-run`이 종료 코드 2로 끝나고 **파일을 만들지 않는다**(값 자리에 플래그가 오는 경우).
+- [ ] **(Windows 전용)** `install claude-code --home "C:\R&D\ssh-mcp"`를 `claude`가 PATH에 없는 셸에서 실행하면 `cmd` 재시도 없이 수동 명령을 출력하고 종료 코드 1로 끝난다. WSL에는 `cmd` 재시도 경로 자체가 없으므로 여기서만 확인한다.
+
+### 인자 없는 실행 (계획 외 추가)
+
+- [ ] `npx @get-bot/ssh-mcp install`(클라이언트 없이, 터미널)이 "어느 클라이언트에 등록할까요?" 메뉴를 띄우고, 각 줄에 감지 결과가 힌트로 보인다.
+- [ ] `3`(둘 다)을 고르면 Claude Code(scope 질문 포함) → Claude Desktop 순서로 실행되고 마지막에 두 결과 요약 한 줄이 나온다.
+- [ ] `Ctrl+C`로 메뉴를 빠져나가면 아무것도 등록되지 않는다.
+- [ ] `npx @get-bot/ssh-mcp install < /dev/null`(비TTY)은 메뉴 없이 종료 코드 2와 두 가지 명령 안내를 낸다.
+- [ ] `npx @get-bot/ssh-mcp host add`(인자 없이, 터미널)이 호스트 주소 → 사용자명 → 포트 → alias → 승인 모드(메뉴) → 라벨 순서로 묻는다. alias 기본값이 호스트명의 첫 라벨로 제안된다.
+- [ ] 위저드에서 이미 등록된 alias를 입력하면 "이미 있습니다 … `--force`" 안내와 함께 다시 묻고, 조용히 덮어쓰지 않는다.
+- [ ] 위저드가 끝난 뒤 비밀번호 입력·지문 `yes` 확인·승인 폴백 강제 선택이 **예전과 동일하게** 이어진다.
+
+### 명령 이름과 목록 (계획 외 추가)
+
+- [ ] `npx @get-bot/ssh-mcp setup`이 `host add`와 **완전히 같게** 동작한다. 경고나 deprecation 메시지가 나오지 않는다.
+- [ ] `npx @get-bot/ssh-mcp host`(하위 명령 없이)가 `add`/`list` 사용법을 내고 종료 코드 2다.
+- [ ] `npx @get-bot/ssh-mcp host list`가 등록한 호스트를 표로 보여주고, 개인키 경로와 지문 전문이 **보이지 않는다**(지문은 접두 16자).
+- [ ] `host list --json`이 `list_hosts` 도구와 같은 필드 구성을 낸다. 호스트가 하나도 없을 때도 `{"hosts": [], "count": 0}`을 내고, 표 모드에서만 "등록된 호스트가 없습니다" 한 줄이 나온다.
+- [ ] `host list --help`가 사용법을 **stdout**에 내고 종료 코드 0이다(`host list --help > /dev/null`로 화면이 비는지 확인).
+
+### WSL (계획 외 추가)
+
+WSL Ubuntu에서 `script -qc '<명령>' /dev/null`로 pty를 잡아 확인한다.
+
+- [ ] `install` 메뉴가 방향키·숫자로 정상 동작하고 화면이 어그러지지 않는다.
+- [ ] Claude Desktop 줄이 "감지되지 않음(WSL에서는 …)"으로 보이지만 선택은 가능하다.
+- [ ] `install claude-code --dry-run`이 **감싸지 않은** `npx -y @get-bot/ssh-mcp` 형태를 출력한다(`cmd /c` 없음).
+- [ ] scope 힌트와 성공 메시지의 경로가 `/home/...` 형태로 보인다.
+- [ ] `TERM=dumb npx @get-bot/ssh-mcp install`이 메뉴 대신 번호 입력 질문으로 내려간다.
 
 ## AC6 — Windows 11 검증
 
@@ -53,11 +128,13 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 
 ### setup 흐름
 
-- [ ] `npx @get-bot/ssh-mcp setup myhost user@example.com` 실행 시 비밀번호 입력 중 화면에 문자가 보이지 않는다.
+- [ ] `npx @get-bot/ssh-mcp host add nohost user@no-such-host.invalid`가 **비밀번호를 묻지 않고** `connection_failed: 호스트 이름을 찾을 수 없습니다`로 끝나며, `~/.ssh-mcp/keys`에 아무 파일도 생기지 않는다.
+- [ ] 위저드에서 없는 주소를 입력하면 사유가 보이고 **호스트 주소와 포트를 다시** 묻는다. 3회 연속 실패하면 중단된다.
+- [ ] `npx @get-bot/ssh-mcp host add myhost user@example.com` 실행 시 `연결 확인 중: … / 연결 확인: OK` 뒤에 비밀번호를 묻고, 입력 중 화면에 문자가 보이지 않는다.
 - [ ] 호스트 키 지문이 표시되고 `yes` 확인을 요구한다.
 - [ ] 지문 확인 후 **승인 폴백 선택 프롬프트**가 뜬다. Enter만 누르면 다시 묻는다. 3회 연속 빈 입력 시 중단되고 `~/.ssh-mcp/hosts.json`이 생성되지 않는다.
 - [ ] `--approval-fallback fail-closed`와 함께(그리고 기존 alias라면 `--force`도 함께) 다시 실행하면 승인 폴백 프롬프트 없이 진행된다. `hosts.json`에 값이 그대로 들어간다.
-- [ ] `ssh-mcp setup other user@example.com < /dev/null`(TTY 아님, 플래그 없음)이 오류로 종료하고 키 파일·`hosts.json` 어느 것도 남기지 않는다.
+- [ ] `ssh-mcp host add other user@example.com < /dev/null`(TTY 아님, 플래그 없음)이 오류로 종료하고 키 파일·`hosts.json` 어느 것도 남기지 않는다.
 - [ ] 기존 alias에 `--force` 없이 setup을 실행하면 `alias_exists`로 중단된다. `--force`를 주면 옛 지문과 새 지문이 나란히 표시되고 `yes` 타이핑을 요구한다.
 - [ ] 원격에서 `grep -c "ssh-mcp:myhost" ~/.ssh/authorized_keys` → **1**. setup을 한 번 더 실행해도 여전히 **1**(멱등).
 - [ ] 원격에서 `ls -l ~/.ssh` → `authorized_keys`가 `-rw-------`.
@@ -79,6 +156,7 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 구체적 절차:
 
 - [ ] **Claude Code에서** "myhost에서 `rm -rf /tmp/sshmcp-test` 실행"을 시킬 때 **elicitation 확인 창**이 뜬다. 거절하면 실행되지 않는다.
+- [ ] 확인 창의 메시지 마지막 줄에 "스페이스로 체크(☑)한 뒤 Accept" 안내가 있고, 체크박스 제목이 `이 명령을 실행합니다 (스페이스로 체크한 뒤 Accept)`다. 체크하지 않고 Accept를 누르면 "This field is required"로 제출이 막히고(실행되지 않음), 체크한 뒤 Accept를 누르면 실행된다. (2026-09-14 Claude Code 2.1.270 실측 — 안내 문구가 없을 때 사용자가 "승인이 안 된다"고 오해한 사례가 있었다.)
 - [ ] `/permissions`에서 `exec`를 always-allow로 설정한 뒤에도 같은 명령에 여전히 확인 창이 뜬다(`_meta`의 `requiresUserInteraction` 검증 — always-allow 무력화 확인).
 - [ ] **Claude Desktop에서** 같은 명령을 시킬 때 `confirmation_required` 응답이 오고 모델이 사용자에게 승인을 요청한다. Desktop의 도구 승인 대화상자에 명령 전문이 보인다.
 - [ ] **elicitation 창은 Desktop에서 뜨지 않는 것이 정상 동작이다.** (Desktop은 elicitation을 지원하지 않으므로 — 이것이 FAIL이 아니라 기대된 결과임을 리뷰어가 인지하고 있어야 한다)
@@ -114,6 +192,8 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 | ------------- | --------------- | ------------------------- | ------ | ---- |
 | AC3           |                 |                           |        |      |
 | AC4           |                 |                           |        |      |
+| AC4 추가 항목 |                 |                           |        |      |
 | AC5           |                 |                           |        |      |
+| AC5 추가 항목 |                 |                           |        |      |
 | AC6           |                 |                           |        |      |
 | 실호스트 확인 |                 |                           |        |      |

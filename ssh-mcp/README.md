@@ -9,7 +9,9 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 ## 목차
 
 - [설치](#설치)
-- [setup — 호스트 등록](#setup--호스트-등록)
+- [host add — 호스트 등록](#host-add--호스트-등록)
+- [host list — 등록된 호스트 보기](#host-list--등록된-호스트-보기)
+- [install — 클라이언트 등록](#install--클라이언트-등록)
 - [도구 7개 레퍼런스](#도구-7개-레퍼런스)
 - [승인 모드](#승인-모드)
 - [hosts.json 스키마](#hostsjson-스키마)
@@ -30,19 +32,33 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 
 ## 설치
 
-npx로 별도 설치 없이 바로 실행할 수 있습니다.
+**Node.js 20.17 이상**이 필요합니다(또는 22.13 이상, 23.5 이상). 서버 자체는 Node 20이면 돌지만 `install`·`host add`의 대화형 질문이 그 버전을 요구합니다.
+
+별도 설치 없이 npx로 바로 씁니다. 세 명령이면 끝납니다.
 
 ```bash
-npx -y @get-bot/ssh-mcp
+# 1. Claude에 등록한다. 어느 클라이언트에, 어느 범위에 등록할지 물어본다.
+npx @get-bot/ssh-mcp install
+
+# 2. 원격 호스트를 등록한다. 주소·사용자명·포트·alias·승인 모드를 하나씩 물어보고,
+#    그다음 비밀번호를 한 번 입력받아 키를 심는다. 터미널 필수.
+npx @get-bot/ssh-mcp host add
+
+# 3. 점검한다
+npx @get-bot/ssh-mcp doctor
 ```
 
-Windows에서 Claude Desktop처럼 `npx`를 직접 `command`로 지정하는 호스트에 등록할 때는 `cmd /c` 로 감싸야 합니다(이유는 [Windows](#windows) 절 참고).
+인자를 주면 **그 항목은** 묻지 않습니다. 다만 `host add`의 비밀번호 입력, 호스트 키 지문 `yes` 확인, 승인 폴백 선택은 어떤 인자를 줘도 항상 터미널에서 진행합니다. 스크립트나 문서에서는 이렇게 씁니다.
 
-```bat
-cmd /c npx -y @get-bot/ssh-mcp
+```bash
+npx @get-bot/ssh-mcp install claude-code --scope user
+npx @get-bot/ssh-mcp install claude-desktop
+npx @get-bot/ssh-mcp host add myhost deploy@web01.example.com
 ```
 
-인자 없이 실행하면 stdio MCP 서버로 기동합니다. 호스트를 하나도 등록하지 않은 상태에서도 서버는 정상 기동하며, `list_hosts`가 빈 목록을 반환할 뿐입니다.
+`install`은 운영체제와 클라이언트에 맞는 등록 형태를 알아서 고릅니다(Windows에서 필요한 `cmd /c` 감싸기 포함). 자세한 옵션은 [install — 클라이언트 등록](#install--클라이언트-등록), 손으로 등록하는 방법은 [Claude Desktop / Claude Code 연결](#claude-desktop--claude-code-연결)을 보세요. 등록 후 Claude Code에서는 `/mcp`에, Claude Desktop에서는 재시작 후 도구 목록에 도구 7개가 보여야 합니다.
+
+**`npx -y @get-bot/ssh-mcp`를 인자 없이 실행하면 stdio MCP 서버로 기동합니다.** 이것은 Claude가 내부적으로 띄우는 명령이라, 터미널에서 직접 치면 `ssh-mcp server ready` 로그 한 줄을 남기고 클라이언트의 요청을 기다리며 조용히 멈춘 것처럼 보입니다. 정상이며 Ctrl+C로 빠져나오면 됩니다. 호스트를 하나도 등록하지 않은 상태에서도 서버는 정상 기동하며, `list_hosts`가 빈 목록을 반환할 뿐입니다.
 
 ### 개발
 
@@ -61,20 +77,45 @@ npm test
 
 커밋 시 husky + lint-staged로 구성된 pre-commit 훅이 staged 파일을 자동으로 포맷합니다. `ssh-mcp/`가 저장소 루트가 아니라 하위 디렉터리이므로 `prepare` 스크립트는 husky의 서브디렉터리 설치 형태(`cd .. && husky ssh-mcp/.husky`)를 씁니다 — 훅 자체는 저장소 루트의 `.git`에 등록되지만 훅 스크립트는 `ssh-mcp/.husky`에 둡니다. CI나 그 밖의 비대화형 자동화 환경에서는 `npm ci`/`npm install`이 이 훅 설치를 시도하지 않도록 `HUSKY=0` 환경변수를 설정하세요 — `.github/workflows/ssh-mcp-ci.yml`의 모든 잡에 이미 적용되어 있습니다.
 
-## setup — 호스트 등록
+## host add — 호스트 등록
+
+호스트 관련 명령은 `ssh-mcp host` 그룹 아래에 있습니다. 하위 명령 없이 `ssh-mcp host`만 실행하면 `add`와 `list`를 안내하는 사용법을 stderr에 출력하고 종료 코드 2로 끝냅니다. 반면 `ssh-mcp host --help`는 요청한 출력이므로 같은 사용법을 **stdout**에 내고 종료 코드 0입니다(`host list --help`, `doctor`와 같은 관례).
+
+**`ssh-mcp setup`은 이 명령의 별칭입니다.** 0.1.0에서 쓰던 그 명령이 그대로 동작하며 경고도 나오지 않습니다. 새 이름은 무엇을 설정하는지 이름에 드러내기 위한 것입니다.
 
 ```bash
-npx @get-bot/ssh-mcp setup <alias> <user@host[:port]> \
+npx @get-bot/ssh-mcp host add                       # 하나씩 물어봅니다
+npx @get-bot/ssh-mcp host add <alias> <user@host[:port]> \
   [--approval-fallback token|fail-closed] \
   [--approval-mode auto|ask-destructive|ask-all|deny] \
   [--label "사람이 읽을 이름"] \
   [--force]
 ```
 
+### 위저드 — 인자 없이 실행하기
+
+인자 없이 터미널에서 실행하면 필요한 값을 하나씩 물어봅니다. 순서와 기본값은 이렇습니다.
+
+| 질문        | 기본값(Enter)                        | 검증                                                                                                                     |
+| ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| 호스트 주소 | 없음(필수)                           | 비어 있거나, 공백·제어 문자가 있거나, 호스트명/IP 형식이 아니면 재질문                                                   |
+| 사용자명    | 없음(필수)                           | 비어 있거나, 공백·콜론·제어 문자가 있거나, 64자를 넘으면 재질문                                                          |
+| SSH 포트    | `22`                                 | 1~65535 정수가 아니면 재질문                                                                                             |
+| (연결 확인) | —                                    | 위 주소로 TCP 연결을 시도합니다. 실패하면 사유를 보여주고 **호스트 주소와 포트를 다시** 묻습니다. 3회 연속 실패하면 중단 |
+| alias       | 호스트명의 첫 라벨(IP·중복이면 없음) | alias 형식 위반이나 **이미 등록된 이름**이면 재질문(`--force`를 줬다면 허용)                                             |
+| 승인 모드   | `ask-destructive`                    | 방향키로 고르는 목록. 각 모드에 한 줄 설명이 붙습니다                                                                    |
+| 라벨        | 없음(Enter로 생략)                   | 제어 문자가 있거나 128자를 넘으면 재질문                                                                                 |
+
+이미 등록된 alias는 **조용히 덮어쓰지 않고** 다시 묻습니다. 호스트 키 지문을 다시 고정하는 것은 `--force`를 직접 붙여야 하는 동작이기 때문입니다. 반대로 `ssh-mcp host add --force`처럼 **`--force`를 이미 준 채로** 위저드에 들어왔다면 그 alias를 받아들이고, 다시 고정한다는 사실을 한 줄로 알립니다.
+
+사용자명과 라벨의 길이 상한은 `hosts.json` 스키마와 같은 값입니다. 위저드에서 먼저 걸러야 하는 이유는, 저장 단계에서야 걸리면 비밀번호·키 생성·원격 `authorized_keys` 설치까지 모두 끝난 뒤이고 **원격에 심은 공개키가 남기** 때문입니다.
+
+질문이 끝나면 **이후 흐름은 인자를 직접 준 것과 완전히 같습니다.** 위저드는 답을 명령행 인자로 바꿔 넣을 뿐이며, 비밀번호 입력·지문 `yes` 확인·승인 폴백 강제 선택은 그대로입니다. `--approval-mode`나 `--label`을 미리 주면 그 질문만 건너뜁니다. 인자를 하나라도 주면(예: alias만) 위저드는 뜨지 않고 지금까지처럼 사용법 오류가 납니다.
+
 Windows에서는 `cmd /c` 로 감쌉니다.
 
 ```bat
-cmd /c npx @get-bot/ssh-mcp setup myhost deploy@web01.example.com
+cmd /c npx @get-bot/ssh-mcp host add myhost deploy@web01.example.com
 ```
 
 **`setup`은 언제나 TTY를 요구합니다.** 비밀번호를 화면에 보이지 않게 입력받는 단계가 있기 때문이며, 아래 어떤 플래그를 줘도 이 요구는 면제되지 않습니다. `stdin`이 TTY가 아니면 비밀번호 단계에서 즉시 실패하고 `hosts.json`·키 파일 어느 것도 남기지 않습니다. 즉, `setup`을 CI나 스크립트에서 비대화형으로 완주시킬 방법은 없습니다 — 이것은 의도된 제약입니다.
@@ -82,15 +123,16 @@ cmd /c npx @get-bot/ssh-mcp setup myhost deploy@web01.example.com
 진행 순서:
 
 1. alias(`/^[a-z0-9][a-z0-9._-]{0,63}$/i` 형식)와 `user@host[:port]`를 파싱합니다.
-2. 터미널에서 비밀번호를 화면에 표시하지 않고 입력받습니다. 사용 직후 메모리에서 지웁니다.
-3. ed25519 키 쌍을 생성합니다(패스프레이즈 없음). 개인키는 `0600`, 공개키는 `0644`로 저장합니다.
-4. 비밀번호로 1차 접속해 호스트 키 지문을 계산하고 화면에 표시한 뒤 `yes` 입력을 요구합니다. 거절하면 아무것도 쓰지 않고 종료합니다.
-5. 원격 `~/.ssh/authorized_keys`에 공개키를 등록합니다(멱등 — 같은 alias로 다시 실행해도 중복 추가되지 않습니다).
-6. 비밀번호 없이 새 개인키만으로 재접속을 검증합니다. **이 검증에 성공했을 때만** 다음 단계로 진행합니다.
-7. **승인 폴백을 강제로 묻습니다.** 아래 참고.
-8. (Windows만) `icacls`로 키 디렉터리를 하드닝합니다. 소유자 계정과 `NT AUTHORITY\SYSTEM`을 제외한 **모든 principal을 제거**합니다 — 프로필 아래 새로 만든 디렉터리에 흔히 딸려오는 `BUILTIN\Administrators` 항목도 예외 없이 제거 대상입니다. 하드닝 후 ACL을 다시 읽어 두 principal만 남았는지 확인하며, 조금이라도 남아 있으면 생성한 키를 삭제하고 `hosts.json`에 아무것도 기록하지 않은 채 중단합니다.
-9. 여기까지 전부 통과했을 때만 `hosts.json`에 항목을 원자적으로 기록합니다.
-10. 성공하면 Claude Desktop/Claude Code 등록 스니펫을 stderr에 출력합니다.
+2. **주소에 닿는지 먼저 확인합니다.** 해당 host:port로 TCP 연결을 시도합니다(5초). 실패하면 `connection_failed`와 사람이 읽을 사유("호스트 이름을 찾을 수 없습니다", "포트가 닫혀 있습니다", "응답이 없습니다")를 출력하고 **비밀번호를 묻지도, 키를 만들지도 않은 채** 종료합니다. 이 단계는 TCP 핸드셰이크까지만 하며 호스트 키 지문 확인과 비밀번호 전송은 아래 순서 그대로입니다.
+3. 터미널에서 비밀번호를 화면에 표시하지 않고 입력받습니다. 사용 직후 메모리에서 지웁니다.
+4. ed25519 키 쌍을 생성합니다(패스프레이즈 없음). 개인키는 `0600`, 공개키는 `0644`로 저장합니다.
+5. 비밀번호로 1차 접속해 호스트 키 지문을 계산하고 화면에 표시한 뒤 `yes` 입력을 요구합니다. 거절하면 아무것도 쓰지 않고 종료합니다.
+6. 원격 `~/.ssh/authorized_keys`에 공개키를 등록합니다(멱등 — 같은 alias로 다시 실행해도 중복 추가되지 않습니다).
+7. 비밀번호 없이 새 개인키만으로 재접속을 검증합니다. **이 검증에 성공했을 때만** 다음 단계로 진행합니다.
+8. **승인 폴백을 강제로 묻습니다.** 아래 참고.
+9. (Windows만) `icacls`로 키 디렉터리를 하드닝합니다. 소유자 계정과 `NT AUTHORITY\SYSTEM`을 제외한 **모든 principal을 제거**합니다 — 프로필 아래 새로 만든 디렉터리에 흔히 딸려오는 `BUILTIN\Administrators` 항목도 예외 없이 제거 대상입니다. 하드닝 후 ACL을 다시 읽어 두 principal만 남았는지 확인하며, 조금이라도 남아 있으면 생성한 키를 삭제하고 `hosts.json`에 아무것도 기록하지 않은 채 중단합니다.
+10. 여기까지 전부 통과했을 때만 `hosts.json`에 항목을 원자적으로 기록합니다.
+11. 성공하면 Claude Desktop/Claude Code 등록 스니펫과 [`install`](#install--클라이언트-등록) 자동 등록 안내 한 줄을 stderr에 출력합니다.
 
 ### 승인 폴백 — 강제 선택이며 기본값이 없습니다
 
@@ -98,7 +140,7 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
 
 이 트레이드오프 때문에 `approvalFallback`에는 조용한 기본값을 두지 않기로 결정했습니다.
 
-- `setup`은 6단계(키 전용 재접속 검증) 성공 직후, 위 트레이드오프를 설명하는 고정 문안을 출력하고 `token` 또는 `fail-closed` 중 하나를 **직접 선택**하게 합니다. 미리 골라둔 기본값이 없고, 빈 입력(Enter만)은 다시 묻습니다. 3회 연속 빈 입력이면 `setup` 자체가 중단되고 `hosts.json`은 생성되지 않습니다.
+- `host add`는 7단계(키 전용 재접속 검증) 성공 직후, 위 트레이드오프를 설명하는 고정 문안을 출력하고 `token` 또는 `fail-closed` 중 하나를 **직접 선택**하게 합니다. 미리 골라둔 기본값이 없고, 빈 입력(Enter만)은 다시 묻습니다. 3회 연속 빈 입력이면 명령 자체가 중단되고 `hosts.json`은 생성되지 않습니다.
 - `--approval-fallback token|fail-closed` 플래그는 **이 프롬프트만** 건너뜁니다. 비밀번호 입력 단계의 TTY 요구는 그대로입니다.
 - 손으로 `hosts.json`을 편집해 이 필드를 지우면 서버는 **`fail-closed`로 간주**합니다. 어디에도 조용한 fail-open 경로는 없습니다. 이때 서버 기동 로그(stderr)에 경고가 1회 출력됩니다.
 - `token`을 고른 호스트에는 아래 [보안 모델](#보안-모델)의 완화책이 전부 적용됩니다.
@@ -117,6 +159,151 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
 
 - `--approval-mode <auto|ask-destructive|ask-all|deny>`: 호스트의 초기 승인 모드를 지정합니다. 생략 시 기본값은 `ask-destructive`입니다.
 - `--label "<텍스트>"`: `list_hosts` 응답과 사람이 읽는 안내에 쓰이는 표시 이름입니다. 생략 가능합니다.
+
+## host list — 등록된 호스트 보기
+
+```bash
+npx @get-bot/ssh-mcp host list
+npx @get-bot/ssh-mcp host list --json
+```
+
+`hosts.json`을 읽어 alias, 접속 대상, 승인 모드, 승인 폴백, 호스트 키 지문 **접두 16자**, 라벨을 표로 출력합니다. 출력은 stdout이라 파이프하고 grep할 수 있습니다.
+
+**개인키 경로와 지문 전문은 출력하지 않습니다.** [`list_hosts` 도구](#도구-7개-레퍼런스)와 같은 기준이며, 사람과 모델이 서로 다른 그림을 보지 않게 하려는 것입니다. 승인 폴백이 파일에 없어 `fail-closed`로 정규화된 항목은 `fail-closed(누락)`으로 표시합니다.
+
+`--json`은 `list_hosts` 도구 응답과 같은 필드 구성(`{ hosts: [...], count }`)을 stdout에 출력합니다. 등록된 호스트가 없어도 마찬가지로 `{"hosts": [], "count": 0}`을 내므로 스크립트에서 분기 없이 파싱할 수 있습니다.
+
+표 모드에서만 빈 레지스트리를 `등록된 호스트가 없습니다. ssh-mcp host add로 추가하세요.` 한 줄로 안내합니다. 두 경우 모두 종료 코드 0이며, `hosts.json`이 깨져 있으면 `config_invalid` 사유를 stderr에 내고 종료 코드 1입니다(그때 stdout에는 아무것도 쓰지 않습니다).
+
+`host list --help`는 사용법을 stdout에 출력하고 종료 코드 0입니다(`doctor`와 같은 관례 — 요청한 출력은 오류가 아닙니다). 모르는 옵션은 stderr에 사용법과 함께 종료 코드 2입니다.
+
+## install — 클라이언트 등록
+
+이 서버를 MCP 호스트에 등록해 주는 명령입니다. `doctor`가 출력하는 스니펫을 손으로 붙여넣어도 결과는 같지만, 그러려면 SSH와 아무 상관 없는 플랫폼 세부(Windows에서는 `cmd /c`로 감싸야 한다는 것, 두 클라이언트가 등록 정보를 서로 다른 곳에 서로 다른 형식으로 둔다는 것)를 알아야 합니다. `install`은 그 부분을 대신합니다.
+
+```bash
+npx @get-bot/ssh-mcp install                  # 목록에서 고릅니다
+npx @get-bot/ssh-mcp install claude-code
+npx @get-bot/ssh-mcp install claude-desktop
+```
+
+### 클라이언트 선택
+
+클라이언트를 생략하고 터미널에서 실행하면 목록이 나옵니다.
+
+```
+? 어느 클라이언트에 등록할까요?
+❯ Claude Code
+  Claude Desktop
+  둘 다
+
+claude 감지됨: ~/.local/bin/claude
+↑↓ 이동 • ⏎ 선택
+```
+
+- **조작.** `↑`/`↓`로 이동하고 `Enter`로 확정합니다. 항목 이름을 입력해 좁힐 수도 있습니다(그래서 `j`/`k` 이동은 켜지 않았습니다 — 라이브러리에서 이 둘은 함께 쓸 수 없습니다). 강조된 항목의 설명이 목록 아래에 한 줄로 보입니다. `Ctrl+C`는 아무것도 등록하지 않고 끝냅니다.
+- **감지는 힌트일 뿐입니다.** `claude`를 `PATH`에서 찾고 Claude Desktop 설정 폴더가 있는지만 봅니다(프로세스는 띄우지 않습니다). 감지되지 않아도 선택할 수 있습니다 — 지금 막 설치했을 수도 있으니까요.
+- **"둘 다"** 는 Claude Code(scope 질문 포함) → Claude Desktop 순서로 실행하고 마지막에 두 결과를 요약합니다. 하나라도 실패하면 종료 코드 1입니다.
+- **터미널이 아니면 묻지 않습니다.** 파이프나 CI에서 클라이언트 없이 실행하면 추측하지 않고 사용법 오류(종료 코드 2)로 끝내며 두 가지 명령을 안내합니다. 클라이언트 전용 플래그(`--scope`, `--config`)만 주고 클라이언트를 빼도 같은 오류입니다.
+
+| 옵션                             | 설명                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--name <name>`                  | 등록할 MCP 서버 이름. 기본 `ssh-mcp`. 영숫자로 시작하고 영숫자·`.`·`_`·`-`만 쓸 수 있습니다(최대 64자)           |
+| `--scope <local\|user\|project>` | `claude-code` 전용. 생략하면 터미널에서 묻습니다([scope 선택](#scope-선택)). `claude-desktop`에 주면 사용법 오류 |
+| `--home <path>`                  | `SSH_MCP_HOME` 환경변수를 함께 등록합니다                                                                        |
+| `--config <path>`                | `claude-desktop` 전용. 설정 파일 경로를 재지정합니다                                                             |
+| `--force`                        | 같은 이름이 이미 등록돼 있으면 교체합니다                                                                        |
+| `--dry-run`                      | 아무것도 바꾸지 않고 수행할 내용만 출력합니다                                                                    |
+| `-h`, `--help`                   | 도움말                                                                                                           |
+
+종료 코드는 `setup`과 같습니다 — `0` 성공, `1` 실패, `2` 사용법 오류. 모든 출력은 stderr로 나갑니다(`doctor`가 stdout을 쓰는 것과 대비됩니다).
+
+`--home`과 `--config`의 값은 절대 경로로 변환해 등록합니다. 서버는 MCP 호스트가 정한 작업 디렉터리에서 실행되므로 상대 경로는 사용자가 의도한 곳을 가리키지 않습니다. 값을 받는 플래그(`--name`, `--scope`, `--home`, `--config`) 뒤에 `-`로 시작하는 토큰이 오면 값으로 삼키지 않고 사용법 오류로 끝냅니다 — 그러지 않으면 `--home --dry-run`이 `--dry-run`을 값으로 먹고 실제로 파일을 쓰게 됩니다.
+
+### 등록되는 명령 형태
+
+| 플랫폼  | 등록되는 명령                    |
+| ------- | -------------------------------- |
+| Windows | `cmd /c npx -y @get-bot/ssh-mcp` |
+| 그 외   | `npx -y @get-bot/ssh-mcp`        |
+
+Windows에서는 **두 클라이언트 모두** `cmd /c`로 감쌉니다. Claude Code 2.1.270은 감싸지 않은 `npx`로도 연결되지만(실측), 구버전 Claude Code와 Claude Desktop은 감싸야 하며, 자동 경로에서 클라이언트마다 다른 형태를 쓰는 것보다 하나로 통일하는 편이 지원하기 쉽습니다. 이유 자체는 [Windows](#windows) 절에 있습니다.
+
+### `install claude-code`
+
+`claude mcp add <name> -s <scope> [-e SSH_MCP_HOME=<path>] -- <명령>`을 대신 실행합니다. Claude Code의 레지스트리 파일 형식은 공개된 계약이 아니므로 직접 편집하지 않고 CLI에 위임합니다.
+
+- `--force`를 주면 먼저 `claude mcp remove -s <scope> <name>`을 실행합니다. 등록된 적이 없어 실패하는 것은 정상이므로 무시하고 add로 넘어갑니다.
+- `claude`를 PATH에서 찾지 못하면 Windows에서는 `cmd /c claude ...`로 한 번 더 시도합니다(npm으로 설치한 구버전의 `claude`는 배치 파일입니다). 그래도 못 찾으면 **직접 붙여넣을 수 있는 명령 한 줄**을 출력하고 종료 코드 1로 끝냅니다.
+- 다만 인자에 `&`, `|`, `<`, `>`, `^`, `%`, `!`, `"` 중 하나가 있으면 `cmd` 경유 재시도를 **하지 않습니다**. `cmd.exe`가 그 문자를 해석해 의도하지 않은 명령이 실행될 수 있기 때문입니다(예: `--home "C:\R&D\ssh-mcp"`). 이때도 수동 명령을 출력하고 종료 코드 1입니다. 공백은 안전하므로 허용합니다.
+- 이 판정은 `--force`의 remove까지 포함해 **한 번에** 내립니다. remove만 실행되고 add가 거부되면 기존 등록이 지워진 채 아무것도 복구되지 않기 때문에, 거부할 상황이면 remove도 실행하지 않습니다.
+- `claude`의 출력은 그대로 중계하며, 비영 종료 코드는 그대로 실패로 취급합니다. `--force`의 remove가 "등록된 적 없음"으로 실패하는 것은 정상이므로 그 출력은 중계하지 않고 건너뛰었다는 한 줄만 남깁니다.
+
+성공하면 `claude mcp list` 또는 Claude Code 안의 `/mcp`로 확인하세요.
+
+### scope 선택
+
+Claude Code는 등록을 세 가지 범위 중 하나에 저장합니다. **기본값인 `local`은 명령을 실행한 그 디렉터리에만 적용됩니다.** 홈 디렉터리에서 설치 명령을 치면 홈 디렉터리 전용으로 등록되고, 정작 일하는 프로젝트에서 Claude Code를 열면 도구가 보이지 않습니다. 그래서 `--scope`를 생략하면 터미널에서 한 번 묻습니다.
+
+```
+? Claude Code 어디에 등록할까요?
+❯ 이 프로젝트만 (local)
+  모든 프로젝트 (user)
+
+/home/me/project 에서 연 Claude Code에만 보입니다. Claude Code의 기본값입니다.
+↑↓ 이동 • ⏎ 선택
+```
+
+목록은 [`@inquirer/select`](https://www.npmjs.com/package/@inquirer/select)가 그립니다. 좁은 창에서의 줄 바꿈과 콘솔별 차이는 그쪽이 처리합니다.
+
+조작은 클라이언트 목록과 같습니다. `local`이 미리 선택돼 있으므로 Enter만 누르면 `local`입니다. 저장소로 공유하려면 `--scope project`를 직접 지정하세요. `Ctrl+C`로 빠져나가면 **아무것도 등록하지 않고** 종료 코드 1로 끝냅니다.
+
+질문은 **stdin과 stderr가 모두 터미널이고 `TERM`이 `dumb`가 아닐 때만** 뜹니다. 목록은 stderr에 그리고 키는 stdin에서 읽으므로 둘 중 하나만 리다이렉트돼도 물어볼 수 없습니다. 그런 실행에서는 묻지 않고 위에 적은 비대화형 규칙을 따릅니다 — 더 단순한 형태로 대신 묻지 않습니다. `TERM` 판정은 앞뒤 공백과 대소문자를 무시하고, **빈 값도 `dumb`으로 봅니다.** 반대로 `TERM` 자체가 설정돼 있지 않은 것은 정상으로 취급합니다 — Windows 콘솔이 그렇고, 그것을 거부하면 Windows에서는 질문이 아예 뜨지 않습니다.
+
+터미널인데도 질문 자체를 띄우지 못하는 경우가 하나 있습니다. Node가 20.17보다 낮으면 목록을 그리는 `@inquirer`를 불러오지 못합니다. 이때는 기본값으로 넘어가지 않고 **아무것도 등록하지 않은 채 종료 코드 1**로 끝내며, Node를 올리거나 `--scope`를 직접 지정하라고 안내합니다. 물어볼 수 없다는 이유로 등록 범위를 대신 정해 버리면, 사용자가 의도하지 않은 디렉터리에만 등록된 사실을 나중에야 알게 되기 때문입니다.
+
+### WSL
+
+WSL 안에서는 `process.platform`이 `linux`이므로 **감싸지 않은 `npx -y @get-bot/ssh-mcp`** 형태로 등록하고, `claude`도 리눅스 바이너리를 찾습니다. Windows 네이티브에서 실행할 때와 동작이 갈리는 곳은 한 군데뿐입니다.
+
+Claude Desktop은 Windows 앱이라 WSL 쪽에는 설정 폴더가 없습니다. 그래서 클라이언트 목록에서 "감지되지 않음(WSL에서는 Windows의 Claude Desktop 설정에 접근하지 않습니다)"으로 표시되지만 **선택 자체는 막지 않습니다.** `--config /mnt/c/Users/<이름>/AppData/Roaming/Claude/claude_desktop_config.json`처럼 경로를 직접 주면 WSL에서도 Windows 쪽 Desktop 설정을 편집할 수 있습니다. 그렇게 등록한 항목은 Windows의 Claude Desktop이 실행하므로 명령 형태를 `cmd /c ...`로 직접 맞춰야 한다는 점에 주의하세요 — 이 경우는 자동 판단이 맞지 않는 유일한 조합입니다.
+
+- `--scope`를 지정하면 묻지 않습니다. 문서의 한 줄 명령과 스크립트는 그대로 비대화형으로 동작합니다.
+- 파이프나 CI처럼 질문을 그릴 수 없는 환경이면 묻지 않고 `local`로 진행하되, 그 사실과 바꾸는 방법을 한 줄로 알립니다.
+- `--dry-run`도 같은 규칙을 따릅니다. 출력의 `-s <scope>`는 최종 선택값입니다.
+
+| scope     | 저장 위치                             | 보이는 범위                                            |
+| --------- | ------------------------------------- | ------------------------------------------------------ |
+| `local`   | `~/.claude.json`의 해당 프로젝트 항목 | 그 디렉터리에서 연 Claude Code에서만                   |
+| `user`    | `~/.claude.json` 최상위               | 어느 디렉터리에서 열어도                               |
+| `project` | 저장소의 `.mcp.json`                  | 저장소를 공유하는 모든 사람(첫 사용 시 각자 승인 필요) |
+
+같은 이름이 `local`과 `user` 양쪽에 있으면 해당 프로젝트에서는 `local`이 우선합니다. `user`로 등록했는데 한 프로젝트에서만 옛 설정이 보인다면 그 프로젝트의 `local` 항목을 지우세요.
+
+### `install claude-desktop`
+
+`claude_desktop_config.json`을 직접 편집합니다. 기본 경로는 Windows `%APPDATA%\Claude\`, macOS `~/Library/Application Support/Claude/`, 그 외 `~/.config/Claude/`입니다.
+
+이 파일에는 사용자의 **다른 MCP 서버 설정이 함께** 들어 있습니다. 그래서 이해하지 못하는 파일은 절대 건드리지 않습니다.
+
+- JSON 파싱에 실패하거나 `mcpServers`가 객체가 아니면 **아무것도 쓰지 않고** 경로와 사유를 출력한 뒤 종료 코드 1로 끝냅니다.
+- 같은 이름의 항목이 이미 있고 `--force`가 없으면 역시 아무것도 쓰지 않고 종료 코드 1입니다.
+- 덮어쓰기 전에 같은 디렉터리에 `claude_desktop_config.json.bak-<YYYYMMDD-HHmmss>` 백업을 만듭니다. 같은 이름이 이미 있으면 `-1`, `-2`… 를 붙여 **기존 백업을 절대 덮어쓰지 않습니다**(타임스탬프가 초 단위라 같은 초에 두 번 실행할 수 있습니다).
+- POSIX에서는 **원래 파일의 권한을 그대로 유지합니다.** 새 내용은 임시 파일에 쓰고 rename 하는데, 그대로 두면 임시 파일의 기본 권한(보통 `0644`)이 대상 파일에 옮겨붙습니다. 이 파일은 우리 것이 아니라 Claude Desktop의 것이고 다른 MCP 서버의 자격증명이 들어 있을 수 있으므로, `0600`으로 잠가 둔 설정이 설치 후에 세상에 열리면 안 됩니다. 백업도 같은 권한으로 만듭니다. 새로 만드는 파일에는 아무것도 강제하지 않습니다.
+- 쓰기는 임시 파일에 쓴 뒤 rename으로 교체합니다(`hosts.json`과 같은 원자적 교체).
+- 다른 키와 다른 서버 항목은 모두 보존합니다. 다만 파일 전체를 2칸 들여쓰기로 다시 직렬화하므로 기존 들여쓰기·공백은 바뀔 수 있습니다.
+
+반영하려면 Claude Desktop을 **완전히 종료했다가** 다시 시작해야 합니다. 그 뒤 도구 목록에 정확히 7개가 보여야 합니다.
+
+### `--dry-run`
+
+아무것도 바꾸지 않고, `claude-code`는 실행할 명령 한 줄을, `claude-desktop`은 대상 경로와 추가·교체될 항목 JSON을 출력합니다. `claude-code`에서 `--scope`를 생략했다면 [scope 질문](#scope-선택)은 그대로 뜹니다.
+
+```bash
+$ npx @get-bot/ssh-mcp install claude-code --scope local --dry-run
+[dry-run] 아무것도 바꾸지 않았습니다. 실행할 명령:
+  claude mcp add ssh-mcp -s local -- cmd /c npx -y @get-bot/ssh-mcp
+```
 
 ## 도구 7개 레퍼런스
 
@@ -162,7 +349,9 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
 
 **서버가 실제로 강제할 수 있는 것은 `fail-closed`와 Claude Code의 `requiresUserInteraction`뿐입니다.** 그 외에는 클라이언트 쪽 UI(대화상자, elicitation 창)를 신뢰해야 합니다. 자세한 내용은 [보안 모델](#보안-모델)을 보세요.
 
-**elicitation 요청의 스키마.** Claude Code로 보내는 elicitation 요청은 불리언 필드 `confirm` 하나(`{ "confirm": { "type": "boolean", "title": "이 명령을 실행합니다" } }`)만 요구합니다. `confirm`이 정확히 `true`로 승인된 경우에만 실행되고, 그 외(거절·취소·타임아웃·`confirm: false`)는 전부 `command_denied`로 처리됩니다.
+**elicitation 요청의 스키마.** Claude Code로 보내는 elicitation 요청은 불리언 필드 `confirm` 하나(`{ "confirm": { "type": "boolean", "title": "이 명령을 실행합니다 (스페이스로 체크한 뒤 Accept)" } }`)만 요구합니다. `confirm`이 정확히 `true`로 승인된 경우에만 실행되고, 그 외(거절·취소·타임아웃·`confirm: false`)는 전부 `command_denied`로 처리됩니다.
+
+**승인 창에서는 체크박스를 먼저 체크해야 합니다.** Claude Code(2.1.270, Windows 11 실측)는 이 필수 불리언 필드를 체크되지 않은 체크박스 `☐`로 그리고, 체크하지 않은 채 Accept를 누르면 "This field is required"로 제출을 막습니다. 그래서 체크 없이 Accept만 누르면 창이 그대로 남아 "승인이 안 된다"처럼 보이지만 Decline은 즉시 먹힙니다. 방향키나 Tab으로 체크박스에 포커스를 옮겨 스페이스로 `☑`로 바꾼 뒤 Accept를 누르세요. 서버가 보내는 승인 메시지 마지막 줄과 체크박스 제목에도 같은 안내가 들어 있습니다. `confirm: true` 요구 자체는 "Accept 버튼이 눌렸다"와 "실행하겠다는 값이 왔다"를 분리해 두려는 의도(AC17.1b)라 유지합니다.
 
 **`confirmation_required` 응답은 명령 전문을 그대로 담습니다.** 토큰 발급 경로(`confirmation_required`)의 응답 본문에는 `confirmation_token`과 함께 명령 문자열이 최대 8192자까지(분류기의 명령 길이 상한과 동일) 잘리지 않고 담깁니다 — 모델이 사용자에게 보여줄 재료를 완제품으로 주기 위함입니다.
 
@@ -229,7 +418,13 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
 
 ### Claude Desktop
 
-`claude_desktop_config.json`에 추가합니다.
+한 줄로 끝내려면 [`install`](#install--클라이언트-등록)을 쓰세요. 플랫폼에 맞는 형태로 `claude_desktop_config.json`을 대신 편집하고, 기존 내용은 백업합니다.
+
+```bash
+npx @get-bot/ssh-mcp install claude-desktop
+```
+
+직접 편집하려면 `claude_desktop_config.json`에 다음을 추가합니다.
 
 macOS/Linux:
 
@@ -244,7 +439,7 @@ macOS/Linux:
 }
 ```
 
-Windows (반드시 `cmd /c` 형태를 쓰세요 — [Windows](#windows) 절 참고):
+Windows (Claude Desktop은 셸 없이 서버를 스폰하므로 반드시 `cmd /c` 형태를 쓰세요 — [Windows](#windows) 절 참고):
 
 ```json
 {
@@ -261,11 +456,19 @@ Windows (반드시 `cmd /c` 형태를 쓰세요 — [Windows](#windows) 절 참�
 
 ### Claude Code
 
+여기서도 [`install`](#install--클라이언트-등록)이 가장 짧은 길입니다. 내부적으로 `claude mcp add`를 실행합니다.
+
+```bash
+npx @get-bot/ssh-mcp install claude-code
+```
+
+직접 등록하려면:
+
 ```bash
 claude mcp add ssh-mcp -- npx -y @get-bot/ssh-mcp
 ```
 
-Windows:
+Windows에서도 위 형태 그대로 연결됩니다(2.1.270 실측 — Claude Code가 `npx.cmd`를 자체적으로 처리합니다). 구버전이거나 연결에 실패하면 감싼 형태를 쓰세요:
 
 ```bash
 claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
@@ -276,7 +479,8 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 ## Windows
 
 - **네이티브 빌드 도구가 없어도 됩니다.** `npm install --omit=optional`(또는 `npm ci --omit=optional`)로 선택적 네이티브 의존성 설치를 건너뛸 수 있습니다. `ssh2`는 순수 JS이므로 필수 기능에 영향이 없습니다.
-- **`npx`를 MCP 호스트의 `command`로 직접 지정하지 마세요.** Windows에서 `npx`는 실제로 `npx.cmd` 배치 파일입니다. MCP 호스트 대부분은 `child_process.spawn(cmd, args, { shell: false })`로 서버를 띄우는데, `shell: false`에서는 `.cmd` 셸 확장자 연결이 적용되지 않아 스폰이 `ENOENT`로 실패합니다. `cmd /c npx ...`로 감싸면 `cmd.exe`가 `.cmd` 확장자를 직접 해석하므로 문제가 사라집니다. 이 사실은 CI의 `windows-spawn` 잡이 두 가지 스폰을 모두 재현해 검증합니다.
+- **셸 없이 서버를 띄우는 호스트에는 `npx`를 `command`로 직접 지정하지 마세요.** Windows에서 `npx`는 실제로 `npx.cmd` 배치 파일입니다. `child_process.spawn(cmd, args, { shell: false })`로 서버를 띄우는 호스트(Claude Desktop이 그렇습니다)에서는 `.cmd` 셸 확장자 연결이 적용되지 않아 스폰이 `ENOENT`로 실패합니다. `cmd /c npx ...`로 감싸면 `cmd.exe`가 `.cmd` 확장자를 직접 해석하므로 문제가 사라집니다. 이 사실은 CI의 `windows-spawn` 잡이 두 가지 스폰을 모두 재현해 검증합니다. 반면 **Claude Code 2.1.270은 감싸지 않은 `npx` 형태로도 연결됩니다**(Windows 11 실측) — 스폰을 자체적으로 처리하기 때문입니다.
+- **`install`은 Windows에서 두 클라이언트 모두 `cmd /c` 형태로 등록합니다.** Claude Code가 bare `npx`도 받아들이더라도, 구버전 호환과 Claude Desktop과의 일관성을 위해 자동 경로는 한 가지 형태만 씁니다. [`install` 절](#install--클라이언트-등록)을 보세요.
 - 연결이 안 될 때는 가장 먼저 `node dist/index.js doctor`(또는 `npx @get-bot/ssh-mcp doctor`)를 실행하세요. 15개 항목을 점검합니다.
 - 키 디렉터리는 `icacls`로 하드닝됩니다. 계정 소유자와 `NT AUTHORITY\SYSTEM`을 제외한 모든 principal(상속된 `BUILTIN\Administrators` 포함)을 제거합니다. `setup` 중 하드닝이 실패하면 생성된 키를 정리하고 등록을 중단합니다.
 - 원격 셸이 `cmd`나 `powershell`로 감지되면(즉 원격도 Windows OpenSSH인 경우) 상태 유지 세션(`open_session`)을 지원하지 않습니다. [원격 셸 지원 범위](#원격-셸-지원-범위)를 보세요.
@@ -303,19 +507,19 @@ v1은 PTY(가상 터미널)를 할당하지 않습니다. 그래서 화면을 �
 
 **조건부 거부(13개).** 인자 형태에 따라 대화형 여부가 갈립니다. 아래 조건을 만족하면 실행되고, 아니면 거부됩니다.
 
-| 프로그램            | 거부 조건                                                                                        | 대안                                                      |
-| ------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| `top`               | `-b`, `-bn1`, `--batch-mode` 등 배치 플래그가 없으면 거부(있으면 한 번 출력하고 종료하므로 허용) | `top -b -n 1`, 이후 `ps aux --sort=-%cpu \| head -20`     |
-| `mysql`             | `-e`/`--execute` 없으면 거부                                                                     | `mysql -e "<SQL>"`                                        |
-| `psql`              | `-c`/`-f` 없으면 거부                                                                            | `psql -c "<SQL>"`, `psql -f <file>`                       |
-| `redis-cli`         | 인자 없이 호출하면 거부                                                                          | `redis-cli <command>`, `redis-cli --scan`                 |
-| `python`, `python3` | 스크립트나 `-c` 없이(REPL) 호출하면 거부                                                         | `python3 -c "<code>"`, 또는 스크립트 업로드 후 실행       |
-| `node`              | 스크립트나 `-e` 없이 호출하면 거부                                                               | `node -e "<code>"`, 또는 스크립트 업로드 후 실행          |
-| `irb`, `ruby`       | REPL 호출이면 거부                                                                               | `ruby -e "<code>"`                                        |
-| `git`               | `commit`(메시지 플래그 없음), `rebase -i`, `add -i/-p`, `mergetool`, `difftool`                  | `-m`/`-F`/`--no-edit` 등 비대화형 플래그 사용             |
-| `crontab`           | `-e`(편집기 실행)면 거부                                                                         | `crontab -l > /tmp/cron && <편집> && crontab /tmp/cron`   |
-| `systemctl`         | `edit` 서브커맨드면 거부                                                                         | drop-in을 업로드하고 `systemctl daemon-reload`            |
-| `ssh`               | 원격 명령 없이(로그인 셸) 호출하면 거부                                                          | 두 번째 호스트를 `ssh-mcp setup`으로 등록하고 직접 `exec` |
+| 프로그램            | 거부 조건                                                                                        | 대안                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| `top`               | `-b`, `-bn1`, `--batch-mode` 등 배치 플래그가 없으면 거부(있으면 한 번 출력하고 종료하므로 허용) | `top -b -n 1`, 이후 `ps aux --sort=-%cpu \| head -20`      |
+| `mysql`             | `-e`/`--execute` 없으면 거부                                                                     | `mysql -e "<SQL>"`                                         |
+| `psql`              | `-c`/`-f` 없으면 거부                                                                            | `psql -c "<SQL>"`, `psql -f <file>`                        |
+| `redis-cli`         | 인자 없이 호출하면 거부                                                                          | `redis-cli <command>`, `redis-cli --scan`                  |
+| `python`, `python3` | 스크립트나 `-c` 없이(REPL) 호출하면 거부                                                         | `python3 -c "<code>"`, 또는 스크립트 업로드 후 실행        |
+| `node`              | 스크립트나 `-e` 없이 호출하면 거부                                                               | `node -e "<code>"`, 또는 스크립트 업로드 후 실행           |
+| `irb`, `ruby`       | REPL 호출이면 거부                                                                               | `ruby -e "<code>"`                                         |
+| `git`               | `commit`(메시지 플래그 없음), `rebase -i`, `add -i/-p`, `mergetool`, `difftool`                  | `-m`/`-F`/`--no-edit` 등 비대화형 플래그 사용              |
+| `crontab`           | `-e`(편집기 실행)면 거부                                                                         | `crontab -l > /tmp/cron && <편집> && crontab /tmp/cron`    |
+| `systemctl`         | `edit` 서브커맨드면 거부                                                                         | drop-in을 업로드하고 `systemctl daemon-reload`             |
+| `ssh`               | 원격 명령 없이(로그인 셸) 호출하면 거부                                                          | 두 번째 호스트를 `ssh-mcp host add`로 등록하고 직접 `exec` |
 
 **이 감지는 위험도 판정이 아닙니다.** 파괴적/관리자 분류와는 완전히 별개의 검사이며, 대화형 프로그램이 아니라는 이유로 명령이 "안전"으로 승격되지는 않습니다. 예를 들어 `mysql -e "DROP DATABASE prod"`는 이 검사를 통과하지만, 이어서 분류기가 관리자/파괴적 여부를 판단합니다.
 
@@ -451,7 +655,7 @@ npx @get-bot/ssh-mcp doctor --patterns
 
 | #   | 항목                                      | 비고                                                                                                                                                                                                     |
 | --- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Node 버전 ≥ 20                            | 미만이면 FAIL                                                                                                                                                                                            |
+| 1   | Node 버전 ≥ 20                            | 미만이면 FAIL. 서버는 Node 20이면 동작하지만, 대화형 질문(`install`·`host add`)은 `@inquirer`가 요구하는 20.17 이상이 필요합니다                                                                         |
 | 2   | `ssh2` 로드                               | 네이티브 `cpu-features` 바인딩 유무는 정보로만 표시                                                                                                                                                      |
 | 3   | `~/.ssh-mcp/` 레이아웃                    | 없지만 생성 가능하면 PASS(신규 설치). 생성도 불가할 때만 FAIL                                                                                                                                            |
 | 4   | 디렉터리·키 파일 권한                     | POSIX `0700`/`0600` 확인. Windows는 등록된 개인키가 하나도 없으면 **`icacls`를 실행하지 않고 PASS**(아직 `setup`을 안 한 새 머신을 FAIL로 만들지 않기 위함) — 개인키가 있으면 `icacls`로 ACL을 읽어 확인 |
@@ -465,7 +669,7 @@ npx @get-bot/ssh-mcp doctor --patterns
 | 12  | 마지막 클라이언트의 elicitation 지원 여부 | FAIL 없음. 기록 없으면 "미기록"                                                                                                                                                                          |
 | 13  | 원격 셸 분류 커버리지                     | FAIL 없음. `cmd`/`powershell`로 관측된 호스트는 WARN, 미관측은 "미확인" 정보 행                                                                                                                          |
 | 14  | 분류 패턴 목록                            | 항상 PASS(정보 행). `--patterns`로 단독 출력 가능                                                                                                                                                        |
-| 15  | 호스트 설정 스니펫 출력                   | 항상 PASS. Windows에서는 `cmd /c` 변형도 함께 출력                                                                                                                                                       |
+| 15  | 호스트 설정 스니펫 출력                   | 항상 PASS. Windows에서는 `cmd /c` 변형도 함께 출력. 표 출력에는 [`install`](#install--클라이언트-등록) 자동 등록 안내 한 줄이 스니펫 뒤에 붙습니다(`--json` 페이로드에는 없음)                           |
 
 **종료 코드.** FAIL이 하나라도 있으면 `1`, 없으면 `0`. WARN은 종료 코드에 영향을 주지 않습니다.
 
@@ -473,7 +677,7 @@ npx @get-bot/ssh-mcp doctor --patterns
 
 ### 알려진 의존성 이슈
 
-**ssh2 1.17.0의 ed25519 키 생성 결함.** `utils.generateKeyPairSync('ed25519')`가 대략 130회에 1회(약 0.7%) 확률로 손상된 키 쌍을 반환합니다(인코딩된 본문이 3바이트 짧게 나와 파싱에 실패합니다). `ssh-mcp setup`은 키를 생성한 직후 양쪽 반쪽을 다시 파싱하고, 개인키에서 유도한 공개키 지문이 공개키 반쪽의 지문과 일치하는지 확인한 뒤에만 그 키 쌍을 디스크에 기록합니다. 검증에 실패하면 최대 12회까지 재생성을 시도하며, 그래도 전부 실패하면 `internal_error: …` 메시지와 종료 코드 1로 중단하며 아무것도 기록하지 않습니다 — 이 경우 사용자는 `setup`을 다시 실행하면 됩니다.
+**ssh2 1.17.0의 ed25519 키 생성 결함.** `utils.generateKeyPairSync('ed25519')`가 대략 130회에 1회(약 0.7%) 확률로 손상된 키 쌍을 반환합니다(인코딩된 본문이 3바이트 짧게 나와 파싱에 실패합니다). `ssh-mcp host add`는 키를 생성한 직후 양쪽 반쪽을 다시 파싱하고, 개인키에서 유도한 공개키 지문이 공개키 반쪽의 지문과 일치하는지 확인한 뒤에만 그 키 쌍을 디스크에 기록합니다. 검증에 실패하면 최대 12회까지 재생성을 시도하며, 그래도 전부 실패하면 `internal_error: …` 메시지와 종료 코드 1로 중단하며 아무것도 기록하지 않습니다 — 이 경우 사용자는 `setup`을 다시 실행하면 됩니다.
 
 ## 원격 셸 지원 범위
 
@@ -522,7 +726,7 @@ npx @get-bot/ssh-mcp doctor --patterns
 - **ADR-008.** 출력 상한 초과 시 앞·뒤를 보존하고 가운데를 한 줄로 대체한다
 - **ADR-009.** 원격 셸 지원 경계를 POSIX 계열 4종으로 두고 나머지는 조기 거부한다
 
-**계획에 없던 추가.** [알려진 의존성 이슈](#알려진-의존성-이슈)에 적은 키 쌍 건전성 검증(재파싱 + 지문 일치 확인 + 최대 12회 재시도)은 원래 계획서에는 없었습니다. ssh2 1.17.0의 결함이 구현 중에 발견되면서 `ssh-mcp/src/setup/keygen.ts`에 추가됐습니다.
+**계획에 없던 추가.** [알려진 의존성 이슈](#알려진-의존성-이슈)에 적은 키 쌍 건전성 검증(재파싱 + 지문 일치 확인 + 최대 12회 재시도)은 원래 계획서에는 없었습니다. ssh2 1.17.0의 결함이 구현 중에 발견되면서 `ssh-mcp/src/setup/keygen.ts`에 추가됐습니다. [`install` 명령](#install--클라이언트-등록)(`ssh-mcp/src/install/`)도 계획서에 없던 추가분으로, Windows에서 `cmd /c`로 감싸야 한다는 사실을 사용자가 알아야만 등록할 수 있다는 마찰을 없애기 위해 2026-09-14에 넣었습니다.
 
 ## v1 범위 밖 / v1.1 후보
 

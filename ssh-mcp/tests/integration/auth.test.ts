@@ -604,6 +604,42 @@ describe('argument parsing (row 5.1)', () => {
     });
   });
 
+  /**
+   * A value-taking flag must not eat the next flag.
+   *
+   * `host add --label --approval-mode` set the label to "--approval-mode" and
+   * then, because that string was still sitting in argv, the wizard counted the
+   * approval-mode question as already answered and never asked it. Two flags the
+   * user typed, neither of them applied.
+   */
+  it.each([
+    [['--label', '--approval-mode']],
+    [['--approval-mode', '--label']],
+    [['--approval-fallback', '--force']],
+    [['prod', 'deploy@web01', '--label', '--force']],
+  ])('refuses a flag name in a value position: %j', (argv) => {
+    const parsed = parseSetupArgs(argv);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok === false && parsed.message).toMatch(/needs a value, but got the option/u);
+  });
+
+  it('reports which flags were given, from the parse and not from argv', () => {
+    // Nothing was applied, so nothing may be reported as given — otherwise the
+    // wizard skips a question that has no answer.
+    const swallowed = parseSetupArgs(['--label', '--approval-mode']);
+    expect(swallowed.ok).toBe(false);
+    expect(swallowed.ok === false && swallowed.given).toBeUndefined();
+
+    const real = parseSetupArgs(['--approval-mode', 'deny', '--force']);
+    expect(real.ok).toBe(false);
+    expect(real.ok === false && real.missingPositionals).toBe(true);
+    expect(real.ok === false && real.given).toEqual({
+      approvalMode: true,
+      label: false,
+      force: true,
+    });
+  });
+
   it.each([
     [['prod']],
     [['prod', 'deploy@web01', 'extra']],

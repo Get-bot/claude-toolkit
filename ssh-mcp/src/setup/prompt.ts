@@ -61,7 +61,7 @@ export class NonInteractiveError extends Error {
   constructor(what: string) {
     super(
       `${what} requires an interactive terminal, but stdin is not a TTY. ` +
-        'Run ssh-mcp setup directly in a terminal.'
+        'Run ssh-mcp host add directly in a terminal.'
     );
     this.name = 'NonInteractiveError';
     this.what = what;
@@ -368,6 +368,10 @@ export async function promptYes(
  * An empty line re-asks; so does an unknown value. After `attempts` tries the
  * call throws {@link PromptAbortedError} and the caller must write nothing
  * (AC17.12a).
+ *
+ * Only questions that must not have a default come here. Everything with a
+ * documented default is a list in `ask.ts`, where a stray Enter picks the
+ * highlighted row — which is exactly what this question forbids.
  */
 export async function promptChoice(
   question: string,
