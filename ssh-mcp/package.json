@@ -1,0 +1,80 @@
+{
+  "name": "@get-bot/ssh-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that lets Claude run commands, transfer files and hold shell sessions on remote hosts over SSH",
+  "type": "module",
+  "license": "MIT",
+  "author": "Get-bot",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "ssh-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ssh",
+    "sftp",
+    "claude"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Get-bot/claude-toolkit.git",
+    "directory": "ssh-mcp"
+  },
+  "homepage": "https://github.com/Get-bot/claude-toolkit/tree/main/ssh-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Get-bot/claude-toolkit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:fp-gate": "vitest run tests/unit/classify.test.ts",
+    "prepublishOnly": "npm run build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "prepare": "cd .. && husky ssh-mcp/.husky"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "ssh2": "1.17.0",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "^22",
+    "@types/ssh2": "1.15.6",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "husky": "9.1.7",
+    "lint-staged": "16.4.0",
+    "prettier": "3.9.6",
+    "tsup": "8.5.1",
+    "typescript": "^5.9",
+    "typescript-eslint": "8.70.0",
+    "vitest": "5.0.0"
+  },
+  "lint-staged": {
+    "*.{ts,js,mjs,cjs}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  }
+}

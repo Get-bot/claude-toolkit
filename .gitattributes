@@ -1,0 +1,14 @@
+# Normalize line endings: store LF in the repo and check out LF on every platform.
+# Shebang scripts (ssh-mcp/dist/index.js) and shell snippets must never carry CRLF.
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.tgz binary
+*.zip binary

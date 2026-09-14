@@ -1,0 +1,251 @@
+name: ssh-mcp CI
+
+# Phase 7 (plan .omc/plans/ssh-mcp-plan.md §Phase 7). Five jobs:
+#   build-test        — matrix build/typecheck/test + false-positive gate (7.1, 7.6)
+#   shell-matrix      — session.test.ts on bash/dash/zsh against the fixture tier (7.2b); the real
+#                       OpenSSH container tier (7.2) is deferred to v1.1
+#   no-build-tools    — Windows consumer install of the packed tarball with optional native deps
+#                       skipped (7.3)
+#   package-smoke     — npm pack + npx smoke test, both OS (7.4)
+#   windows-spawn     — proves the npx/cmd spawn(ENOENT) behavior the README warns about (7.5)
+#
+# The smoke jobs never pass a bare tarball to npx — `npxLaunch` in
+# ssh-mcp/tests/fixtures/stdioServer.ts is the single source for the argv and explains why.
+
+on:
+  pull_request:
+    paths:
+      - "ssh-mcp/**"
+      - ".github/workflows/ssh-mcp-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ssh-mcp/**"
+      - ".github/workflows/ssh-mcp-ci.yml"
+
+defaults:
+  run:
+    working-directory: ssh-mcp
+
+env:
+  # F13: MSYS/git-bash on Windows runners rewrites POSIX-looking paths (e.g. leading "/") before
+  # they reach child processes. Disable that rewriting for every job so ssh-mcp's own path/command
+  # handling is what's under test, not MSYS's path mangling.
+  MSYS_NO_PATHCONV: 1
+  # `prepare` runs `husky ssh-mcp/.husky` on every `npm ci`/`npm install`. Runners have no git
+  # hooks to install into for this checkout style and no interactive commit flow, so skip it.
+  HUSKY: 0
+
+jobs:
+  build-test:
+    name: build-test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: format check (prettier)
+        run: npm run format:check
+
+      - name: lint (eslint)
+        run: npm run lint
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: build
+        run: npm run build
+
+      # Bundle smoke: catches an ESM/bundling defect (e.g. a require() that tsup left
+      # unresolved, or a broken ssh2 import path) that vitest's module graph never exercises
+      # because tests import source, not dist/index.js. `doctor --patterns` in particular forces
+      # the ssh2 import to actually run. SSH_MCP_HOME points at a scratch dir so this never reads
+      # or writes the runner's real home directory.
+      - name: bundle smoke (dist/index.js runs standalone)
+        run: |
+          node dist/index.js --version
+          node dist/index.js doctor --patterns
+        env:
+          SSH_MCP_HOME: ${{ runner.temp }}/ssh-mcp-home
+
+      - name: test (fixture sshd)
+        run: npm test
+        env:
+          ENDPOINT: fixture
+
+      # 7.6 — false-positive gate: the safe-command corpus (tests/unit/classify.test.ts) must
+      # classify every entry as "safe". A single non-safe verdict fails the job (AC16 오탐 방지).
+      - name: false-positive gate (safe corpus)
+        run: npm run test:fp-gate
+
+  shell-matrix:
+    name: shell-matrix (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # A real-OpenSSH container tier (StrictModes / authorized_keys / sftp subsystem — the spec's
+      # "local sshd container") is a v1.1 item. For v1 the gating evidence for AC7-AC9/AC11.3/AC13/
+      # AC14 is the in-process ssh2 Server fixture bridged to a real bash process, exercised by the
+      # build-test job. This job adds the AC14.3/AC14.4 shell coverage on bash/dash/zsh.
+      #
+      # 7.2b — shell matrix: bash / dash / zsh. This step does NOT talk to any sshd container — it
+      # runs against the in-process `fixture` tier, which bridges to a real bash/dash/zsh process
+      # spawned on the runner itself, so it genuinely exercises AC14.3/AC14.4 on each shell (CR-1:
+      # running this with ENDPOINT=sshd was a no-op, since every describe in session.test.ts is
+      # gated with `describe.skipIf(!onFixture || ...)` and skips entirely off the fixture tier).
+      # `busybox` is installed for ash-dependent assertions; `zsh` for the zsh leg; `dash`/`bash`
+      # ship on ubuntu-latest already.
+      - name: install zsh + busybox for shell matrix
+        run: sudo apt-get update && sudo apt-get install -y zsh busybox
+
+      - name: shell matrix — session.test.ts (AC14.3, AC14.4)
+        shell: bash
+        run: |
+          set -e
+          for shell in bash dash zsh; do
+            echo "=== SHELL_UNDER_TEST=$shell ==="
+            SHELL_UNDER_TEST="$shell" ENDPOINT=fixture npx vitest run tests/integration/session.test.ts
+          done
+
+  no-build-tools:
+    name: no-build-tools (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      # The scenario under test is an end user on a Windows box without native build tools
+      # running `npm install --omit=optional @get-bot/ssh-mcp` (README, Windows section). It
+      # cannot be modelled as `npm ci --omit=optional` in this repo: tsup's rollup and esbuild
+      # platform binaries are optionalDependencies too, so the build itself breaks ("Cannot find
+      # module @rollup/rollup-win32-x64-msvc"). So build and pack with the full dev tree, then
+      # install the tarball with --omit=optional into a fresh consumer directory and run the
+      # installed copy.
+      - name: npm ci
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      - name: npm pack
+        run: npm pack
+
+      - name: resolve packed tarball path
+        shell: bash
+        run: node scripts/resolve-tarball-path.mjs
+
+      - name: install tarball with --omit=optional into a fresh consumer dir
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p consumer && cd consumer
+          npm init -y > /dev/null
+          npm install --omit=optional --no-fund --no-audit "$SSH_MCP_TGZ"
+          node "$GITHUB_WORKSPACE/ssh-mcp/scripts/assert-no-native-addons.mjs"
+
+      # A clean runner has no ~/.ssh-mcp and zero registered hosts. doctor's check #3 treats
+      # "missing but creatable" as PASS, so this must exit 0 (AC21.10, PM-3).
+      - name: doctor from the consumer install (expect exit 0 on a clean runner)
+        shell: bash
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          node node_modules/@get-bot/ssh-mcp/dist/index.js --version
+          node node_modules/@get-bot/ssh-mcp/dist/index.js doctor
+
+  package-smoke:
+    name: package-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      - name: npm pack
+        run: npm pack
+
+      - name: resolve packed tarball path
+        shell: bash
+        run: node scripts/resolve-tarball-path.mjs
+
+      # `test:e2e` runs tests/e2e/**/*.test.ts (realHost.test.ts self-skips without
+      # SSH_MCP_E2E_HOST, so it's safe to include in the same run).
+      - name: package smoke test (initialize + tools/list, expect 7 tools)
+        run: npm run test:e2e
+
+  windows-spawn:
+    name: windows-spawn (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      - name: npm pack
+        run: npm pack
+
+      - name: resolve packed tarball path
+        shell: bash
+        run: node scripts/resolve-tarball-path.mjs
+
+      # PM-3 / AC4-AC6 evidence. The check is a checked-in script rather than a heredoc so that
+      # prettier and eslint actually see it — a typo in YAML-embedded JS only surfaces at run
+      # time, on a Windows runner. See scripts/windows-spawn-check.mjs for what it proves.
+      - name: assert npx spawn(shell:false) fails, cmd /c npx succeeds
+        run: node scripts/windows-spawn-check.mjs
