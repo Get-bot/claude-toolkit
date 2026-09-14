@@ -36,7 +36,9 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 ```bash
 # 1. Claude에 등록한다. Claude Code는 이 서버를 쓸 프로젝트 디렉터리에서 실행한다.
 npx @get-bot/ssh-mcp install claude-code
-#    Claude Desktop이면:
+#    모든 프로젝트에서 쓰려면 user scope로 등록한다 (디렉터리 무관):
+npx @get-bot/ssh-mcp install claude-code --scope user
+#    Claude Desktop이면 (Desktop은 앱 전역에 등록된다):
 npx @get-bot/ssh-mcp install claude-desktop
 
 # 2. 원격 호스트를 등록한다 (비밀번호를 한 번 입력하고 키를 심는다. 터미널 필수)
