@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "bin": {
-    "ssh-mcp": "./dist/index.js"
+    "ssh-mcp": "dist/index.js"
   },
   "files": [
     "dist",
