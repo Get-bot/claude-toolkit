@@ -31,21 +31,24 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 
 ## 설치
 
-npx로 별도 설치 없이 바로 실행할 수 있습니다.
+별도 설치 없이 npx로 바로 씁니다. 세 명령이면 끝납니다.
 
 ```bash
-npx -y @get-bot/ssh-mcp
+# 1. Claude에 등록한다. Claude Code는 이 서버를 쓸 프로젝트 디렉터리에서 실행한다.
+npx @get-bot/ssh-mcp install claude-code
+#    Claude Desktop이면:
+npx @get-bot/ssh-mcp install claude-desktop
+
+# 2. 원격 호스트를 등록한다 (비밀번호를 한 번 입력하고 키를 심는다. 터미널 필수)
+npx @get-bot/ssh-mcp setup myhost deploy@web01.example.com
+
+# 3. 점검한다
+npx @get-bot/ssh-mcp doctor
 ```
 
-Windows에서 Claude Desktop처럼 **셸 없이 서버를 스폰하는** 호스트에 등록할 때는 `cmd /c`로 감싸야 합니다(이유는 [Windows](#windows) 절 참고).
+`install`은 운영체제와 클라이언트에 맞는 등록 형태를 알아서 고릅니다(Windows에서 필요한 `cmd /c` 감싸기 포함). 자세한 옵션은 [install — 클라이언트 등록](#install--클라이언트-등록), 손으로 등록하는 방법은 [Claude Desktop / Claude Code 연결](#claude-desktop--claude-code-연결)을 보세요. 등록 후 Claude Code에서는 `/mcp`에, Claude Desktop에서는 재시작 후 도구 목록에 도구 7개가 보여야 합니다.
 
-```bat
-cmd /c npx -y @get-bot/ssh-mcp
-```
-
-Claude Code는 최근 버전에서 감싸지 않은 `npx` 형태로도 연결됩니다(2.1.270 / Windows 11 실측). 어느 쪽이든 [`install` 명령](#install--클라이언트-등록)이 플랫폼에 맞는 형태를 알아서 등록해 주므로 직접 고를 일은 없습니다.
-
-인자 없이 실행하면 stdio MCP 서버로 기동합니다. 호스트를 하나도 등록하지 않은 상태에서도 서버는 정상 기동하며, `list_hosts`가 빈 목록을 반환할 뿐입니다.
+**`npx -y @get-bot/ssh-mcp`를 인자 없이 실행하면 stdio MCP 서버로 기동합니다.** 이것은 Claude가 내부적으로 띄우는 명령이라, 터미널에서 직접 치면 `ssh-mcp server ready` 로그 한 줄을 남기고 클라이언트의 요청을 기다리며 조용히 멈춘 것처럼 보입니다. 정상이며 Ctrl+C로 빠져나오면 됩니다. 호스트를 하나도 등록하지 않은 상태에서도 서버는 정상 기동하며, `list_hosts`가 빈 목록을 반환할 뿐입니다.
 
 ### 개발
 
