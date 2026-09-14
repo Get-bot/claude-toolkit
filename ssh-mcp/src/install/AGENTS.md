@@ -5,7 +5,7 @@
 
 ## Purpose
 
-`ssh-mcp install <claude-code|claude-desktop>` 명령 전체입니다. `doctor`가 이미 등록 스니펫을 출력하고 사람이 그것을 붙여넣어도 결과는 같지만, 그러려면 SSH와 무관한 플랫폼 세부를 알아야 합니다 — Windows에서는 서버 명령을 `cmd /c`로 감싸야 하고, 두 클라이언트는 등록 정보를 서로 다른 곳에 서로 다른 형식으로 둡니다. 이 명령은 그 부분을 대신해서 "왜 ENOENT가 나느냐"는 가장 흔한 문의를 없애는 것이 목적입니다. 서버 동작이나 도구 표면은 전혀 건드리지 않습니다.
+`ssh-mcp install [claude-code|claude-desktop]` 명령 전체입니다(클라이언트를 생략하면 터미널에서 묻습니다). `doctor`가 이미 등록 스니펫을 출력하고 사람이 그것을 붙여넣어도 결과는 같지만, 그러려면 SSH와 무관한 플랫폼 세부를 알아야 합니다 — Windows에서는 서버 명령을 `cmd /c`로 감싸야 하고, 두 클라이언트는 등록 정보를 서로 다른 곳에 서로 다른 형식으로 둡니다. 이 명령은 그 부분을 대신해서 "왜 ENOENT가 나느냐"는 가장 흔한 문의를 없애는 것이 목적입니다. 서버 동작이나 도구 표면은 전혀 건드리지 않습니다.
 
 **계획서(`.omc/plans/ssh-mcp-plan.md`)에 없던 2026-09-14 추가분입니다.** plan row나 AC 번호를 인용하지 마세요 — 인접한 row 5b.5 / AC21.7은 `doctor`의 스니펫 **출력** 근거이지 이 명령의 근거가 아닙니다.
 
@@ -16,6 +16,7 @@
 | `cli.ts`        | 인자 파싱과 오케스트레이션. `runInstall(argv, deps)`, `parseInstallArgs()`, `USAGE`, `INSTALL_CLIENTS`, `DEFAULT_SERVER_NAME`. 종료 코드 `EXIT_OK=0` / `EXIT_FAILED=1` / `EXIT_USAGE=2`.             |
 | `claudeCode.ts` | `claude mcp add`/`remove` 실행. `installClaudeCode()`, `buildAddArgs()`/`buildRemoveArgs()`, `defaultSpawner`, `Spawner`/`SpawnOutcome` 타입. scope는 이미 정해진 값을 받으며 여기서 묻지 않습니다.  |
 | `desktop.ts`    | `claude_desktop_config.json` 편집. `installClaudeDesktop()`, `desktopConfigPath()`, `backupPath()`, `DESKTOP_CONFIG_FILE_NAME`.                                                                      |
+| `detect.ts`     | 메뉴 힌트용 감지. `detectClaudeCode()`(PATH + Windows `PATHEXT`), `detectClaudeDesktop()`(설정 **폴더** 존재), `Detection`/`ClientDetector`. **프로세스를 띄우지 않습니다.**                         |
 | `scope.ts`      | Claude Code scope 어휘와 대화형 선택. `CLAUDE_CODE_SCOPES`, `ClaudeCodeScope`, `DEFAULT_CLAUDE_CODE_SCOPE`, `resolveScope()`, `buildScopePrompt()`, `nonInteractiveScopeNotice()`, `scopeMeaning()`. |
 
 등록되는 **서버 명령 형태 자체**는 여기가 아니라 `../config/registration.ts`에 있습니다(`buildServerCommand()`, `buildDesktopEntry()`, `formatServerCommand()`, `PACKAGE_NAME`). `doctor`의 스니펫과 같은 출처를 쓰기 위해서입니다.
@@ -35,6 +36,10 @@
 - **값을 받는 플래그는 전부 `optionValue()`를 거칩니다.** `-`로 시작하는 토큰을 값으로 삼키면 안 됩니다 — `--home --dry-run`이 `SSH_MCP_HOME=--dry-run`을 등록하면서 **실제로 파일을 쓰는** 결함이 실행으로 재현됐습니다. 새 플래그를 추가할 때 이 헬퍼를 쓰지 않으면 같은 결함이 되돌아옵니다.
 - **`--home`과 `--config`는 파싱 시점에 `path.resolve()`합니다.** 서버는 MCP 호스트가 정한 cwd에서 실행되므로 상대 경로는 사용자가 의도한 곳을 가리키지 않습니다.
 - **scope는 `claude-code`에서만, `--scope`가 없을 때만 묻습니다.** `local`은 "명령을 친 그 디렉터리에서만 보임"이라 홈 디렉터리에서 설치한 사용자가 정작 일하는 프로젝트에서 도구를 못 보는 함정이 됩니다(`scope.ts` 헤더 참조). `--scope`가 주어지면 절대 묻지 않습니다 — 문서의 한 줄 명령과 스크립트가 비대화형으로 남아야 합니다. stdin이 TTY가 아니면 묻지 않고 `local` + 안내 한 줄입니다. **매달리는 프롬프트는 잘못된 기본값보다 나쁩니다.**
+- **클라이언트를 생략한 비대화형 실행은 추측하지 않습니다.** 터미널이면 메뉴로 묻고, 아니면 사용법 오류(2)와 두 명령 안내로 끝냅니다. 어느 쪽을 원했는지 짐작해서 등록하면 정확히 이 명령이 없애려는 "엉뚱한 곳에 등록됨" 문제가 돌아옵니다.
+- **메뉴 제목에 조작 안내를 붙이지 마세요.** 안내는 `menu.ts`의 `MENU_CONTROLS`가 제목 아래 별도 행으로 냅니다. 제목에 붙이면 한글 제목이 80칸 창에서 접혀 재그리기가 어긋납니다(Windows Terminal 실측). 감지 경로는 `shortenHome()`으로 `~`를 써서 행을 짧게 유지합니다.
+- **감지 결과는 힌트일 뿐 선택을 막지 않습니다.** 방금 설치했거나 비표준 경로에 둔 사용자가 막히면 안 됩니다. `detect.ts`는 프로세스를 띄우지 않고 `PATH`와 폴더 존재만 봅니다 — 메뉴 하나 그리려고 `PATH`의 미지 바이너리를 실행할 이유가 없습니다.
+- **"둘 다"는 Claude Code가 실패해도 Desktop을 계속 실행합니다.** 두 등록은 독립이고, 절반만 끝난 상태보다 둘 다 시도하고 결과를 요약하는 편이 낫습니다. 종료 코드는 둘 다 성공했을 때만 0입니다.
 - **`claude-desktop` 경로에서는 prompter를 건드리지 않습니다.** Desktop에는 scope 개념이 없습니다. `runInstall`이 desktop 분기를 먼저 처리하고 그 안에서 반환하는 구조가 이것을 보장하며, 테스트가 prompter 출력이 빈 문자열임을 단언합니다.
 - **`promptChoice`의 완화 옵션은 전부 opt-in입니다.** `defaultValue`/`caseInsensitive`/`aliases`/`invalidMessage`를 넘기지 않으면 동작이 예전과 한 글자도 다르지 않습니다. `setup`의 승인 폴백 질문(D3: 기본값 없음, 빈 입력 재질문)이 그래야 하기 때문입니다. 이 옵션들을 기본값으로 켜지 마세요.
 - **`--name`은 `SERVER_NAME_PATTERN`으로 검증합니다.** 이 값은 Windows 재시도 경로에서 `cmd.exe`에 닿고 Desktop 설정의 키가 되므로, `AliasSchema`와 같은 모양으로 제한합니다. 검증을 느슨하게 만들지 마세요.
@@ -48,22 +53,23 @@
 
 ## Testing
 
-| Suite                               | 대상                                                                                                             |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `tests/unit/installCommand.test.ts` | 인자 파싱·플랫폼별 명령 형태·claude-code argv와 실패 경로·scope 프롬프트 분기·Desktop 병합/거부/백업·스니펫 고정 |
-| `tests/unit/setupPrompt.test.ts`    | `promptChoice`의 기본 동작(D3) 불변과 새 옵션(`defaultValue`/`aliases`/`caseInsensitive`/`invalidMessage`)       |
+| Suite                               | 대상                                                                                                                    |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `tests/unit/installCommand.test.ts` | 인자 파싱·플랫폼별 명령 형태·claude-code argv와 실패 경로·클라이언트/scope 선택 분기·Desktop 병합/거부/백업·스니펫 고정 |
+| `tests/unit/menu.test.ts`           | 메뉴 컴포넌트 자체(`../setup/menu.ts`)                                                                                  |
+| `tests/unit/setupPrompt.test.ts`    | `promptChoice`의 기본 동작(D3) 불변과 새 옵션(`defaultValue`/`aliases`/`caseInsensitive`/`invalidMessage`)              |
 
 ```bash
 npm run test:unit
 ```
 
-플랫폼은 `deps.platform`으로 주입하므로 한 대의 기계에서 win32 분기와 그 외 분기를 모두 검증합니다. Desktop 테스트는 `fs.mkdtempSync`로 만든 임시 디렉터리와 `--config`를 쓰며 실제 사용자 설정에는 절대 접근하지 않습니다. prompter도 `deps.prompter`로 주입하며 기본값은 **비-TTY** 프롬프터입니다 — 그래야 어떤 테스트도 실제 stdin에 닿지 않고, scope 질문은 그것을 요구한 테스트에서만 나타납니다.
+플랫폼은 `deps.platform`으로 주입하므로 한 대의 기계에서 win32 분기와 그 외 분기를 모두 검증합니다. Desktop 테스트는 `fs.mkdtempSync`로 만든 임시 디렉터리와 `--config`를 쓰며 실제 사용자 설정에는 절대 접근하지 않습니다. prompter는 `deps.prompter`로, 메뉴 키 입력은 `deps.keys`로 주입하며 둘 다 기본값이 **비대화형**(비-TTY 프롬프터와 `keys: null`)입니다 — 그래야 어떤 테스트도 실제 stdin이나 터미널에 닿지 않고, 질문은 그것을 요구한 테스트에서만 나타납니다. 한 실행이 메뉴를 두 번 열 수 있으므로(클라이언트 → scope) 스크립트된 키 소스는 구독 사이에 커서를 공유해야 합니다.
 
 ## Dependencies
 
 ### Internal
 
-`../config/registration.js`, `../internal/util.js`, `../setup/prompt.js`(scope 질문에만 사용)
+`../config/registration.js`, `../internal/util.js`, `../setup/prompt.js`·`../setup/menu.js`(클라이언트·scope 질문에만 사용)
 
 ### External
 

@@ -61,7 +61,7 @@ export class NonInteractiveError extends Error {
   constructor(what: string) {
     super(
       `${what} requires an interactive terminal, but stdin is not a TTY. ` +
-        'Run ssh-mcp setup directly in a terminal.'
+        'Run ssh-mcp host add directly in a terminal.'
     );
     this.name = 'NonInteractiveError';
     this.what = what;

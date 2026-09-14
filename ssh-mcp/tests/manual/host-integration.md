@@ -77,15 +77,45 @@ npx @get-bot/ssh-mcp install claude-code
     claude mcp add ssh-mcp -s local -- cmd /c npx -y @get-bot/ssh-mcp
   ```
 
-- [ ] `--scope` 없이 실행하면 "Claude Code 어디에 등록할까요?" 질문이 뜨고, 1) 줄에 **현재 디렉터리의 절대 경로**가 보인다. Enter만 누르면 `local`로 진행한다.
-- [ ] 질문에 `2`를 입력하면 `-s user`로 등록되고, 다른 디렉터리에서 Claude Code를 열어도 7개 도구가 보인다.
+- [ ] `--scope` 없이 실행하면 "Claude Code 어디에 등록할까요?" 메뉴가 뜨고, `local` 줄에 **현재 디렉터리의 절대 경로**가 보인다. `↑`/`↓`로 커서(`❯`)가 움직이고 화면이 위로 밀리지 않는다. Enter만 누르면 `local`로 진행한다.
+- [ ] 메뉴에서 `2`를 누르면 Enter 없이 즉시 `-s user`로 등록되고, 다른 디렉터리에서 Claude Code를 열어도 7개 도구가 보인다.
+- [ ] 메뉴가 확정되면 메뉴가 지워지고 `선택: ...` 한 줄만 남는다.
+- [ ] **창을 80칸 이하로 좁혀서** 메뉴를 띄우고 키를 여러 번 눌러도 제목이 누적되거나 메뉴가 화면을 타고 내려가지 않는다. 긴 줄은 끝이 `…`로 잘린다. (WSL에서는 `stty cols 60`으로 좁힐 수 있다.)
 - [ ] `--scope user`를 붙이면 질문이 **뜨지 않는다**.
 - [ ] `npx @get-bot/ssh-mcp install claude-code < /dev/null`(비TTY)은 묻지 않고 `local`로 진행하며 "--scope를 지정하지 않아 ..." 한 줄을 남긴다.
 - [ ] 성공 메시지에 scope의 의미가 한 줄 나온다(`local`이면 현재 디렉터리 경로가 포함된다).
 - [ ] `--dry-run` 없이 실행하면 `claude mcp list`에 `ssh-mcp`가 나타나고 `/mcp`에서 7개 도구가 보인다.
 - [ ] 같은 명령을 한 번 더 실행하면 `claude`가 중복 등록을 거부하고 종료 코드 1로 끝난다. `--force`를 주면 remove 후 add가 진행되어 성공한다.
 - [ ] `install claude-desktop --config <임시경로> --home --dry-run`이 종료 코드 2로 끝나고 **파일을 만들지 않는다**(값 자리에 플래그가 오는 경우).
-- [ ] `install claude-code --home "C:\R&D\ssh-mcp"`를 `claude`가 PATH에 없는 셸에서 실행하면 `cmd` 재시도 없이 수동 명령을 출력하고 종료 코드 1로 끝난다.
+- [ ] **(Windows 전용)** `install claude-code --home "C:\R&D\ssh-mcp"`를 `claude`가 PATH에 없는 셸에서 실행하면 `cmd` 재시도 없이 수동 명령을 출력하고 종료 코드 1로 끝난다. WSL에는 `cmd` 재시도 경로 자체가 없으므로 여기서만 확인한다.
+
+### 인자 없는 실행 (계획 외 추가)
+
+- [ ] `npx @get-bot/ssh-mcp install`(클라이언트 없이, 터미널)이 "어느 클라이언트에 등록할까요?" 메뉴를 띄우고, 각 줄에 감지 결과가 힌트로 보인다.
+- [ ] `3`(둘 다)을 고르면 Claude Code(scope 질문 포함) → Claude Desktop 순서로 실행되고 마지막에 두 결과 요약 한 줄이 나온다.
+- [ ] `Ctrl+C`로 메뉴를 빠져나가면 아무것도 등록되지 않는다.
+- [ ] `npx @get-bot/ssh-mcp install < /dev/null`(비TTY)은 메뉴 없이 종료 코드 2와 두 가지 명령 안내를 낸다.
+- [ ] `npx @get-bot/ssh-mcp host add`(인자 없이, 터미널)이 호스트 주소 → 사용자명 → 포트 → alias → 승인 모드(메뉴) → 라벨 순서로 묻는다. alias 기본값이 호스트명의 첫 라벨로 제안된다.
+- [ ] 위저드에서 이미 등록된 alias를 입력하면 "이미 있습니다 … `--force`" 안내와 함께 다시 묻고, 조용히 덮어쓰지 않는다.
+- [ ] 위저드가 끝난 뒤 비밀번호 입력·지문 `yes` 확인·승인 폴백 강제 선택이 **예전과 동일하게** 이어진다.
+
+### 명령 이름과 목록 (계획 외 추가)
+
+- [ ] `npx @get-bot/ssh-mcp setup`이 `host add`와 **완전히 같게** 동작한다. 경고나 deprecation 메시지가 나오지 않는다.
+- [ ] `npx @get-bot/ssh-mcp host`(하위 명령 없이)가 `add`/`list` 사용법을 내고 종료 코드 2다.
+- [ ] `npx @get-bot/ssh-mcp host list`가 등록한 호스트를 표로 보여주고, 개인키 경로와 지문 전문이 **보이지 않는다**(지문은 접두 16자).
+- [ ] `host list --json`이 `list_hosts` 도구와 같은 필드 구성을 낸다. 호스트가 하나도 없을 때도 `{"hosts": [], "count": 0}`을 내고, 표 모드에서만 "등록된 호스트가 없습니다" 한 줄이 나온다.
+- [ ] `host list --help`가 사용법을 **stdout**에 내고 종료 코드 0이다(`host list --help > /dev/null`로 화면이 비는지 확인).
+
+### WSL (계획 외 추가)
+
+WSL Ubuntu에서 `script -qc '<명령>' /dev/null`로 pty를 잡아 확인한다.
+
+- [ ] `install` 메뉴가 방향키·숫자로 정상 동작하고 화면이 어그러지지 않는다.
+- [ ] Claude Desktop 줄이 "감지되지 않음(WSL에서는 …)"으로 보이지만 선택은 가능하다.
+- [ ] `install claude-code --dry-run`이 **감싸지 않은** `npx -y @get-bot/ssh-mcp` 형태를 출력한다(`cmd /c` 없음).
+- [ ] scope 힌트와 성공 메시지의 경로가 `/home/...` 형태로 보인다.
+- [ ] `TERM=dumb npx @get-bot/ssh-mcp install`이 메뉴 대신 번호 입력 질문으로 내려간다.
 
 ## AC6 — Windows 11 검증
 
@@ -98,11 +128,13 @@ npx @get-bot/ssh-mcp install claude-code
 
 ### setup 흐름
 
-- [ ] `npx @get-bot/ssh-mcp setup myhost user@example.com` 실행 시 비밀번호 입력 중 화면에 문자가 보이지 않는다.
+- [ ] `npx @get-bot/ssh-mcp host add nohost user@no-such-host.invalid`가 **비밀번호를 묻지 않고** `connection_failed: 호스트 이름을 찾을 수 없습니다`로 끝나며, `~/.ssh-mcp/keys`에 아무 파일도 생기지 않는다.
+- [ ] 위저드에서 없는 주소를 입력하면 사유가 보이고 **호스트 주소와 포트를 다시** 묻는다. 3회 연속 실패하면 중단된다.
+- [ ] `npx @get-bot/ssh-mcp host add myhost user@example.com` 실행 시 `연결 확인 중: … / 연결 확인: OK` 뒤에 비밀번호를 묻고, 입력 중 화면에 문자가 보이지 않는다.
 - [ ] 호스트 키 지문이 표시되고 `yes` 확인을 요구한다.
 - [ ] 지문 확인 후 **승인 폴백 선택 프롬프트**가 뜬다. Enter만 누르면 다시 묻는다. 3회 연속 빈 입력 시 중단되고 `~/.ssh-mcp/hosts.json`이 생성되지 않는다.
 - [ ] `--approval-fallback fail-closed`와 함께(그리고 기존 alias라면 `--force`도 함께) 다시 실행하면 승인 폴백 프롬프트 없이 진행된다. `hosts.json`에 값이 그대로 들어간다.
-- [ ] `ssh-mcp setup other user@example.com < /dev/null`(TTY 아님, 플래그 없음)이 오류로 종료하고 키 파일·`hosts.json` 어느 것도 남기지 않는다.
+- [ ] `ssh-mcp host add other user@example.com < /dev/null`(TTY 아님, 플래그 없음)이 오류로 종료하고 키 파일·`hosts.json` 어느 것도 남기지 않는다.
 - [ ] 기존 alias에 `--force` 없이 setup을 실행하면 `alias_exists`로 중단된다. `--force`를 주면 옛 지문과 새 지문이 나란히 표시되고 `yes` 타이핑을 요구한다.
 - [ ] 원격에서 `grep -c "ssh-mcp:myhost" ~/.ssh/authorized_keys` → **1**. setup을 한 번 더 실행해도 여전히 **1**(멱등).
 - [ ] 원격에서 `ls -l ~/.ssh` → `authorized_keys`가 `-rw-------`.

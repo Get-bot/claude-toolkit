@@ -5,7 +5,7 @@
 
 ## Purpose
 
-`ssh-mcp setup <alias> <user@host[:port]>` 명령 전체입니다. 이 명령이 존재하는 이유는 **비밀번호를 사람이 터미널에서 한 번만 입력하고 다시는 입력하지 않게** 하기 위해서입니다 — 한 번의 비밀번호 인증으로 접속해 새로 만든 ed25519 공개키를 원격 `authorized_keys`에 설치하고, 호스트 키 지문을 핀으로 저장한 뒤, 이후에는 키 인증만 씁니다. 비대화형 실행은 불가능하며, 키 생성 이후의 모든 실패는 이전 키 쌍을 복원하고 `hosts.json`을 손대지 않은 채로 끝납니다.
+`ssh-mcp host add <alias> <user@host[:port]>` 명령 전체입니다(`ssh-mcp setup`은 같은 핸들러의 **무경고 별칭**이며, 그 이유는 `../host/AGENTS.md`에 있습니다. 디렉터리와 내부 식별자는 `setup` 이름을 유지합니다). 이 명령이 존재하는 이유는 **비밀번호를 사람이 터미널에서 한 번만 입력하고 다시는 입력하지 않게** 하기 위해서입니다 — 한 번의 비밀번호 인증으로 접속해 새로 만든 ed25519 공개키를 원격 `authorized_keys`에 설치하고, 호스트 키 지문을 핀으로 저장한 뒤, 이후에는 키 인증만 씁니다. 비대화형 실행은 불가능하며, 키 생성 이후의 모든 실패는 이전 키 쌍을 복원하고 `hosts.json`을 손대지 않은 채로 끝납니다.
 
 ## Key Files
 
@@ -15,10 +15,14 @@
 | `keygen.ts`  | ed25519 키 생성과 백업/복원. `generateKeyPair()`, `backupKeyPair()`/`restoreKeyPair()`/`removeKeyPair()`, `describePublicKey()`, `MAX_GENERATION_ATTEMPTS = 12`.                                                                             |
 | `install.ts` | 원격 `authorized_keys` 설치. `installAuthorizedKey()`, `AUTHORIZED_KEYS_SCRIPT`, 마커 `SSHMCP_INSTALLED` / `SSHMCP_ALREADY_PRESENT`, `RemoteInstallError`.                                                                                   |
 | `prompt.ts`  | 대화형 프롬프트. `Prompter` 클래스와 `promptPassword()`/`promptYes()`/`promptChoice()`, `createPrompter()`, `NonInteractiveError`, `PromptAbortedError`. `install`의 scope 질문도 이 모듈을 씁니다.                                          |
+| `menu.ts`    | 방향키 메뉴. `promptMenu()`, `renderMenu()`, `terminalKeySource()`, `KeyEvent`/`KeySource`/`MenuIo`/`MenuOptions`, `MENU_CURSOR`. Node 내장(`readline.emitKeypressEvents` + raw 모드 + ANSI)만 씁니다.                                       |
+| `wizard.ts`  | 인자 없는 `setup`의 질문 흐름. `runSetupWizard()`, `suggestAlias()`, `formatTarget()`, `MAX_WIZARD_ATTEMPTS`. **argv 토큰만 만들고** 파일이나 연결은 건드리지 않습니다.                                                                      |
 | `winacl.ts`  | Windows ACL 하드닝. `hardenWindowsAcl()`, `inspectWindowsAcl()`, `parseIcaclsPrincipals()`, `currentWindowsPrincipal()`, `ALLOWED_FOREIGN_PRINCIPALS = ['NT AUTHORITY\\SYSTEM']`.                                                            |
 
 ## Setup flow
 
+0. **위저드(선택)** — positional이 **하나도** 없고 stdin이 TTY면 `runSetupWizard()`가 호스트 주소·사용자명·포트·alias·승인 모드·라벨을 차례로 묻고 **argv 토큰을 만들어 반환**합니다. `runSetup`은 그것을 원래 argv 뒤에 붙여 `parseSetupArgs()`를 다시 호출하므로, 이후 1~13단계는 사용자가 인자를 직접 친 경우와 완전히 같습니다. positional이 하나만 있으면(오타로 판단) 위저드는 뜨지 않습니다.
+   0.5. **연결 확인** — `ssh/reach.ts`의 `probeTcp()`로 host:port에 TCP 연결을 시도합니다(5초). 실패하면 `connection_failed`와 사람이 읽을 사유를 내고 **비밀번호·ACL·키 생성 이전에** 종료합니다. 위저드는 여기서 호스트 주소와 포트를 다시 묻고 3회 연속 실패하면 중단합니다. 위저드가 이미 확인했으면 인자 경로에서 다시 연결하지 않습니다(`addressVerified`).
 1. **argv 파싱** — `parseSetupArgs()`가 alias와 `user@host[:port]`를 해석하고 `--force`, `--approval-mode`, `--approval-fallback`, `--label` 플래그를 읽습니다. alias는 `AliasSchema`로 검증합니다.
 2. **기존 alias 확인** — 이미 등록된 alias에 `--force` 없이 실행하면 `alias_exists`로 끝납니다.
 3. **TTY 확인** — `prompter.interactive`가 false면 아무것도 쓰지 않고 `EXIT_NOT_INTERACTIVE`로 끝납니다(D5). `--force`도 지문을 다시 고정하는 작업이므로 TTY를 요구합니다.
@@ -39,6 +43,14 @@
 - **ACL 하드닝은 반드시 키 생성보다 먼저입니다.** 순서를 뒤집으면 두 번의 네트워크 왕복과 사람의 프롬프트가 진행되는 동안 상속된 NTFS ACL 아래에 암호화되지 않은 개인키가 놓입니다.
 - **절반만 쓰인 상태를 남기지 마세요.** 키 생성 이후의 모든 실패 경로는 `finally`에서 `restoreKeyPair(backup)`으로 이전 키 상태를 정확히 되돌리고(원래 없던 파일은 삭제) `hosts.json`을 건드리지 않습니다. `succeeded` 플래그가 서는 시점은 마지막 `store.save()` 직후입니다(AC7.5, AC7.7).
 - **`generateKeyPair()`는 새 쌍을 쓰기 전에 기존 파일을 `fs.rmSync`로 먼저 지웁니다.** `writeFileSync`가 기존 파일의 모드를 유지하기 때문에, 이전 실행에서 world-readable로 남은 파일이 그대로 재사용되는 것을 막기 위함입니다.
+- **연결 확인은 보안 단계가 아니며 어떤 보안 단계도 대체하지 않습니다.** TCP 핸드셰이크에서 멈추고 SSH 배너·키 교환·지문을 보지 않습니다. 지문을 보여주고 `yes`를 받는 것, 그 뒤에야 비밀번호를 보내는 것은 전과 같은 자리에 그대로 있습니다. 앞에 "닿기는 하는가"가 하나 붙었을 뿐입니다.
+- **메뉴 행은 반드시 `columns - 1`로 자릅니다.** 논리 행 하나가 물리 행 두 개로 접히면 `cursorUp(drawn)`이 그만큼 덜 올라가 재그리기마다 화면이 한 줄씩 밀립니다 — Windows Terminal 80칸에서 한글 제목(약 85칸)이 접혀 제목이 누적되는 것으로 실측됐습니다. `displayWidth()`는 일부러 **과대평가**합니다(알려진 zero-width가 아닌 비ASCII는 전부 2칸): 과대평가는 일찍 자를 뿐이고 과소평가만 화면을 깨뜨립니다. `menuHeight()`가 물리 행 수를 다시 세어 방어하며, 자르기가 정확하면 논리 행 수와 같아야 한다는 불변식을 테스트가 고정합니다.
+- **`terminalKeySource`의 `keypress` 리스너는 절대 떼지 마세요.** 한 번 붙이면 소스가 사는 동안 유지되고, 구독 해제는 raw 모드 복원과 `pause()`만 합니다. 이유: `readline`은 `data` 청크 하나를 **동기 버스트**로 여러 `keypress`로 바꾸는데, 메뉴가 자기 키에 확정하면서 리스너를 떼면 같은 청크의 나머지 키가 **리스너 0명에게 emit되어 사라집니다**. WSL pty에서 `\r\x1b[B\r`가 한 청크로 들어오면 두 번째 메뉴가 영영 멈추는 것으로 재현됐습니다. 리스너를 유지해야 그 키들이 `pending`에 쌓여 다음 프롬프트로 넘어갑니다.
+- **`pending` 큐와 `expiry`는 한 쌍입니다.** 듣는 프롬프트가 없을 때 들어온 키는 큐에 쌓이고, 바로 다음 프롬프트가 마이크로태스크 안에서 가져갑니다. 이벤트 루프가 한 바퀴 돌 때까지 아무도 안 가져가면(`setImmediate`) 그 키는 어느 프롬프트의 것도 아니므로 버립니다 — 남겨 두면 한참 뒤의 메뉴가 유령 입력을 받습니다.
+- **raw 모드 복원과 `pause()`는 동기로 해야 합니다.** 바로 다음 마이크로태스크에서 텍스트 프롬프트가 읽기 시작할 수 있고, 그때 cooked 모드여야 에코와 줄 편집이 됩니다.
+- **메뉴는 기본값이 있는 질문에만 씁니다.** `menu.ts`는 비밀번호, 지문 `yes` 확인, 승인 폴백 선택에 쓰지 않습니다 — 그 셋은 잘못 누른 Enter가 답이 되어서는 안 되는 결정입니다. 승인 폴백을 언젠가 메뉴로 옮긴다면 `preselect: null`(아무것도 강조하지 않고 Enter 무시)이 그 통로이며, 그래서 그 옵션이 지금 쓰이지 않는데도 존재하고 테스트로 고정돼 있습니다.
+- **위저드는 argv만 만듭니다.** 검증·기본값·이후 흐름을 복제하지 마세요. `runSetupWizard()`가 토큰을 돌려주고 `parseSetupArgs()`가 그것을 평소처럼 해석하는 구조라서, 인자를 친 경우와 답한 경우의 동작이 갈라질 수 없습니다.
+- **위저드는 `--force`를 대신 적용하지 않습니다.** 이미 등록된 alias를 입력하면 재질문할 뿐입니다. 지문 재핀은 사람이 플래그를 직접 붙여야 하는 동작입니다.
 - **`promptChoice`의 기본 동작은 D3입니다 — 기본값 없음, 빈 입력은 재질문.** `ChoicePromptOptions`(`defaultValue`/`caseInsensitive`/`aliases`/`invalidMessage`)는 `install`의 scope 질문을 위해 나중에 붙은 **opt-in** 확장이며, 아무것도 넘기지 않으면 동작이 예전과 동일합니다. 승인 폴백 호출부에 이 옵션을 붙이지 마세요. `tests/unit/setupPrompt.test.ts`가 양쪽을 모두 고정합니다.
 - **비대화형 실행은 지원하지 않습니다.** 비밀번호 프롬프트가 non-TTY stdin을 거부하며, `--approval-fallback`은 승인 질문만 건너뛸 뿐 이 요구를 해제하지 않습니다(D4, D5).
 - **비밀번호는 `Buffer`로 다룹니다.** JavaScript 문자열은 지울 수 없기 때문입니다. 다만 `ssh2` 1.17.0의 `ConnectConfig.password`가 문자열만 받아 접속 시점에 문자열 복사본이 한 번 생기며, 이는 README의 "알려진 한계"에 명시된 잔여 위험입니다. 프롬프트 쪽 `Buffer` 처리를 문자열로 "단순화"하지 마세요.
@@ -52,11 +64,13 @@
 
 ## Testing
 
-| Suite                            | 대상                                         |
-| -------------------------------- | -------------------------------------------- |
-| `tests/unit/keygen.test.ts`      | 키 생성·백업/복원·건전성 재시도              |
-| `tests/unit/setupPrompt.test.ts` | 프롬프트(비-TTY 거부, raw 모드, Buffer 반환) |
-| `tests/integration/auth.test.ts` | 키 설치와 인증 왕복                          |
+| Suite                            | 대상                                                             |
+| -------------------------------- | ---------------------------------------------------------------- |
+| `tests/unit/keygen.test.ts`      | 키 생성·백업/복원·건전성 재시도                                  |
+| `tests/unit/setupPrompt.test.ts` | 프롬프트(비-TTY 거부, raw 모드, Buffer 반환)                     |
+| `tests/unit/menu.test.ts`        | 방향키 메뉴(이동·숫자 즉시 선택·preselect null·중단·ANSI 프레임) |
+| `tests/unit/setupWizard.test.ts` | 위저드가 답을 argv로 바꾸는 규칙, 재질문 조건, 플래그로 건너뛰기 |
+| `tests/integration/auth.test.ts` | 키 설치와 인증 왕복                                              |
 
 ```bash
 npm run test:unit
@@ -67,7 +81,7 @@ npm run test:integration
 
 ### Internal
 
-`../config/paths.js`, `../config/registration.js`, `../config/schema.js`, `../config/store.js`, `../doctor/checks.js`, `../errors.js`, `../log.js`, `../ssh/fingerprint.js`
+`../config/paths.js`, `../config/registration.js`, `../config/schema.js`, `../config/store.js`, `../doctor/checks.js`, `../errors.js`, `../log.js`, `../ssh/fingerprint.js`, `../ssh/reach.js`
 
 ### External
 

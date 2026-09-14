@@ -30,6 +30,10 @@
 | `audit.test.ts`          | 감사 레코드 형태, 줄 길이 상한, 로테이션                                                                                                                                                                          |
 | `errors.test.ts`         | `ERROR_CODES` 목록과 `isErrorCode()`                                                                                                                                                                              |
 | `toolsList.test.ts`      | 실제 클라이언트–서버 쌍으로 `tools/list` 검증. 스냅샷이 아니라 **필드 단위**로 단언                                                                                                                               |
+| `hostCommand.test.ts`    | `ssh-mcp host` 그룹 라우팅과 `host list`. `setup` 별칭이 `host add`와 **바이트 단위로 같은 출력**을 내는지 고정하고, 목록이 개인키 경로·지문 전문을 흘리지 않는지 확인                                            |
+| `reach.test.ts`          | TCP 도달 확인. 리졸버를 주입해 `ENOTFOUND`를 만들고, 실제 DNS에 의존하지 않습니다                                                                                                                                 |
+| `menu.test.ts`           | 방향키 메뉴. 키 입력을 `KeySource`로 주입해 터미널 없이 이동·숫자 즉시 선택·`preselect: null`의 Enter 무시·중단·ANSI 프레임을 검증                                                                                |
+| `setupWizard.test.ts`    | `setup` 위저드가 여섯 답을 argv 토큰으로 바꾸는 규칙. 재질문 조건, 이미 등록된 alias 거부, 플래그로 질문 건너뛰기                                                                                                 |
 | `installCommand.test.ts` | `ssh-mcp install`. 플랫폼을 주입해 win32/그 외 명령 형태를 둘 다 검증하고, 스텁 spawner로 `claude` argv를 단언하며, Desktop 설정의 거부 경로가 파일 바이트를 그대로 두는지 확인. `buildSnippets()` 세 필드도 고정 |
 
 ## Conventions

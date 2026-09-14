@@ -2,7 +2,8 @@
  * `ssh-mcp` bin entry point (plan row 0.7).
  *
  * Node version guard, then argv routing:
- *   `setup ...`   -> setup CLI      (exit code from `runSetup`)
+ *   `host ...`    -> host group     (`add` = the setup CLI, `list`)
+ *   `setup ...`   -> setup CLI      (silent alias of `host add`; see `host/cli.ts`)
  *   `doctor ...`  -> doctor CLI     (exit code from `runDoctor`)
  *   `install ...` -> install CLI    (exit code from `runInstall`)
  *   `--version`   -> version to stdout
@@ -38,6 +39,14 @@ export async function run(argv: string[]): Promise<number> {
 
   const command = argv[0];
 
+  if (command === 'host') {
+    const { runHost } = await import('./host/cli.js');
+    return runHost(argv.slice(1));
+  }
+
+  // `setup` predates the `host` group and keeps working with no warning: an
+  // 0.1.0 user upgrades automatically through `npx -y`, so breaking or nagging
+  // here would break a working setup for no benefit.
   if (command === 'setup') {
     const { runSetup } = await import('./setup/cli.js');
     return runSetup(argv.slice(1));

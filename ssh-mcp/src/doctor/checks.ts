@@ -581,7 +581,7 @@ function auditLogCheck(ctx: CheckContext): Check {
 function emptyHostRow(kind: CheckKind, name: string): Check {
   return sync(kind, name, () => ({
     status: 'INFO',
-    detail: '등록된 호스트가 없습니다 — ssh-mcp setup으로 추가하세요',
+    detail: '등록된 호스트가 없습니다 — ssh-mcp host add으로 추가하세요',
   }));
 }
 

@@ -1,5 +1,5 @@
 /**
- * `ssh-mcp install <claude-code|claude-desktop>` — register this server with an
+ * `ssh-mcp install [claude-code|claude-desktop]` — register this server with an
  * MCP host.
  *
  * `doctor` already prints the snippets, and a user can paste them. This command
@@ -36,11 +36,16 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { PACKAGE_NAME } from '../config/registration.js';
-import { processPrompter } from '../setup/prompt.js';
+import { errorMessage } from '../internal/util.js';
+import { promptMenu, shortenHome, terminalColumns, terminalKeySource } from '../setup/menu.js';
+import type { KeySource, MenuIo, MenuOptions } from '../setup/menu.js';
+import { PromptAbortedError, processPrompter, promptChoice } from '../setup/prompt.js';
 import type { Prompter } from '../setup/prompt.js';
 import { defaultSpawner, installClaudeCode } from './claudeCode.js';
 import type { Spawner } from './claudeCode.js';
 import { installClaudeDesktop } from './desktop.js';
+import { detectClaudeCode, detectClaudeDesktop } from './detect.js';
+import type { ClientDetector, Detection } from './detect.js';
 import { CLAUDE_CODE_SCOPES, resolveScope } from './scope.js';
 import type { ClaudeCodeScope } from './scope.js';
 
@@ -58,7 +63,10 @@ export type InstallClient = (typeof INSTALL_CLIENTS)[number];
 export const DEFAULT_SERVER_NAME = 'ssh-mcp';
 
 export const USAGE = [
-  'Usage: ssh-mcp install <claude-code|claude-desktop> [options]',
+  'Usage: ssh-mcp install [claude-code|claude-desktop] [options]',
+  '',
+  '클라이언트를 생략하고 터미널에서 실행하면 목록에서 고를 수 있습니다',
+  '(↑↓ 이동, 숫자 즉시 선택, Enter 확정). 터미널이 아니면 사용법 오류로 끝냅니다.',
   '',
   'Options:',
   '  --name <name>                 등록할 MCP 서버 이름 (기본 ssh-mcp)',
@@ -79,7 +87,8 @@ export const USAGE = [
 ].join('\n');
 
 export interface InstallArgs {
-  client: InstallClient;
+  /** null when no client was named: a terminal is asked, anything else is a usage error. */
+  client: InstallClient | null;
   name: string;
   /** null when `--scope` was absent: the scope is settled later, by asking. */
   scope: ClaudeCodeScope | null;
@@ -218,26 +227,44 @@ export function parseInstallArgs(
     }
   }
 
-  if (positional.length === 0) {
-    return { ok: false, message: `install needs a client: ${INSTALL_CLIENTS.join(' | ')}` };
-  }
   if (positional.length > 1) {
     return { ok: false, message: `unexpected extra argument: ${positional[1] ?? ''}` };
   }
 
-  const client = positional[0] ?? '';
-  if (!isInstallClient(client)) {
-    return {
-      ok: false,
-      message: `unknown client "${client}": expected ${INSTALL_CLIENTS.join(' or ')}`,
-    };
+  // No client is not an error here: a terminal gets asked which one. The
+  // caller turns "absent and cannot ask" into the usage error.
+  let client: InstallClient | null = null;
+  if (positional.length === 1) {
+    const raw = positional[0] ?? '';
+    if (!isInstallClient(raw)) {
+      return {
+        ok: false,
+        message: `unknown client "${raw}": expected ${INSTALL_CLIENTS.join(' or ')}`,
+      };
+    }
+    client = raw;
   }
 
+  // A client-specific flag with no client is rejected rather than deferred:
+  // the menu would then have to refuse the other option, which is a worse place
+  // to discover the mistake than the command line.
   if (scope !== null && client !== 'claude-code') {
-    return { ok: false, message: '--scope는 claude-code 전용입니다' };
+    return {
+      ok: false,
+      message:
+        client === null
+          ? '--scope를 쓰려면 클라이언트를 함께 지정하세요: install claude-code --scope ...'
+          : '--scope는 claude-code 전용입니다',
+    };
   }
   if (configPath !== null && client !== 'claude-desktop') {
-    return { ok: false, message: '--config는 claude-desktop 전용입니다' };
+    return {
+      ok: false,
+      message:
+        client === null
+          ? '--config를 쓰려면 클라이언트를 함께 지정하세요: install claude-desktop --config ...'
+          : '--config는 claude-desktop 전용입니다',
+    };
   }
 
   return {
@@ -266,6 +293,17 @@ export interface InstallDeps {
    * `claude-desktop` path never touches it, because Desktop has no scopes.
    */
   prompter?: Prompter;
+  /**
+   * Keystrokes for the arrow-key menus. `null` means this terminal cannot draw
+   * one, which is also what `terminalKeySource()` returns off a TTY. Injected so
+   * tests script a menu without a terminal.
+   */
+  keys?: KeySource | null;
+  /** Terminal width for the menus; injected so a test can describe a narrow window. */
+  columns?: () => number;
+  /** Client detection for the menu hints; injected so tests describe a machine. */
+  detectCode?: ClientDetector;
+  detectDesktop?: ClientDetector;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -273,6 +311,75 @@ export interface InstallDeps {
   cwd?: () => string;
   now?: () => Date;
   packageName?: string;
+}
+
+/** What the client menu can answer. `both` runs Claude Code and then Desktop. */
+export type ClientChoice = InstallClient | 'both';
+
+/**
+ * Build the client menu, with a hint per row saying whether it was detected.
+ * Paths are shortened to `~/...`: a detected install is often deep enough to
+ * push the row past the window width on its own.
+ */
+export function clientMenuOptions(
+  code: Detection,
+  desktop: Detection,
+  home = ''
+): MenuOptions<ClientChoice> {
+  return {
+    title: '어느 클라이언트에 등록할까요?',
+    items: [
+      {
+        value: 'claude-code',
+        label: 'Claude Code   ',
+        hint: code.found
+          ? `claude 감지됨: ${shortenHome(code.where, home)}`
+          : '감지되지 않음: PATH에 claude 없음',
+      },
+      {
+        value: 'claude-desktop',
+        label: 'Claude Desktop',
+        hint: desktop.found
+          ? `설정 폴더 감지됨: ${shortenHome(desktop.where, home)}`
+          : // `where` carries the reason when there is a more useful one than
+            // "missing" — inside WSL the config simply lives on the other side.
+            desktop.where === ''
+            ? '감지되지 않음'
+            : desktop.where,
+      },
+      { value: 'both', label: '둘 다', hint: '위 두 가지를 차례로 등록합니다' },
+    ],
+    preselect: 0,
+  };
+}
+
+/**
+ * The same question as plain text, for a terminal that cannot draw the menu
+ * (`TERM=dumb`, or stderr redirected while stdin is still a terminal).
+ * Refusing to ask would be worse than asking in a plainer way.
+ */
+async function askClientAsText(
+  prompter: Prompter,
+  options: MenuOptions<ClientChoice>
+): Promise<ClientChoice> {
+  prompter.writeLine('');
+  prompter.writeLine('어느 클라이언트에 등록할까요?');
+  for (const [index, item] of options.items.entries()) {
+    const hint = item.hint === undefined ? '' : `  (${item.hint})`;
+    prompter.writeLine(`  ${String(index + 1)}) ${item.label.trim()}${hint}`);
+  }
+  const values = options.items.map((item) => item.value);
+  const answer = await promptChoice('선택 [1/2/3, Enter=1]: ', values, prompter, 3, {
+    defaultValue: values[0] ?? 'claude-code',
+    caseInsensitive: true,
+    aliases: {
+      'claude-code': ['1'],
+      'claude-desktop': ['2'],
+      both: ['3'],
+    },
+    invalidMessage: '1, 2, 3 중 하나를 입력하세요.',
+  });
+  return (values.find((value) => value === answer) ?? 'claude-code') as ClientChoice;
 }
 
 /**
@@ -298,10 +405,51 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
   }
 
   const args = parsed.args;
+  const prompter = deps.prompter ?? processPrompter();
+  const env = deps.env ?? process.env;
+  const homedir = deps.homedir ?? ((): string => os.homedir());
+  const keys = deps.keys !== undefined ? deps.keys : terminalKeySource();
+  const menu: MenuIo | null =
+    keys === null
+      ? null
+      : { write, keys, columns: deps.columns ?? ((): number => terminalColumns()) };
 
-  if (args.client === 'claude-desktop') {
-    // Desktop has no scopes, so the prompter is never consulted on this path.
-    const ok = installClaudeDesktop({
+  let choice: ClientChoice | null = args.client;
+  if (choice === null) {
+    if (!prompter.interactive) {
+      // Guessing which client somebody meant is exactly the kind of help that
+      // registers the server in the wrong place, so a script gets a usage error.
+      write('ssh-mcp install: 등록할 클라이언트를 지정하세요.');
+      write('  npx @get-bot/ssh-mcp install claude-code');
+      write('  npx @get-bot/ssh-mcp install claude-desktop');
+      write('터미널에서 인자 없이 실행하면 목록에서 고를 수 있습니다.');
+      write('');
+      write(USAGE);
+      return EXIT_USAGE;
+    }
+    const detectOptions = { platform, env, homedir };
+    const detect = {
+      code: (deps.detectCode ?? detectClaudeCode)(detectOptions),
+      desktop: (deps.detectDesktop ?? detectClaudeDesktop)(detectOptions),
+    };
+    const question = clientMenuOptions(detect.code, detect.desktop, homedir());
+    try {
+      choice =
+        menu === null
+          ? await askClientAsText(prompter, question)
+          : await promptMenu(menu, question);
+    } catch (error) {
+      if (error instanceof PromptAbortedError) {
+        write('ssh-mcp install: 클라이언트를 선택하지 않았습니다. 아무것도 등록하지 않았습니다.');
+      } else {
+        write(`ssh-mcp install: 클라이언트 선택이 중단되었습니다 (${errorMessage(error)}).`);
+      }
+      return EXIT_FAILED;
+    }
+  }
+
+  const runDesktop = (): boolean =>
+    installClaudeDesktop({
       name: args.name,
       home: args.home,
       configPath: args.configPath,
@@ -309,12 +457,15 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
       dryRun: args.dryRun,
       platform,
       packageName,
-      env: deps.env ?? process.env,
-      homedir: deps.homedir ?? ((): string => os.homedir()),
+      env,
+      homedir,
       now: deps.now ?? ((): Date => new Date()),
       write,
     });
-    return ok ? EXIT_OK : EXIT_FAILED;
+
+  if (choice === 'claude-desktop') {
+    // Desktop has no scopes, so neither the menu nor the prompter is consulted.
+    return runDesktop() ? EXIT_OK : EXIT_FAILED;
   }
 
   const workingDir = cwd();
@@ -322,13 +473,14 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
   // actually use rather than a guess.
   const scope = await resolveScope({
     requested: args.scope,
-    prompter: deps.prompter ?? processPrompter(),
+    prompter,
+    menu,
     cwd: workingDir,
     write,
   });
   if (scope === null) return EXIT_FAILED;
 
-  const ok = installClaudeCode({
+  const codeOk = installClaudeCode({
     name: args.name,
     scope,
     cwd: workingDir,
@@ -341,5 +493,16 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
     write,
   });
 
-  return ok ? EXIT_OK : EXIT_FAILED;
+  if (choice === 'claude-code') return codeOk ? EXIT_OK : EXIT_FAILED;
+
+  // "both": Desktop runs even when Claude Code failed, because the two
+  // registrations are independent and a half-finished setup is worse than a
+  // reported one. The summary says what actually happened.
+  write('');
+  const desktopOk = runDesktop();
+  write('');
+  write(
+    `Claude Code: ${codeOk ? '등록 완료' : '실패'} / Claude Desktop: ${desktopOk ? '등록 완료' : '실패'}`
+  );
+  return codeOk && desktopOk ? EXIT_OK : EXIT_FAILED;
 }

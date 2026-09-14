@@ -23,6 +23,8 @@
  * rest of `install/`.
  */
 import { errorMessage } from '../internal/util.js';
+import { promptMenu } from '../setup/menu.js';
+import type { MenuIo } from '../setup/menu.js';
 import { DEFAULT_CHOICE_ATTEMPTS, PromptAbortedError, promptChoice } from '../setup/prompt.js';
 import type { Prompter } from '../setup/prompt.js';
 
@@ -78,10 +80,36 @@ export function scopeMeaning(scope: ClaudeCodeScope, cwd: string): string {
   }
 }
 
+/** The menu form of the same question. `local` is preselected, as it is the default. */
+export function scopeMenuOptions(cwd: string): {
+  title: string;
+  items: { value: ClaudeCodeScope; label: string; hint: string }[];
+  preselect: number;
+} {
+  return {
+    title: 'Claude Code 어디에 등록할까요?',
+    items: [
+      {
+        value: 'local',
+        label: '이 프로젝트만 (local)',
+        hint: `${cwd} 에서 연 Claude Code에만 보입니다. Claude Code의 기본값입니다`,
+      },
+      { value: 'user', label: '모든 프로젝트 (user)', hint: '어느 디렉터리에서 열어도 보입니다' },
+    ],
+    preselect: 0,
+  };
+}
+
+function isScope(value: string): value is ClaudeCodeScope {
+  return (CLAUDE_CODE_SCOPES as readonly string[]).includes(value);
+}
+
 export interface ResolveScopeOptions {
   /** The `--scope` value, or null when the flag was absent. */
   requested: ClaudeCodeScope | null;
   prompter: Prompter;
+  /** The arrow-key menu, or null when this terminal cannot draw one. */
+  menu: MenuIo | null;
   /** Absolute working directory — what `local` would bind to. */
   cwd: string;
   write: (text: string) => void;
@@ -90,6 +118,10 @@ export interface ResolveScopeOptions {
 /**
  * Settle on a scope. Returns null when the user was asked and gave no usable
  * answer, in which case the caller must register nothing.
+ *
+ * Three paths, in order of how good the terminal is: the menu when one can be
+ * drawn, the typed question when stdin is a terminal but stderr is not, and the
+ * documented `local` default plus one explanatory line when neither is true.
  */
 export async function resolveScope(options: ResolveScopeOptions): Promise<ClaudeCodeScope | null> {
   if (options.requested !== null) return options.requested;
@@ -100,6 +132,9 @@ export async function resolveScope(options: ResolveScopeOptions): Promise<Claude
   }
 
   try {
+    if (options.menu !== null) {
+      return await promptMenu(options.menu, scopeMenuOptions(options.cwd));
+    }
     const answer = await promptChoice(
       buildScopePrompt(options.cwd),
       OFFERED_SCOPES,
@@ -112,7 +147,7 @@ export async function resolveScope(options: ResolveScopeOptions): Promise<Claude
         invalidMessage: '1 또는 2를 입력하세요.',
       }
     );
-    return answer === 'user' ? 'user' : DEFAULT_CLAUDE_CODE_SCOPE;
+    return isScope(answer) ? answer : DEFAULT_CLAUDE_CODE_SCOPE;
   } catch (error) {
     if (error instanceof PromptAbortedError) {
       options.write('');

@@ -100,7 +100,7 @@ const ALTERNATIVES: Readonly<Record<string, readonly string[]>> = {
   systemctl: [
     'upload a drop-in to /etc/systemd/system/<unit>.d/override.conf, then systemctl daemon-reload',
   ],
-  ssh: ['register the second host with `ssh-mcp setup` and call exec against it directly'],
+  ssh: ['register the second host with `ssh-mcp host add` and call exec against it directly'],
 };
 
 function hasFlag(args: readonly Token[], flags: readonly string[]): boolean {

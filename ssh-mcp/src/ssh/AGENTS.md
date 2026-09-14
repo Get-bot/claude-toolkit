@@ -9,16 +9,17 @@ SSH/SFTP 전송 계층입니다. 호스트 alias별로 ssh2 `Client` 하나를 �
 
 ## Key Files
 
-| File             | Description                                                                                                                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `error.ts`       | `SshOperationError extends CodedError` — 이 계층의 오류 운반자. 상위 래퍼는 `CodedError`만 보면 되고 ssh2의 메시지를 문자열 매칭하지 않습니다.                                                        |
-| `fingerprint.ts` | `sha256Fingerprint(blob)`가 `ssh-keygen -lf`와 동일한 `SHA256:` 표기를 만듭니다. `parseAuthorizedKeyLine()`, `publicKeyBlobFromOpenSsh()`, `fingerprintsMatch()`.                                     |
-| `pool.ts`        | alias당 `Client` 1개. `getConnection(host, privateKey)`, `closeConnection()`, `closeAll()`, `configurePool()`. 유휴 10분 후 종료, 핸드셰이크 예산 15초. `hostVerifier`에서 지문 핀을 강제합니다.      |
-| `exec.ts`        | `execOnce()` — `{ pty: false }`로 채널을 열고 stdin을 즉시 닫습니다. `hasTrailingBackground()`로 후행 `&`를 감지합니다.                                                                               |
-| `session.ts`     | 상태 유지 셸 세션. `openSession()`, `runInSession()`, `closeSession()`, `lookupSession()`, `resetSessions()`. 마커 프레이밍(`deriveMarker`, `buildCommandFrame`, `createMarkerScanner`)이 핵심입니다. |
-| `shellDetect.ts` | 원격 셸 감지와 프리앰블. `SHELL_PROBE_COMMAND`, `classifyShellProbe()`, `buildCapabilityProbe()`/`parseCapabilityProbe()`, `SHELL_PREAMBLE`, `unsupportedShellVerdict()`.                             |
-| `excerpt.ts`     | 출력 발췌 누산기. `createExcerptAccumulator()`, `excerpt()`, `computeBudgets()`, `omissionMarkerLine()`. 비-UTF-8 스트림은 base64 바이트 슬라이스 경로를 탑니다.                                      |
-| `sftp.ts`        | `upload()` / `download()`. `fastPut`/`fastGet` 기반. `assertNotSymlink()`로 로컬 심볼릭 링크 거부(F16), `MAX_DOWNLOAD_BYTES = 256 MiB`, 실측 `overwritten` 반환.                                      |
+| File             | Description                                                                                                                                                                                                                                    |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `error.ts`       | `SshOperationError extends CodedError` — 이 계층의 오류 운반자. 상위 래퍼는 `CodedError`만 보면 되고 ssh2의 메시지를 문자열 매칭하지 않습니다.                                                                                                 |
+| `fingerprint.ts` | `sha256Fingerprint(blob)`가 `ssh-keygen -lf`와 동일한 `SHA256:` 표기를 만듭니다. `parseAuthorizedKeyLine()`, `publicKeyBlobFromOpenSsh()`, `fingerprintsMatch()`.                                                                              |
+| `pool.ts`        | alias당 `Client` 1개. `getConnection(host, privateKey)`, `closeConnection()`, `closeAll()`, `configurePool()`. 유휴 10분 후 종료, 핸드셰이크 예산 15초. `hostVerifier`에서 지문 핀을 강제합니다.                                               |
+| `exec.ts`        | `execOnce()` — `{ pty: false }`로 채널을 열고 stdin을 즉시 닫습니다. `hasTrailingBackground()`로 후행 `&`를 감지합니다.                                                                                                                        |
+| `session.ts`     | 상태 유지 셸 세션. `openSession()`, `runInSession()`, `closeSession()`, `lookupSession()`, `resetSessions()`. 마커 프레이밍(`deriveMarker`, `buildCommandFrame`, `createMarkerScanner`)이 핵심입니다.                                          |
+| `shellDetect.ts` | 원격 셸 감지와 프리앰블. `SHELL_PROBE_COMMAND`, `classifyShellProbe()`, `buildCapabilityProbe()`/`parseCapabilityProbe()`, `SHELL_PREAMBLE`, `unsupportedShellVerdict()`.                                                                      |
+| `excerpt.ts`     | 출력 발췌 누산기. `createExcerptAccumulator()`, `excerpt()`, `computeBudgets()`, `omissionMarkerLine()`. 비-UTF-8 스트림은 base64 바이트 슬라이스 경로를 탑니다.                                                                               |
+| `reach.ts`       | TCP 도달 확인. `probeTcp(host, port, timeoutMs?, lookup?)`, `describeReachFailure()`, `REACH_TIMEOUT_MS`, `TcpProbe`/`Lookup` 타입. **SSH 핸드셰이크를 하지 않습니다** — `host add`가 비밀번호·키 생성 앞에 "닿기는 하는가"만 묻는 용도입니다. |
+| `sftp.ts`        | `upload()` / `download()`. `fastPut`/`fastGet` 기반. `assertNotSymlink()`로 로컬 심볼릭 링크 거부(F16), `MAX_DOWNLOAD_BYTES = 256 MiB`, 실측 `overwritten` 반환.                                                                               |
 
 ## Data flow
 
@@ -58,6 +59,7 @@ SSH/SFTP 전송 계층입니다. 호스트 alias별로 ssh2 `Client` 하나를 �
 | `tests/unit/markerFraming.test.ts`                                                                                        | 세션 프레임과 마커 스캐너                  |
 | `tests/unit/shellDetect.test.ts`                                                                                          | 셸 감지와 capability 프로브                |
 | `tests/unit/fingerprint.test.ts`                                                                                          | 지문 계산과 `authorized_keys` 파싱         |
+| `tests/unit/reach.test.ts`                                                                                                | TCP 도달 확인과 오류 코드 번역             |
 | `tests/integration/exec.test.ts`, `session.test.ts`, `sftp.test.ts`, `transfer.test.ts`, `auth.test.ts`, `output.test.ts` | 인프로세스 ssh2 서버 픽스처 상대의 전 경로 |
 
 ```bash
@@ -81,6 +83,6 @@ npm run test:integration    # ENDPOINT=fixture 기본
 ### External
 
 - `ssh2` (`Client`, `ConnectConfig`, `SFTPWrapper`, `utils.parseKey`)
-- Node 빌트인: `node:crypto`, `node:fs`, `node:path`
+- Node 빌트인: `node:crypto`, `node:fs`, `node:net`(`reach.ts`), `node:path`
 
 <!-- MANUAL: -->

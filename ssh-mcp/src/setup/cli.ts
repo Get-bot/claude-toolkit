@@ -1,5 +1,6 @@
 /**
- * `ssh-mcp setup <alias> <user@host[:port]>` (plan rows 5.1-5.9).
+ * `ssh-mcp host add <alias> <user@host[:port]>` (plan rows 5.1-5.9), still
+ * reachable as `ssh-mcp setup` — see `../host/cli.ts` for why the alias stays.
  *
  * The whole command exists so that one password is typed once, in a terminal,
  * by a human - and never again. Two rules are load-bearing:
@@ -32,6 +33,11 @@ import * as store from '../config/store.js';
 import { ERROR_CODES, isCodedError } from '../errors.js';
 import { formatSnippets } from '../doctor/checks.js';
 import { sha256Fingerprint } from '../ssh/fingerprint.js';
+import { probeTcp as defaultProbeTcp } from '../ssh/reach.js';
+import type { TcpProbe } from '../ssh/reach.js';
+import { terminalColumns, terminalKeySource } from './menu.js';
+import type { KeySource } from './menu.js';
+import { runSetupWizard } from './wizard.js';
 import { backupKeyPair, generateKeyPair, restoreKeyPair } from './keygen.js';
 import type { GeneratedKeyPair, KeyPairBackup } from './keygen.js';
 import { installAuthorizedKey } from './install.js';
@@ -70,6 +76,16 @@ export const EXIT_NOT_INTERACTIVE = 2;
 export const VERIFY_COMMAND = 'echo ssh-mcp-ok';
 const VERIFY_MARKER = 'ssh-mcp-ok';
 
+/**
+ * Characters refused in a --label value.
+ *
+ * The label is echoed by `host list` and returned by the `list_hosts` tool, so
+ * an escape sequence stored here would move somebody else's cursor much later,
+ * far from where it was typed.
+ */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const LABEL_CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
+
 /** Handshake budget for the non-interactive verification reconnect. */
 const VERIFY_READY_TIMEOUT_MS = 20_000;
 
@@ -97,7 +113,11 @@ export const APPROVAL_FALLBACK_EXPLANATION = [
 export const APPROVAL_FALLBACK_QUESTION = '선택 [token / fail-closed]: ';
 
 export const USAGE = [
-  'Usage: ssh-mcp setup <alias> <user@host[:port]> [options]',
+  'Usage: ssh-mcp host add [<alias> <user@host[:port]>] [options]',
+  '',
+  '인자 없이 터미널에서 실행하면 호스트 주소·사용자명·포트·alias·승인 모드를',
+  '하나씩 물어봅니다. 인자를 주면 지금까지처럼 묻지 않고 바로 진행합니다.',
+  '`ssh-mcp setup`은 이 명령의 별칭으로 계속 동작합니다.',
   '',
   'Options:',
   '  --approval-fallback <token|fail-closed>  승인 폴백을 미리 정해 프롬프트를 건너뜁니다.',
@@ -106,7 +126,7 @@ export const USAGE = [
   '  --force                                  기존 alias를 다시 설정합니다 (지문 재확인 필요).',
   '  -h, --help                               이 도움말을 출력합니다.',
   '',
-  'setup은 비밀번호를 직접 입력받으므로 항상 터미널(TTY)에서 실행해야 합니다.',
+  '이 명령은 비밀번호를 직접 입력받으므로 항상 터미널(TTY)에서 실행해야 합니다.',
 ].join('\n');
 
 export interface SetupArgs {
@@ -123,7 +143,11 @@ export interface SetupArgs {
 export type ParsedArgs =
   | { ok: true; help: false; args: SetupArgs }
   | { ok: true; help: true }
-  | { ok: false; message: string };
+  /**
+   * `missingPositionals` marks the one failure the wizard can fix: neither
+   * argument was given at all. One of two is a typo, not a request to be asked.
+   */
+  | { ok: false; message: string; missingPositionals?: boolean };
 
 function isApprovalMode(value: string): value is ApprovalMode {
   return (APPROVAL_MODES as readonly string[]).includes(value);
@@ -221,6 +245,11 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
         if (value.length > 128) {
           return { ok: false, message: '--label must be at most 128 characters' };
         }
+        // The label is printed back by `host list` and by the `list_hosts`
+        // tool; an escape sequence in it would rewrite a terminal later.
+        if (LABEL_CONTROL_CHARS.test(value)) {
+          return { ok: false, message: '--label must not contain control characters' };
+        }
         label = value;
         break;
       }
@@ -234,7 +263,11 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
   }
 
   if (positional.length < 2) {
-    return { ok: false, message: 'setup needs both <alias> and <user@host[:port]>' };
+    return {
+      ok: false,
+      message: 'host add needs both <alias> and <user@host[:port]>',
+      ...(positional.length === 0 ? { missingPositionals: true } : {}),
+    };
   }
   if (positional.length > 2) {
     return { ok: false, message: `unexpected extra argument: ${positional[2] ?? ''}` };
@@ -332,6 +365,15 @@ export interface SetupDeps {
   connect?: Connector;
   icacls?: IcaclsRunner;
   now?: () => Date;
+  /**
+   * Keystrokes for the wizard's approval-mode menu. `null` means this terminal
+   * cannot draw one, and the wizard falls back to a numbered text question.
+   */
+  keys?: KeySource | null;
+  /** Terminal width for the wizard's menu; injected so a test can narrow it. */
+  columns?: () => number;
+  /** TCP reachability check run before the password; injected so tests need no network. */
+  probeTcp?: TcpProbe;
 }
 
 /** Read the `ssh-<algo>` name out of a raw SSH public key blob. */
@@ -397,23 +439,76 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     prompter.write(`${text}\n`);
   };
 
-  const parsed = parseSetupArgs(argv);
+  const probeTcp = deps.probeTcp ?? defaultProbeTcp;
+  /** The wizard already proved the address answers; do not connect twice. */
+  let addressVerified = false;
+
+  let parsed = parseSetupArgs(argv);
   if (parsed.ok && parsed.help) {
     err(USAGE);
     return EXIT_OK;
   }
+
+  // Nothing was given and we are in a terminal: collect the same arguments by
+  // asking, then re-parse. Everything downstream sees an ordinary command line.
+  if (!parsed.ok && parsed.missingPositionals === true && prompter.interactive) {
+    const registry = store.load();
+    if (!registry.ok) {
+      err(`ssh-mcp host add: ${registry.message}`);
+      err('hosts.json을 고친 뒤 다시 실행하세요. setup은 깨진 파일을 덮어쓰지 않습니다.');
+      return EXIT_FAILED;
+    }
+    try {
+      const keys = deps.keys !== undefined ? deps.keys : terminalKeySource();
+      const extra = await runSetupWizard({
+        prompter,
+        menu:
+          keys === null
+            ? null
+            : {
+                write: (text) => prompter.write(text),
+                keys,
+                columns: deps.columns ?? ((): number => terminalColumns()),
+              },
+        takenAliases: new Set(Object.keys(registry.file.hosts)),
+        given: {
+          approvalMode: argv.includes('--approval-mode'),
+          label: argv.includes('--label'),
+        },
+        probeTcp,
+      });
+      addressVerified = true;
+      parsed = parseSetupArgs([...argv, ...extra]);
+    } catch (error) {
+      if (error instanceof PromptAbortedError) {
+        err('');
+        err('ssh-mcp host add: 입력이 중단되었습니다. 아무것도 기록하지 않고 종료합니다.');
+      } else {
+        err(`ssh-mcp host add: 입력 중 오류가 발생했습니다 (${errorMessage(error)}).`);
+      }
+      return EXIT_FAILED;
+    }
+  }
+
   if (!parsed.ok) {
-    err(`ssh-mcp setup: ${parsed.message}`);
+    err(`ssh-mcp host add: ${parsed.message}`);
     err('');
     err(USAGE);
     return EXIT_NOT_INTERACTIVE;
+  }
+  if (parsed.help) {
+    // Not reachable: `--help` returned above and the wizard only appends
+    // positionals and value flags. Kept because it is also how the compiler
+    // narrows `parsed` to the variant that carries `args`.
+    err(USAGE);
+    return EXIT_OK;
   }
   const args = parsed.args;
 
   // Step 1: the registry must be readable, and an existing alias needs --force.
   const loaded = store.load();
   if (!loaded.ok) {
-    err(`ssh-mcp setup: ${loaded.message}`);
+    err(`ssh-mcp host add: ${loaded.message}`);
     for (const issue of loaded.issues) err(`  - ${issue.path}: ${issue.message}`);
     err('hosts.json을 고친 뒤 다시 실행하세요. setup은 깨진 파일을 덮어쓰지 않습니다.');
     return EXIT_FAILED;
@@ -421,7 +516,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   const existing = loaded.file.hosts[args.alias];
   if (existing !== undefined && !args.force) {
     err(
-      `ssh-mcp setup: ${ERROR_CODES.alias_exists}: "${args.alias}"는 이미 등록되어 있습니다 ` +
+      `ssh-mcp host add: ${ERROR_CODES.alias_exists}: "${args.alias}"는 이미 등록되어 있습니다 ` +
         `(${existing.user}@${existing.hostname}:${String(existing.port)}).`
     );
     err('다시 설정하려면 --force를 붙이세요. 호스트 키 지문을 다시 확인하게 됩니다.');
@@ -429,7 +524,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   }
   if (args.force && !prompter.interactive) {
     err(
-      'ssh-mcp setup: --force는 호스트 키 지문을 다시 고정하므로 사람 확인이 필수입니다. ' +
+      'ssh-mcp host add: --force는 호스트 키 지문을 다시 고정하므로 사람 확인이 필수입니다. ' +
         '터미널에서 실행하세요.'
     );
     return EXIT_NOT_INTERACTIVE;
@@ -438,7 +533,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   // Step 2: the password. This is the reason setup always needs a TTY (D5).
   if (!prompter.interactive) {
     err(
-      'ssh-mcp setup: 비밀번호를 입력받아야 하므로 stdin이 터미널이어야 합니다. ' +
+      'ssh-mcp host add: 비밀번호를 입력받아야 하므로 stdin이 터미널이어야 합니다. ' +
         '파이프로 비밀번호를 넘기면 셸 히스토리와 CI 로그에 남기 때문에 지원하지 않습니다.'
     );
     err('키 파일과 hosts.json에 아무것도 쓰지 않고 종료합니다.');
@@ -449,6 +544,20 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     `호스트 "${args.alias}" 설정을 시작합니다: ${args.user}@${args.hostname}:${String(args.port)}`
   );
 
+  // Before the password, the ACL pass and the key pair: a wrong address should
+  // cost a second, not all of that. Stops at the TCP handshake — the host key
+  // and the password still travel through the confirmed path below.
+  if (!addressVerified) {
+    err(`연결 확인 중: ${args.hostname}:${String(args.port)} …`);
+    const reach = await probeTcp(args.hostname, args.port);
+    if (!reach.ok) {
+      err(`ssh-mcp host add: ${ERROR_CODES.connection_failed}: ${reach.reason}`);
+      err('주소와 포트를 확인한 뒤 다시 실행하세요. 아무것도 기록하지 않았습니다.');
+      return EXIT_FAILED;
+    }
+    err('연결 확인: OK');
+  }
+
   // Declared without an initialiser: every path out of the catch below returns,
   // so the only way past it is with the password assigned. The bytes are wiped
   // with `fill(0)` both mid-flow and in the finally; zeroing twice is harmless,
@@ -458,15 +567,15 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     password = await promptPassword(`${args.user}@${args.hostname} 비밀번호: `, prompter);
   } catch (error) {
     if (error instanceof NonInteractiveError) {
-      err(`ssh-mcp setup: ${error.message}`);
+      err(`ssh-mcp host add: ${error.message}`);
       return EXIT_NOT_INTERACTIVE;
     }
-    err(`ssh-mcp setup: 비밀번호 입력이 중단되었습니다 (${errorMessage(error)}).`);
+    err(`ssh-mcp host add: 비밀번호 입력이 중단되었습니다 (${errorMessage(error)}).`);
     return EXIT_FAILED;
   }
   if (password.length === 0) {
     password.fill(0);
-    err('ssh-mcp setup: 빈 비밀번호로는 진행할 수 없습니다. 아무것도 기록하지 않고 종료합니다.');
+    err('ssh-mcp host add: 빈 비밀번호로는 진행할 수 없습니다. 아무것도 기록하지 않고 종료합니다.');
     return EXIT_FAILED;
   }
 
@@ -493,7 +602,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       }
     } catch (error) {
       err(
-        `ssh-mcp setup: Windows ACL 하드닝에 실패했습니다 (${errorMessage(error)}). ` +
+        `ssh-mcp host add: Windows ACL 하드닝에 실패했습니다 (${errorMessage(error)}). ` +
           '암호 없는 개인키를 보호할 수 없으므로 키를 만들지 않고 중단합니다.'
       );
       return EXIT_FAILED;
@@ -547,17 +656,21 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       });
     } catch (error) {
       if (seen.promptError !== null) {
-        err(`ssh-mcp setup: 호스트 키 확인이 중단되었습니다 (${errorMessage(seen.promptError)}).`);
+        err(
+          `ssh-mcp host add: 호스트 키 확인이 중단되었습니다 (${errorMessage(seen.promptError)}).`
+        );
       } else if (seen.refused) {
-        err('ssh-mcp setup: 호스트 키를 승인하지 않았습니다. 아무것도 기록하지 않고 종료합니다.');
+        err(
+          'ssh-mcp host add: 호스트 키를 승인하지 않았습니다. 아무것도 기록하지 않고 종료합니다.'
+        );
       } else if (seen.hostKey === null) {
         err(
-          `ssh-mcp setup: ${ERROR_CODES.connection_failed}: ` +
+          `ssh-mcp host add: ${ERROR_CODES.connection_failed}: ` +
             `${args.hostname}:${String(args.port)}에 연결할 수 없습니다 (${errorMessage(error)}).`
         );
       } else {
         err(
-          `ssh-mcp setup: ${ERROR_CODES.auth_failed}: 비밀번호 인증에 실패했습니다 (${errorMessage(error)}).`
+          `ssh-mcp host add: ${ERROR_CODES.auth_failed}: 비밀번호 인증에 실패했습니다 (${errorMessage(error)}).`
         );
       }
       return EXIT_FAILED;
@@ -565,7 +678,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
 
     const confirmed = seen.hostKey;
     if (confirmed === null) {
-      err('ssh-mcp setup: 호스트 키를 확인할 수 없었습니다. 아무것도 기록하지 않고 종료합니다.');
+      err('ssh-mcp host add: 호스트 키를 확인할 수 없었습니다. 아무것도 기록하지 않고 종료합니다.');
       return EXIT_FAILED;
     }
 
@@ -599,7 +712,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       });
     } catch (error) {
       err(
-        `ssh-mcp setup: 키 전용 재접속 검증에 실패했습니다 (${errorMessage(error)}). ` +
+        `ssh-mcp host add: 키 전용 재접속 검증에 실패했습니다 (${errorMessage(error)}). ` +
           'hosts.json에 아무것도 기록하지 않고 키 파일을 되돌립니다.'
       );
       return EXIT_FAILED;
@@ -610,7 +723,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     verifyConnection = null;
     if (check.exitCode !== 0 || !check.stdout.includes(VERIFY_MARKER)) {
       err(
-        `ssh-mcp setup: 검증 명령이 기대한 결과를 내지 않았습니다 ` +
+        `ssh-mcp host add: 검증 명령이 기대한 결과를 내지 않았습니다 ` +
           `(exit=${check.exitCode === null ? 'null' : String(check.exitCode)}). ` +
           'hosts.json에 아무것도 기록하지 않습니다.'
       );
@@ -637,11 +750,11 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
         if (error instanceof PromptAbortedError) {
           err('');
           err(
-            'ssh-mcp setup: 승인 폴백을 선택하지 않았습니다. 기본값은 없으므로 ' +
+            'ssh-mcp host add: 승인 폴백을 선택하지 않았습니다. 기본값은 없으므로 ' +
               'hosts.json에 아무것도 기록하지 않고 종료합니다.'
           );
         } else {
-          err(`ssh-mcp setup: 승인 폴백 선택이 중단되었습니다 (${errorMessage(error)}).`);
+          err(`ssh-mcp host add: 승인 폴백 선택이 중단되었습니다 (${errorMessage(error)}).`);
         }
         return EXIT_FAILED;
       }
@@ -694,9 +807,9 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     // gives up with `internal_error` when ssh2 keeps returning broken pairs);
     // anything else is genuinely unexpected.
     if (isCodedError(error)) {
-      err(`ssh-mcp setup: ${error.code}: ${error.message}`);
+      err(`ssh-mcp host add: ${error.code}: ${error.message}`);
     } else {
-      err(`ssh-mcp setup: 예기치 않은 오류로 중단합니다 (${errorMessage(error)}).`);
+      err(`ssh-mcp host add: 예기치 않은 오류로 중단합니다 (${errorMessage(error)}).`);
     }
     return EXIT_FAILED;
   } finally {
