@@ -40,14 +40,22 @@ export interface HostDeps extends SetupDeps, HostListDeps {}
 /** Route `host <sub-command>`. Returns the process exit code. */
 export async function runHost(argv: readonly string[], deps: HostDeps = {}): Promise<number> {
   const err = deps.err ?? ((text: string): void => void process.stderr.write(`${text}\n`));
+  const out = deps.out ?? ((text: string): void => void process.stdout.write(`${text}\n`));
   const sub = argv[0];
 
   if (sub === 'add') return runSetup([...argv.slice(1)], deps);
   if (sub === 'list') return runHostList(argv.slice(1), deps);
 
-  if (sub === undefined || sub === '-h' || sub === '--help') {
+  // Help that was asked for is not an error, so it goes to stdout — the same
+  // split `host list` already makes. No sub-command at all *is* a usage error,
+  // so that one keeps stderr and exit 2.
+  if (sub === '-h' || sub === '--help') {
+    out(USAGE);
+    return EXIT_OK;
+  }
+  if (sub === undefined) {
     err(USAGE);
-    return sub === undefined ? EXIT_USAGE : EXIT_OK;
+    return EXIT_USAGE;
   }
 
   err(`ssh-mcp host: unknown sub-command "${sub}": expected ${HOST_SUBCOMMANDS.join(' or ')}`);

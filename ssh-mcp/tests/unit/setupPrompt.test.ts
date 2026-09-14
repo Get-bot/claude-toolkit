@@ -172,70 +172,13 @@ describe('promptChoice', () => {
     expect(io.output()).toContain('token 또는 fail-closed');
   });
 
-  it('matches case-sensitively and rejects aliases unless asked otherwise', async () => {
+  it('matches case-sensitively, with no aliases and no relaxations', async () => {
     const io = harness();
     const pending = promptChoice('선택: ', ['token', 'fail-closed'], io.prompter, 2);
     io.send('TOKEN\n');
     io.send('token\n');
     expect(await pending).toBe('token');
     expect(io.output()).toContain('"TOKEN"는 선택할 수 없습니다');
-  });
-});
-
-/**
- * The relaxations exist for `install`'s scope question, which does have a safe
- * default. Each one is opt-in precisely so decision D3 — the approval-fallback
- * question above — keeps behaving as it always has.
- */
-describe('promptChoice options', () => {
-  it('returns defaultValue for an empty line instead of re-asking', async () => {
-    const io = harness();
-    const pending = promptChoice('선택: ', ['local', 'user'], io.prompter, 3, {
-      defaultValue: 'local',
-    });
-    io.send('\n');
-    expect(await pending).toBe('local');
-    expect(io.output()).not.toContain('값을 입력해야 합니다');
-  });
-
-  it('accepts aliases and ignores case when told to', async () => {
-    const io = harness();
-    const pending = promptChoice('선택: ', ['local', 'user'], io.prompter, 3, {
-      caseInsensitive: true,
-      aliases: { local: ['1'], user: ['2'] },
-    });
-    io.send('2\n');
-    expect(await pending).toBe('user');
-
-    const upper = harness();
-    const second = promptChoice('선택: ', ['local', 'user'], upper.prompter, 3, {
-      caseInsensitive: true,
-      aliases: { local: ['1'], user: ['2'] },
-    });
-    upper.send('LOCAL\n');
-    expect(await second).toBe('local');
-  });
-
-  it('replaces the generic rejection sentence with invalidMessage', async () => {
-    const io = harness();
-    const pending = promptChoice('선택: ', ['local', 'user'], io.prompter, 2, {
-      invalidMessage: '1 또는 2를 입력하세요.',
-    });
-    io.send('9\n');
-    io.send('user\n');
-    expect(await pending).toBe('user');
-    expect(io.output()).toContain('1 또는 2를 입력하세요. 남은 기회 1회.');
-    expect(io.output()).not.toContain('선택할 수 없습니다');
-  });
-
-  it('still gives up after the attempt budget even with a default', async () => {
-    const io = harness();
-    const pending = promptChoice('선택: ', ['local', 'user'], io.prompter, 3, {
-      defaultValue: 'local',
-      invalidMessage: '1 또는 2를 입력하세요.',
-    });
-    io.send('a\nb\nc\n');
-    await expect(pending).rejects.toBeInstanceOf(PromptAbortedError);
   });
 });
 

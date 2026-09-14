@@ -36,10 +36,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { PACKAGE_NAME } from '../config/registration.js';
+import { optionValue } from '../internal/argv.js';
 import { errorMessage } from '../internal/util.js';
-import { promptMenu, shortenHome, terminalColumns, terminalKeySource } from '../setup/menu.js';
-import type { KeySource, MenuIo, MenuOptions } from '../setup/menu.js';
-import { PromptAbortedError, processPrompter, promptChoice } from '../setup/prompt.js';
+import { PromptUnavailableError, canPrompt, inquirerAsker } from '../setup/ask.js';
+import type { Asker, SelectQuestion } from '../setup/ask.js';
+import { PromptAbortedError, processPrompter } from '../setup/prompt.js';
 import type { Prompter } from '../setup/prompt.js';
 import { defaultSpawner, installClaudeCode } from './claudeCode.js';
 import type { Spawner } from './claudeCode.js';
@@ -66,7 +67,7 @@ export const USAGE = [
   'Usage: ssh-mcp install [claude-code|claude-desktop] [options]',
   '',
   '클라이언트를 생략하고 터미널에서 실행하면 목록에서 고를 수 있습니다',
-  '(↑↓ 이동, 숫자 즉시 선택, Enter 확정). 터미널이 아니면 사용법 오류로 끝냅니다.',
+  '(↑↓ 이동, 이름 입력으로 좁히기, Enter 확정). 터미널이 아니면 사용법 오류로 끝냅니다.',
   '',
   'Options:',
   '  --name <name>                 등록할 MCP 서버 이름 (기본 ssh-mcp)',
@@ -122,28 +123,6 @@ function isScope(value: string): value is ClaudeCodeScope {
  * in `config/schema.ts`, which solves the same problem for host aliases.
  */
 const SERVER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
-
-type OptionValue = { ok: true; value: string } | { ok: false; message: string };
-
-/**
- * Read the value that follows a value-taking option.
- *
- * A token starting with `-` is refused rather than consumed. Without this,
- * `install claude-desktop --config <path> --home --dry-run` registers
- * `SSH_MCP_HOME=--dry-run` **and writes the file for real**, because the very
- * flag meant to prevent the write was swallowed as data. Every value-taking
- * flag goes through here so no one has to remember the guard again.
- */
-function optionValue(argv: readonly string[], index: number, flag: string): OptionValue {
-  const value = argv[index];
-  if (value === undefined || value === '') {
-    return { ok: false, message: `${flag} needs a value` };
-  }
-  if (value.startsWith('-')) {
-    return { ok: false, message: `${flag} needs a value, but got the option "${value}"` };
-  }
-  return { ok: true, value };
-}
 
 /**
  * Parse argv.
@@ -294,13 +273,15 @@ export interface InstallDeps {
    */
   prompter?: Prompter;
   /**
-   * Keystrokes for the arrow-key menus. `null` means this terminal cannot draw
-   * one, which is also what `terminalKeySource()` returns off a TTY. Injected so
-   * tests script a menu without a terminal.
+   * The interactive questions. Injected so tests answer them without a
+   * terminal; only the default implementation touches `@inquirer`.
    */
-  keys?: KeySource | null;
-  /** Terminal width for the menus; injected so a test can describe a narrow window. */
-  columns?: () => number;
+  ask?: Asker;
+  /**
+   * Whether this terminal can show a question. Injected so tests describe a
+   * terminal; the default is `canPrompt()` over the real streams.
+   */
+  canAsk?: () => boolean;
   /** Client detection for the menu hints; injected so tests describe a machine. */
   detectCode?: ClientDetector;
   detectDesktop?: ClientDetector;
@@ -317,29 +298,29 @@ export interface InstallDeps {
 export type ClientChoice = InstallClient | 'both';
 
 /**
- * Build the client menu, with a hint per row saying whether it was detected.
- * Paths are shortened to `~/...`: a detected install is often deep enough to
- * push the row past the window width on its own.
+ * The client question, with a line per row saying whether it was detected.
+ * Paths are shortened to `~/...` so a deep install directory does not push the
+ * row off a narrow window.
  */
-export function clientMenuOptions(
+export function clientQuestion(
   code: Detection,
   desktop: Detection,
   home = ''
-): MenuOptions<ClientChoice> {
+): SelectQuestion<ClientChoice> {
   return {
-    title: '어느 클라이언트에 등록할까요?',
-    items: [
+    message: '어느 클라이언트에 등록할까요?',
+    choices: [
       {
         value: 'claude-code',
-        label: 'Claude Code   ',
-        hint: code.found
+        name: 'Claude Code',
+        description: code.found
           ? `claude 감지됨: ${shortenHome(code.where, home)}`
           : '감지되지 않음: PATH에 claude 없음',
       },
       {
         value: 'claude-desktop',
-        label: 'Claude Desktop',
-        hint: desktop.found
+        name: 'Claude Desktop',
+        description: desktop.found
           ? `설정 폴더 감지됨: ${shortenHome(desktop.where, home)}`
           : // `where` carries the reason when there is a more useful one than
             // "missing" — inside WSL the config simply lives on the other side.
@@ -347,39 +328,25 @@ export function clientMenuOptions(
             ? '감지되지 않음'
             : desktop.where,
       },
-      { value: 'both', label: '둘 다', hint: '위 두 가지를 차례로 등록합니다' },
+      { value: 'both', name: '둘 다', description: '위 두 가지를 차례로 등록합니다' },
     ],
-    preselect: 0,
+    default: 'claude-code',
   };
 }
 
 /**
- * The same question as plain text, for a terminal that cannot draw the menu
- * (`TERM=dumb`, or stderr redirected while stdin is still a terminal).
- * Refusing to ask would be worse than asking in a plainer way.
+ * Replace a leading home directory with `~`, so a path fits on one row.
+ *
+ * The prefix has to end on a separator or at the end of the path. A plain
+ * `startsWith` turns `/home/mentor/bin/claude` into `~ntor/bin/claude` for a
+ * user whose home is `/home/me` — a path that points nowhere, printed as if it
+ * were the one we detected.
  */
-async function askClientAsText(
-  prompter: Prompter,
-  options: MenuOptions<ClientChoice>
-): Promise<ClientChoice> {
-  prompter.writeLine('');
-  prompter.writeLine('어느 클라이언트에 등록할까요?');
-  for (const [index, item] of options.items.entries()) {
-    const hint = item.hint === undefined ? '' : `  (${item.hint})`;
-    prompter.writeLine(`  ${String(index + 1)}) ${item.label.trim()}${hint}`);
-  }
-  const values = options.items.map((item) => item.value);
-  const answer = await promptChoice('선택 [1/2/3, Enter=1]: ', values, prompter, 3, {
-    defaultValue: values[0] ?? 'claude-code',
-    caseInsensitive: true,
-    aliases: {
-      'claude-code': ['1'],
-      'claude-desktop': ['2'],
-      both: ['3'],
-    },
-    invalidMessage: '1, 2, 3 중 하나를 입력하세요.',
-  });
-  return (values.find((value) => value === answer) ?? 'claude-code') as ClientChoice;
+export function shortenHome(target: string, home: string): string {
+  if (home === '' || !target.startsWith(home)) return target;
+  const rest = target.slice(home.length);
+  if (rest !== '' && rest[0] !== '/' && rest[0] !== '\\') return target;
+  return `~${rest}`;
 }
 
 /**
@@ -408,18 +375,20 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
   const prompter = deps.prompter ?? processPrompter();
   const env = deps.env ?? process.env;
   const homedir = deps.homedir ?? ((): string => os.homedir());
-  const keys = deps.keys !== undefined ? deps.keys : terminalKeySource();
-  const menu: MenuIo | null =
-    keys === null
-      ? null
-      : { write, keys, columns: deps.columns ?? ((): number => terminalColumns()) };
+  const ask = deps.ask ?? inquirerAsker;
+  const canAsk = (deps.canAsk ?? ((): boolean => canPrompt()))();
 
   let choice: ClientChoice | null = args.client;
   if (choice === null) {
-    if (!prompter.interactive) {
+    if (!canAsk) {
       // Guessing which client somebody meant is exactly the kind of help that
       // registers the server in the wrong place, so a script gets a usage error.
       write('ssh-mcp install: 등록할 클라이언트를 지정하세요.');
+      // stdin is a terminal but the list cannot be drawn: say which half failed,
+      // or the user reads the line above as "but I am in a terminal".
+      if (prompter.interactive) {
+        write('이 터미널에는 목록을 그릴 수 없습니다(TERM=dumb 또는 stderr가 터미널이 아님).');
+      }
       write('  npx @get-bot/ssh-mcp install claude-code');
       write('  npx @get-bot/ssh-mcp install claude-desktop');
       write('터미널에서 인자 없이 실행하면 목록에서 고를 수 있습니다.');
@@ -432,14 +401,12 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
       code: (deps.detectCode ?? detectClaudeCode)(detectOptions),
       desktop: (deps.detectDesktop ?? detectClaudeDesktop)(detectOptions),
     };
-    const question = clientMenuOptions(detect.code, detect.desktop, homedir());
     try {
-      choice =
-        menu === null
-          ? await askClientAsText(prompter, question)
-          : await promptMenu(menu, question);
+      choice = await ask.select(clientQuestion(detect.code, detect.desktop, homedir()));
     } catch (error) {
-      if (error instanceof PromptAbortedError) {
+      if (error instanceof PromptUnavailableError) {
+        write(`ssh-mcp install: ${error.message}`);
+      } else if (error instanceof PromptAbortedError) {
         write('ssh-mcp install: 클라이언트를 선택하지 않았습니다. 아무것도 등록하지 않았습니다.');
       } else {
         write(`ssh-mcp install: 클라이언트 선택이 중단되었습니다 (${errorMessage(error)}).`);
@@ -473,8 +440,8 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
   // actually use rather than a guess.
   const scope = await resolveScope({
     requested: args.scope,
-    prompter,
-    menu,
+    canAsk,
+    ask,
     cwd: workingDir,
     write,
   });
@@ -501,8 +468,12 @@ export async function runInstall(argv: readonly string[], deps: InstallDeps = {}
   write('');
   const desktopOk = runDesktop();
   write('');
+  // A dry run registered nothing, so it must not claim it did. Failure reads
+  // the same either way: a refused dry run is still a refusal.
+  const succeeded = args.dryRun ? '등록 예정' : '등록 완료';
+  const prefix = args.dryRun ? '[dry-run] ' : '';
   write(
-    `Claude Code: ${codeOk ? '등록 완료' : '실패'} / Claude Desktop: ${desktopOk ? '등록 완료' : '실패'}`
+    `${prefix}Claude Code: ${codeOk ? succeeded : '실패'} / Claude Desktop: ${desktopOk ? succeeded : '실패'}`
   );
   return codeOk && desktopOk ? EXIT_OK : EXIT_FAILED;
 }

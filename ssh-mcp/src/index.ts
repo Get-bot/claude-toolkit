@@ -15,7 +15,16 @@
 import { installStdoutGuard } from './log.js';
 import { readPackageVersion } from './version.js';
 
-/** Lower bound from `engines.node` and the spec's tech stack (AC1.1). */
+/**
+ * The floor for the **server**, which is what AC1.1 fixes at Node 20.
+ *
+ * `engines.node` is stricter (`^20.17.0 || ^22.13.0 || >=23.5.0`) because the
+ * interactive questions in `install` and `host add` load `@inquirer`, which
+ * needs 20.17. The two numbers are deliberately different: a Node between 20.0
+ * and 20.16 runs the server and every non-interactive command, and is told what
+ * it is missing only if it asks for a question. So this guard stays at 20 —
+ * raising it here would refuse to start a server that works.
+ */
 export const MIN_NODE_MAJOR = 20;
 
 function nodeMajor(): number {

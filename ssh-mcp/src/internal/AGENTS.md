@@ -9,14 +9,16 @@
 
 ## Key Files
 
-| File      | Description                                                                                                                                              |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `util.ts` | `byteLength`(UTF-8 바이트 길이), `isErrnoCode`(Node 시스템 오류의 `code` 판별), `isEnoent`(ENOENT 단축), `errorMessage`(unknown throwable의 메시지 추출) |
+| File      | Description                                                                                                                                                                                                       |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `util.ts` | `byteLength`(UTF-8 바이트 길이), `isErrnoCode`(Node 시스템 오류의 `code` 판별), `isEnoent`(ENOENT 단축), `errorMessage`(unknown throwable의 메시지 추출), `hasControlChars`/`stripControlChars`(C0+DEL 판별·치환) |
+| `argv.ts` | `optionValue`(값을 받는 옵션의 값 읽기). 값 자리에 `-`로 시작하는 토큰이 오면 삼키지 않고 거부합니다 — `install`과 `setup` 양쪽에서 같은 결함이 났던 자리입니다                                                   |
 
 ## For AI Agents
 
 ### Working In This Directory
 
+- **제어 문자 클래스는 `util.ts`에 하나만 둡니다.** 규칙은 자리마다 다릅니다 — 위저드와 인자 파서는 **거부**하고 `host list`는 출력 시점에 **치환**합니다(손으로 쓴 `hosts.json`을 이유로 표 전체를 못 보게 만들 수는 없습니다). 클래스만 공유하므로 나중에 U+0085 같은 것을 넣을 때 세 파일을 기억할 필요가 없고, `no-control-regex` 억제도 한 곳에만 있습니다.
 - **이 모듈은 `src/` 안의 어떤 것도 import 해서는 안 됩니다.** 파일 상단 주석이 명시하는 규칙이며, 이를 어기면 `log.ts`·`config/*`·`audit.ts` 사이에 순환 참조가 생깁니다. Node 빌트인만 허용됩니다.
 - `errorMessage`는 절대 throw 하지 않고, `Error`에 대해 `[object Object]`를 반환하지 않는다는 계약을 지킵니다.
 - `byteLength`, `isEnoent`, `errorMessage`의 정식 위치는 여기입니다. `ssh/error.ts`와 `setup/cli.ts`에 남아 있는 사본은 이쪽으로 수렴시키는 것이 원래 의도입니다(파일 주석의 CR-9 메모).

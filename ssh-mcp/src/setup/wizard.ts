@@ -24,22 +24,16 @@ import {
   APPROVAL_MODES,
   DEFAULT_APPROVAL_MODE,
   DEFAULT_PORT,
+  MAX_LABEL_LENGTH,
+  MAX_USER_LENGTH,
 } from '../config/schema.js';
 import type { ApprovalMode } from '../config/schema.js';
+import type { GivenFlags } from './cli.js';
+import { hasControlChars } from '../internal/util.js';
 import type { TcpProbe } from '../ssh/reach.js';
-import { promptMenu } from './menu.js';
-import type { MenuIo } from './menu.js';
+import type { Asker } from './ask.js';
 import { PromptAbortedError } from './prompt.js';
 import type { Prompter } from './prompt.js';
-
-/**
- * How many times one question may be answered badly before giving up.
- *
- * A closed stream already ends the wizard through `PromptAbortedError`, so this
- * only catches a caller feeding invalid answers forever. It is deliberately far
- * above what a person would hit.
- */
-export const MAX_WIZARD_ATTEMPTS = 10;
 
 /** Hints shown next to each approval mode, so the choice is not a guess. */
 const APPROVAL_MODE_HINTS: Readonly<Record<ApprovalMode, string>> = {
@@ -51,18 +45,6 @@ const APPROVAL_MODE_HINTS: Readonly<Record<ApprovalMode, string>> = {
 
 /** How many addresses may fail to answer before the wizard gives up. */
 export const MAX_REACH_ATTEMPTS = 3;
-
-/**
- * Characters that must never survive an answer.
- *
- * A cooked-mode read hands back whatever the terminal sent, so an arrow key
- * pressed at a text question arrives as `\x1b[B`. Measured: it was accepted as
- * a hostname, and the escape then moved the cursor so the screen showed
- * `연결 확인 중: :22` — a name that looked empty. The TCP probe refused it, but
- * a question should not pass an answer on to a network call to be rejected.
- */
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
 
 /** One DNS label: alphanumerics, hyphens allowed inside only. */
 const LABEL = String.raw`[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?`;
@@ -88,48 +70,43 @@ export function isUsableHostname(value: string): boolean {
 
 export interface WizardIo {
   prompter: Prompter;
-  /** The arrow-key menu, or null when this terminal cannot draw one. */
-  menu: MenuIo | null;
+  /** The interactive questions. Injected so tests answer without a terminal. */
+  ask: Asker;
   /** Aliases already in `hosts.json`, so the wizard can refuse a duplicate. */
   takenAliases: ReadonlySet<string>;
-  /** Flags already present on the command line; their questions are skipped. */
-  given: { approvalMode: boolean; label: boolean };
+  /**
+   * Flags already present on the command line.
+   *
+   * `approvalMode` and `label` skip their question. `force` changes what the
+   * alias question accepts: `host add --force` with no positionals opens the
+   * wizard, and refusing every existing alias there would demand the very flag
+   * the user already typed.
+   */
+  given: GivenFlags;
   /** TCP reachability check; injected so tests need no network. */
   probeTcp: TcpProbe;
 }
 
-/** Read one line, with an optional default for a bare Enter. */
-async function ask(
-  prompter: Prompter,
-  question: string,
-  defaultValue: string | null
-): Promise<string> {
-  const suffix = defaultValue === null ? '' : ` [${defaultValue}]`;
-  prompter.write(`${question}${suffix}: `);
-  const answer = (await prompter.readLine({ muted: false })).toString('utf8').trim();
-  return answer === '' && defaultValue !== null ? defaultValue : answer;
-}
-
 /**
- * Ask until `validate` accepts the answer.
- * `validate` returns null for "good" or the sentence to show and re-ask.
+ * Ask one text question, re-asking until `validate` accepts.
+ *
+ * The retry loop belongs to the prompt library, which re-renders the question
+ * with the message in place. `validate` keeps this package's wording and
+ * returns the sentence to show, so the rules read the same as before.
  */
-async function askUntil(
+async function askText(
   io: WizardIo,
-  question: string,
+  message: string,
   defaultValue: string | null,
   validate: (answer: string) => string | null
 ): Promise<string> {
-  for (let attempt = 0; attempt < MAX_WIZARD_ATTEMPTS; attempt += 1) {
-    const answer = await ask(io.prompter, question, defaultValue);
-    const problem = validate(answer);
-    if (problem === null) return answer;
-    io.prompter.writeLine(`  ${problem}`);
-  }
-  throw new PromptAbortedError(
-    'no-answer',
-    `no valid answer after ${String(MAX_WIZARD_ATTEMPTS)} attempts: ${question}`
-  );
+  const answer = await io.ask.text({
+    message,
+    ...(defaultValue === null || defaultValue === '' ? {} : { default: defaultValue }),
+    validate: (value: string): true | string => validate(value.trim()) ?? true,
+  });
+  // Trim here as well as in `validate`: what was checked is what is returned.
+  return answer.trim();
 }
 
 /**
@@ -137,12 +114,22 @@ async function askUntil(
  *
  * An address is not a name, so an IP literal gets no suggestion — accepting
  * `192` as an alias would be worse than asking.
+ *
+ * A name already in `hosts.json` is not offered either, unless `--force` makes
+ * it acceptable. Pre-filling an answer the next keystroke rejects is the worst
+ * shape a default can have: Enter looks like the obvious move and is refused.
  */
-export function suggestAlias(hostname: string): string | null {
+export function suggestAlias(
+  hostname: string,
+  taken: ReadonlySet<string> = new Set(),
+  force = false
+): string | null {
   if (hostname.includes(':')) return null;
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/u.test(hostname)) return null;
   const first = hostname.split('.')[0] ?? '';
-  return AliasSchema.safeParse(first).success ? first : null;
+  if (!AliasSchema.safeParse(first).success) return null;
+  if (!force && taken.has(first)) return null;
+  return first;
 }
 
 /** Join the answers back into the `user@host[:port]` argument. */
@@ -166,11 +153,11 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
   p.writeLine('');
 
   const askHost = (): Promise<string> =>
-    askUntil(io, '호스트 주소 (예: web01.example.com)', null, (answer) => {
+    askText(io, '호스트 주소 (예: web01.example.com)', null, (answer) => {
       if (answer === '') return '호스트 주소는 비워 둘 수 없습니다.';
       // Checked before the shape, because an escape sequence would otherwise
       // scramble the screen while the message explaining it is printed.
-      if (CONTROL_CHARS.test(answer) || /\s/u.test(answer)) {
+      if (hasControlChars(answer) || /\s/u.test(answer)) {
         return '호스트 주소에 쓸 수 없는 문자가 있습니다.';
       }
       if (!isUsableHostname(answer)) {
@@ -180,7 +167,7 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
     });
 
   const askPort = async (): Promise<number> => {
-    const text = await askUntil(io, 'SSH 포트', String(DEFAULT_PORT), (answer) => {
+    const text = await askText(io, 'SSH 포트', String(DEFAULT_PORT), (answer) => {
       if (!/^\d+$/u.test(answer)) return '숫자만 입력하세요.';
       const value = Number.parseInt(answer, 10);
       return value >= 1 && value <= 65535 ? null : '1에서 65535 사이여야 합니다.';
@@ -190,9 +177,16 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
 
   let hostname = await askHost();
 
-  const user = await askUntil(io, '사용자명', null, (answer) => {
+  const user = await askText(io, '사용자명', null, (answer) => {
     if (answer === '') return '사용자명은 비워 둘 수 없습니다.';
-    if (CONTROL_CHARS.test(answer)) return '사용자명에 쓸 수 없는 문자가 있습니다.';
+    if (hasControlChars(answer)) return '사용자명에 쓸 수 없는 문자가 있습니다.';
+    // `HostEntrySchema` enforces this too, but only at `store.save()` — after
+    // the password, the key pair and the remote `authorized_keys` install. A
+    // failure there leaves our public key on the remote host with no local
+    // entry pointing at it, so the ceiling has to be checked here.
+    if (answer.length > MAX_USER_LENGTH) {
+      return `사용자명은 ${String(MAX_USER_LENGTH)}자를 넘을 수 없습니다.`;
+    }
     // Matches `parseTarget`, which splits on `@` and `:`.
     if (/[\s:]/u.test(answer)) return '사용자명에 공백이나 콜론을 넣을 수 없습니다.';
     return null;
@@ -221,22 +215,30 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
     port = await askPort();
   }
 
-  const alias = await askUntil(
+  const alias = await askText(
     io,
     'alias (이 호스트를 부를 이름)',
-    suggestAlias(hostname),
+    suggestAlias(hostname, io.takenAliases, io.given.force),
     (answer) => {
       if (!AliasSchema.safeParse(answer).success) {
         return '영숫자로 시작하고 영숫자·점·밑줄·하이픈만 쓸 수 있습니다 (최대 64자).';
       }
       // Re-pinning a host key must be asked for explicitly, so the wizard never
-      // quietly turns a collision into a --force run.
-      if (io.takenAliases.has(answer)) {
+      // quietly turns a collision into a --force run. With --force already on
+      // the command line it *was* asked for, and refusing here would demand a
+      // flag the user has typed.
+      if (!io.given.force && io.takenAliases.has(answer)) {
         return `"${answer}"는 이미 있습니다. 다시 설정하려면 --force로 실행하세요.`;
       }
       return null;
     }
   );
+
+  // Say what --force is about to do, once the alias is known. It is the one
+  // answer here that overwrites something the user already has.
+  if (io.given.force && io.takenAliases.has(alias)) {
+    p.writeLine(`"${alias}"를 다시 설정합니다. 호스트 키 지문을 다시 확인하게 됩니다.`);
+  }
 
   const extra: string[] = [];
 
@@ -248,9 +250,16 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
   if (!io.given.label) {
     // The label is printed back by `host list` and `list_hosts`, so an escape
     // sequence in it would rewrite somebody else's terminal later.
-    const label = await askUntil(io, '라벨 (설명, 생략하려면 Enter)', '', (answer) =>
-      CONTROL_CHARS.test(answer) ? '라벨에 쓸 수 없는 문자가 있습니다.' : null
-    );
+    const label = await askText(io, '라벨 (설명, 생략하려면 Enter)', '', (answer) => {
+      if (hasControlChars(answer)) return '라벨에 쓸 수 없는 문자가 있습니다.';
+      // `parseSetupArgs` refuses a longer one, and it runs *after* the wizard —
+      // so without this the whole finished interview is discarded as a usage
+      // error.
+      if (answer.length > MAX_LABEL_LENGTH) {
+        return `라벨은 ${String(MAX_LABEL_LENGTH)}자를 넘을 수 없습니다.`;
+      }
+      return null;
+    });
     if (label !== '') extra.push('--label', label);
   }
 
@@ -262,36 +271,14 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
  * The approval mode has a defined default (`ask-destructive`), which is what
  * makes a preselected menu appropriate here and not for the approval fallback.
  */
-async function askApprovalMode(io: WizardIo): Promise<ApprovalMode> {
-  const items = APPROVAL_MODES.map((mode) => ({
-    value: mode,
-    label: mode.padEnd(16),
-    hint: APPROVAL_MODE_HINTS[mode],
-  }));
-  const preselect = APPROVAL_MODES.indexOf(DEFAULT_APPROVAL_MODE);
-
-  if (io.menu !== null) {
-    return promptMenu(io.menu, {
-      title: '승인 모드를 고르세요.',
-      items,
-      preselect,
-    });
-  }
-
-  // No menu: the same question as plain text, same default.
-  io.prompter.writeLine('승인 모드:');
-  for (const [index, item] of items.entries()) {
-    io.prompter.writeLine(`  ${String(index + 1)}) ${item.label} ${item.hint}`);
-  }
-  const answer = await askUntil(io, '선택', DEFAULT_APPROVAL_MODE, (value) => {
-    if ((APPROVAL_MODES as readonly string[]).includes(value)) return null;
-    if (/^[1-9]$/u.test(value) && Number.parseInt(value, 10) <= APPROVAL_MODES.length) return null;
-    return `${APPROVAL_MODES.join(' / ')} 중 하나, 또는 번호를 입력하세요.`;
+function askApprovalMode(io: WizardIo): Promise<ApprovalMode> {
+  return io.ask.select<ApprovalMode>({
+    message: '승인 모드를 고르세요.',
+    choices: APPROVAL_MODES.map((mode) => ({
+      value: mode,
+      name: mode,
+      description: APPROVAL_MODE_HINTS[mode],
+    })),
+    default: DEFAULT_APPROVAL_MODE,
   });
-  if (/^[1-9]$/u.test(answer)) {
-    return APPROVAL_MODES[Number.parseInt(answer, 10) - 1] ?? DEFAULT_APPROVAL_MODE;
-  }
-  return (APPROVAL_MODES as readonly string[]).includes(answer)
-    ? (answer as ApprovalMode)
-    : DEFAULT_APPROVAL_MODE;
 }

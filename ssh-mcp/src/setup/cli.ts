@@ -20,6 +20,8 @@ import ssh2, { Client } from 'ssh2';
 import type { AuthenticationType, ClientChannel, ConnectConfig } from 'ssh2';
 
 import { ensureKeysDir, homePath, keysDirPath, privateKeyPath } from '../config/paths.js';
+import { optionValue } from '../internal/argv.js';
+import { hasControlChars } from '../internal/util.js';
 import { INSTALL_HINT } from '../config/registration.js';
 import {
   APPROVAL_FALLBACKS,
@@ -27,6 +29,7 @@ import {
   AliasSchema,
   DEFAULT_APPROVAL_MODE,
   DEFAULT_PORT,
+  MAX_LABEL_LENGTH,
 } from '../config/schema.js';
 import type { ApprovalFallback, ApprovalMode, HostEntry } from '../config/schema.js';
 import * as store from '../config/store.js';
@@ -35,8 +38,8 @@ import { formatSnippets } from '../doctor/checks.js';
 import { sha256Fingerprint } from '../ssh/fingerprint.js';
 import { probeTcp as defaultProbeTcp } from '../ssh/reach.js';
 import type { TcpProbe } from '../ssh/reach.js';
-import { terminalColumns, terminalKeySource } from './menu.js';
-import type { KeySource } from './menu.js';
+import { PromptUnavailableError, canPrompt, inquirerAsker } from './ask.js';
+import type { Asker } from './ask.js';
 import { runSetupWizard } from './wizard.js';
 import { backupKeyPair, generateKeyPair, restoreKeyPair } from './keygen.js';
 import type { GeneratedKeyPair, KeyPairBackup } from './keygen.js';
@@ -75,16 +78,6 @@ export const EXIT_NOT_INTERACTIVE = 2;
 /** Command run over the verification connection (row 5.6). */
 export const VERIFY_COMMAND = 'echo ssh-mcp-ok';
 const VERIFY_MARKER = 'ssh-mcp-ok';
-
-/**
- * Characters refused in a --label value.
- *
- * The label is echoed by `host list` and returned by the `list_hosts` tool, so
- * an escape sequence stored here would move somebody else's cursor much later,
- * far from where it was typed.
- */
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
-const LABEL_CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
 
 /** Handshake budget for the non-interactive verification reconnect. */
 const VERIFY_READY_TIMEOUT_MS = 20_000;
@@ -140,14 +133,30 @@ export interface SetupArgs {
   force: boolean;
 }
 
+/**
+ * Which flags the command line already carried.
+ *
+ * The wizard reads this to skip questions that are already answered, and to
+ * know whether re-pinning an existing alias was asked for. It comes from the
+ * parser, never from scanning argv for a string: `--label --approval-mode`
+ * puts `--approval-mode` in argv as a *value*, and a scan would call the
+ * approval-mode question answered when nothing answered it.
+ */
+export interface GivenFlags {
+  approvalMode: boolean;
+  label: boolean;
+  force: boolean;
+}
+
 export type ParsedArgs =
   | { ok: true; help: false; args: SetupArgs }
   | { ok: true; help: true }
   /**
    * `missingPositionals` marks the one failure the wizard can fix: neither
    * argument was given at all. One of two is a typo, not a request to be asked.
+   * `given` accompanies it so the wizard can skip what was already supplied.
    */
-  | { ok: false; message: string; missingPositionals?: boolean };
+  | { ok: false; message: string; missingPositionals?: boolean; given?: GivenFlags };
 
 function isApprovalMode(value: string): value is ApprovalMode {
   return (APPROVAL_MODES as readonly string[]).includes(value);
@@ -213,41 +222,45 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
         force = true;
         break;
       case '--approval-fallback': {
-        const value = argv[i + 1];
+        const read = optionValue(argv, i + 1, '--approval-fallback');
         i += 1;
-        if (value === undefined || !isApprovalFallback(value)) {
+        if (!read.ok) return { ok: false, message: read.message };
+        if (!isApprovalFallback(read.value)) {
           return {
             ok: false,
             message: `--approval-fallback must be one of: ${APPROVAL_FALLBACKS.join(', ')}`,
           };
         }
-        approvalFallback = value;
+        approvalFallback = read.value;
         break;
       }
       case '--approval-mode': {
-        const value = argv[i + 1];
+        const read = optionValue(argv, i + 1, '--approval-mode');
         i += 1;
-        if (value === undefined || !isApprovalMode(value)) {
+        if (!read.ok) return { ok: false, message: read.message };
+        if (!isApprovalMode(read.value)) {
           return {
             ok: false,
             message: `--approval-mode must be one of: ${APPROVAL_MODES.join(', ')}`,
           };
         }
-        approvalMode = value;
+        approvalMode = read.value;
         break;
       }
       case '--label': {
-        const value = argv[i + 1];
+        const read = optionValue(argv, i + 1, '--label');
         i += 1;
-        if (value === undefined || value === '') {
-          return { ok: false, message: '--label needs a value' };
-        }
-        if (value.length > 128) {
-          return { ok: false, message: '--label must be at most 128 characters' };
+        if (!read.ok) return { ok: false, message: read.message };
+        const value = read.value;
+        if (value.length > MAX_LABEL_LENGTH) {
+          return {
+            ok: false,
+            message: `--label must be at most ${String(MAX_LABEL_LENGTH)} characters`,
+          };
         }
         // The label is printed back by `host list` and by the `list_hosts`
         // tool; an escape sequence in it would rewrite a terminal later.
-        if (LABEL_CONTROL_CHARS.test(value)) {
+        if (hasControlChars(value)) {
           return { ok: false, message: '--label must not contain control characters' };
         }
         label = value;
@@ -266,7 +279,12 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
     return {
       ok: false,
       message: 'host add needs both <alias> and <user@host[:port]>',
-      ...(positional.length === 0 ? { missingPositionals: true } : {}),
+      ...(positional.length === 0
+        ? {
+            missingPositionals: true,
+            given: { approvalMode: approvalMode !== null, label: label !== null, force },
+          }
+        : {}),
     };
   }
   if (positional.length > 2) {
@@ -366,14 +384,17 @@ export interface SetupDeps {
   icacls?: IcaclsRunner;
   now?: () => Date;
   /**
-   * Keystrokes for the wizard's approval-mode menu. `null` means this terminal
-   * cannot draw one, and the wizard falls back to a numbered text question.
+   * The wizard's interactive questions. Injected so tests answer them without
+   * a terminal; only the default implementation touches `@inquirer`.
    */
-  keys?: KeySource | null;
-  /** Terminal width for the wizard's menu; injected so a test can narrow it. */
-  columns?: () => number;
+  ask?: Asker;
   /** TCP reachability check run before the password; injected so tests need no network. */
   probeTcp?: TcpProbe;
+  /**
+   * Whether this terminal can show a question at all. Defaults to
+   * {@link canPrompt}; injected so tests drive both branches.
+   */
+  canAsk?: () => boolean;
 }
 
 /** Read the `ssh-<algo>` name out of a raw SSH public key blob. */
@@ -440,6 +461,10 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   };
 
   const probeTcp = deps.probeTcp ?? defaultProbeTcp;
+  // Only the wizard needs this. The password and fingerprint prompts ask for
+  // stdin alone, so a fully specified `host add` still works where a list
+  // cannot be drawn.
+  const canAsk = (deps.canAsk ?? ((): boolean => canPrompt()))();
   /** The wizard already proved the address answers; do not connect twice. */
   let addressVerified = false;
 
@@ -449,38 +474,47 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     return EXIT_OK;
   }
 
+  // Read once and reuse. The wizard needs the alias list, and step 1 below needs
+  // the same file; loading twice was two chances to disagree, and only one of
+  // the two failure paths listed the validation issues.
+  let loaded: ReturnType<typeof store.load> | null = null;
+  const loadRegistry = (): ReturnType<typeof store.load> => (loaded ??= store.load());
+  const reportBadRegistry = (
+    result: Extract<ReturnType<typeof store.load>, { ok: false }>
+  ): void => {
+    err(`ssh-mcp host add: ${result.message}`);
+    for (const issue of result.issues) err(`  - ${issue.path}: ${issue.message}`);
+    err('hosts.json을 고친 뒤 다시 실행하세요. setup은 깨진 파일을 덮어쓰지 않습니다.');
+  };
+
   // Nothing was given and we are in a terminal: collect the same arguments by
   // asking, then re-parse. Everything downstream sees an ordinary command line.
-  if (!parsed.ok && parsed.missingPositionals === true && prompter.interactive) {
-    const registry = store.load();
+  if (!parsed.ok && parsed.missingPositionals === true && canAsk) {
+    const registry = loadRegistry();
     if (!registry.ok) {
-      err(`ssh-mcp host add: ${registry.message}`);
-      err('hosts.json을 고친 뒤 다시 실행하세요. setup은 깨진 파일을 덮어쓰지 않습니다.');
+      reportBadRegistry(registry);
       return EXIT_FAILED;
     }
     try {
-      const keys = deps.keys !== undefined ? deps.keys : terminalKeySource();
       const extra = await runSetupWizard({
         prompter,
-        menu:
-          keys === null
-            ? null
-            : {
-                write: (text) => prompter.write(text),
-                keys,
-                columns: deps.columns ?? ((): number => terminalColumns()),
-              },
+        ask: deps.ask ?? inquirerAsker,
         takenAliases: new Set(Object.keys(registry.file.hosts)),
-        given: {
-          approvalMode: argv.includes('--approval-mode'),
-          label: argv.includes('--label'),
-        },
+        // From the parser, not from argv: a flag name swallowed as another
+        // flag's value is in argv without having been given.
+        given: parsed.given ?? { approvalMode: false, label: false, force: false },
         probeTcp,
       });
       addressVerified = true;
       parsed = parseSetupArgs([...argv, ...extra]);
     } catch (error) {
-      if (error instanceof PromptAbortedError) {
+      // The library failing to load is its own story, and it already reads as a
+      // whole sentence. Wrapping it in "입력 중 오류가 발생했습니다 (…)" buries
+      // the Node version the reader actually needs inside a parenthesis —
+      // which is the nesting this error class exists to prevent.
+      if (error instanceof PromptUnavailableError) {
+        err(`ssh-mcp host add: ${error.message}`);
+      } else if (error instanceof PromptAbortedError) {
         err('');
         err('ssh-mcp host add: 입력이 중단되었습니다. 아무것도 기록하지 않고 종료합니다.');
       } else {
@@ -492,6 +526,12 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
 
   if (!parsed.ok) {
     err(`ssh-mcp host add: ${parsed.message}`);
+    // Say why the wizard did not appear. Without this, `host add 2>&1 | tee`
+    // looks like the questions were silently dropped.
+    if (parsed.missingPositionals === true && !canAsk && prompter.interactive) {
+      err('이 터미널에는 목록을 그릴 수 없습니다(TERM=dumb 또는 stderr가 터미널이 아님).');
+      err('인자를 모두 지정하면 질문 없이 실행됩니다.');
+    }
     err('');
     err(USAGE);
     return EXIT_NOT_INTERACTIVE;
@@ -506,14 +546,12 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   const args = parsed.args;
 
   // Step 1: the registry must be readable, and an existing alias needs --force.
-  const loaded = store.load();
-  if (!loaded.ok) {
-    err(`ssh-mcp host add: ${loaded.message}`);
-    for (const issue of loaded.issues) err(`  - ${issue.path}: ${issue.message}`);
-    err('hosts.json을 고친 뒤 다시 실행하세요. setup은 깨진 파일을 덮어쓰지 않습니다.');
+  const registry = loadRegistry();
+  if (!registry.ok) {
+    reportBadRegistry(registry);
     return EXIT_FAILED;
   }
-  const existing = loaded.file.hosts[args.alias];
+  const existing = registry.file.hosts[args.alias];
   if (existing !== undefined && !args.force) {
     err(
       `ssh-mcp host add: ${ERROR_CODES.alias_exists}: "${args.alias}"는 이미 등록되어 있습니다 ` +
@@ -781,8 +819,8 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     };
 
     store.save({
-      ...loaded.file,
-      hosts: { ...loaded.file.hosts, [args.alias]: entry },
+      ...registry.file,
+      hosts: { ...registry.file.hosts, [args.alias]: entry },
     });
     succeeded = true;
 

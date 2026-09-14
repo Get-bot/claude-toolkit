@@ -23,10 +23,9 @@
  * rest of `install/`.
  */
 import { errorMessage } from '../internal/util.js';
-import { promptMenu } from '../setup/menu.js';
-import type { MenuIo } from '../setup/menu.js';
-import { DEFAULT_CHOICE_ATTEMPTS, PromptAbortedError, promptChoice } from '../setup/prompt.js';
-import type { Prompter } from '../setup/prompt.js';
+import { PromptUnavailableError } from '../setup/ask.js';
+import type { Asker, SelectQuestion } from '../setup/ask.js';
+import { PromptAbortedError } from '../setup/prompt.js';
 
 /** Scopes accepted by `claude mcp add -s`. */
 export const CLAUDE_CODE_SCOPES = ['local', 'user', 'project'] as const;
@@ -34,25 +33,6 @@ export type ClaudeCodeScope = (typeof CLAUDE_CODE_SCOPES)[number];
 
 /** What `claude mcp add` itself defaults to, and therefore what we default to. */
 export const DEFAULT_CLAUDE_CODE_SCOPE: ClaudeCodeScope = 'local';
-
-/** Only `local` and `user` are offered; `project` writes a shared file and must be deliberate. */
-const OFFERED_SCOPES: readonly ClaudeCodeScope[] = ['local', 'user'];
-
-const SCOPE_ALIASES: Readonly<Record<string, readonly string[]>> = {
-  local: ['1'],
-  user: ['2'],
-};
-
-/** The question, with the directory `local` would actually bind to spelled out. */
-export function buildScopePrompt(cwd: string): string {
-  return [
-    'Claude Code 어디에 등록할까요?',
-    `  1) 이 프로젝트만 (local)  — ${cwd} 에서 연 Claude Code에만 보입니다. Claude Code의 기본값입니다.`,
-    '  2) 모든 프로젝트 (user)   — 어느 디렉터리에서 열어도 보입니다.',
-    '팀과 저장소로 공유하려면 --scope project 를 직접 지정하세요.',
-    '선택 [1/2, Enter=1]: ',
-  ].join('\n');
-}
 
 /** What a non-interactive run is told instead of being asked. */
 export function nonInteractiveScopeNotice(cwd: string): string {
@@ -80,36 +60,37 @@ export function scopeMeaning(scope: ClaudeCodeScope, cwd: string): string {
   }
 }
 
-/** The menu form of the same question. `local` is preselected, as it is the default. */
-export function scopeMenuOptions(cwd: string): {
-  title: string;
-  items: { value: ClaudeCodeScope; label: string; hint: string }[];
-  preselect: number;
-} {
+/**
+ * The question.
+ *
+ * Only `local` and `user` are offered; `project` writes a file the whole team
+ * shares and has to be asked for with `--scope project`.
+ */
+export function scopeQuestion(cwd: string): SelectQuestion<ClaudeCodeScope> {
   return {
-    title: 'Claude Code 어디에 등록할까요?',
-    items: [
+    message: 'Claude Code 어디에 등록할까요?',
+    choices: [
       {
         value: 'local',
-        label: '이 프로젝트만 (local)',
-        hint: `${cwd} 에서 연 Claude Code에만 보입니다. Claude Code의 기본값입니다`,
+        name: '이 프로젝트만 (local)',
+        description: `${cwd} 에서 연 Claude Code에만 보입니다. Claude Code의 기본값입니다.`,
       },
-      { value: 'user', label: '모든 프로젝트 (user)', hint: '어느 디렉터리에서 열어도 보입니다' },
+      {
+        value: 'user',
+        name: '모든 프로젝트 (user)',
+        description: '어느 디렉터리에서 열어도 보입니다.',
+      },
     ],
-    preselect: 0,
+    default: DEFAULT_CLAUDE_CODE_SCOPE,
   };
-}
-
-function isScope(value: string): value is ClaudeCodeScope {
-  return (CLAUDE_CODE_SCOPES as readonly string[]).includes(value);
 }
 
 export interface ResolveScopeOptions {
   /** The `--scope` value, or null when the flag was absent. */
   requested: ClaudeCodeScope | null;
-  prompter: Prompter;
-  /** The arrow-key menu, or null when this terminal cannot draw one. */
-  menu: MenuIo | null;
+  /** Whether this terminal can show a question at all (`canPrompt`). */
+  canAsk: boolean;
+  ask: Asker;
   /** Absolute working directory — what `local` would bind to. */
   cwd: string;
   write: (text: string) => void;
@@ -119,37 +100,24 @@ export interface ResolveScopeOptions {
  * Settle on a scope. Returns null when the user was asked and gave no usable
  * answer, in which case the caller must register nothing.
  *
- * Three paths, in order of how good the terminal is: the menu when one can be
- * drawn, the typed question when stdin is a terminal but stderr is not, and the
- * documented `local` default plus one explanatory line when neither is true.
+ * The terminal check happens here, not inside the prompt library: a run that
+ * cannot be asked keeps the documented `local` default and says so, rather than
+ * blocking on a question nobody can answer.
  */
 export async function resolveScope(options: ResolveScopeOptions): Promise<ClaudeCodeScope | null> {
   if (options.requested !== null) return options.requested;
 
-  if (!options.prompter.interactive) {
+  if (!options.canAsk) {
     options.write(nonInteractiveScopeNotice(options.cwd));
     return DEFAULT_CLAUDE_CODE_SCOPE;
   }
 
   try {
-    if (options.menu !== null) {
-      return await promptMenu(options.menu, scopeMenuOptions(options.cwd));
-    }
-    const answer = await promptChoice(
-      buildScopePrompt(options.cwd),
-      OFFERED_SCOPES,
-      options.prompter,
-      DEFAULT_CHOICE_ATTEMPTS,
-      {
-        defaultValue: DEFAULT_CLAUDE_CODE_SCOPE,
-        caseInsensitive: true,
-        aliases: SCOPE_ALIASES,
-        invalidMessage: '1 또는 2를 입력하세요.',
-      }
-    );
-    return isScope(answer) ? answer : DEFAULT_CLAUDE_CODE_SCOPE;
+    return await options.ask.select(scopeQuestion(options.cwd));
   } catch (error) {
-    if (error instanceof PromptAbortedError) {
+    if (error instanceof PromptUnavailableError) {
+      options.write(`ssh-mcp install: ${error.message}`);
+    } else if (error instanceof PromptAbortedError) {
       options.write('');
       options.write(
         'ssh-mcp install: 등록할 scope를 선택하지 않았습니다. 아무것도 등록하지 않고 종료합니다.'

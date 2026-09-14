@@ -36,12 +36,18 @@ import {
   formatServerCommand,
 } from '../../src/config/registration.js';
 import { buildSnippets } from '../../src/doctor/checks.js';
-import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, runInstall } from '../../src/install/cli.js';
+import {
+  EXIT_FAILED,
+  EXIT_OK,
+  EXIT_USAGE,
+  runInstall,
+  shortenHome,
+} from '../../src/install/cli.js';
 import type { InstallDeps } from '../../src/install/cli.js';
 import type { SpawnOutcome } from '../../src/install/claudeCode.js';
 import { desktopConfigPath } from '../../src/install/desktop.js';
-import type { KeyEvent, KeySource } from '../../src/setup/menu.js';
-import { createPrompter } from '../../src/setup/prompt.js';
+import type { Asker, SelectQuestion, TextQuestion } from '../../src/setup/ask.js';
+import { PromptAbortedError, createPrompter } from '../../src/setup/prompt.js';
 import type { Prompter } from '../../src/setup/prompt.js';
 
 const PKG = '@get-bot/ssh-mcp';
@@ -97,16 +103,20 @@ function promptHarness(isTTY: boolean): PromptProbe {
  * Collect output and spawned argv instead of performing either.
  *
  * The prompter defaults to a non-TTY one so no test can reach the real stdin,
- * and so the scope question only appears where a test asks for it.
+ * and so a question only appears where a test asks for it.
+ *
+ * `canAsk` follows `isTTY` unless a test separates them, which is how the
+ * stdin-is-a-terminal-but-stderr-is-not case gets exercised without a terminal.
  */
 function harness(
   outcomes: SpawnOutcome[] = [],
-  prompt: { isTTY?: boolean; keys?: KeySource | null } = {}
-): { deps: InstallDeps; probe: Harness; prompt: PromptProbe } {
+  prompt: { isTTY?: boolean; canAsk?: boolean; answers?: readonly string[] } = {}
+): { deps: InstallDeps; probe: Harness; prompt: PromptProbe; ask: AskProbe } {
   const lines: string[] = [];
   const calls: SpawnCall[] = [];
   let index = 0;
   const promptProbe = promptHarness(prompt.isTTY ?? false);
+  const askProbe = askProbeOf(prompt.answers ?? []);
   const deps: InstallDeps = {
     write: (text) => {
       lines.push(text);
@@ -118,9 +128,10 @@ function harness(
       return outcome;
     },
     prompter: promptProbe.prompter,
-    // Null by default so no test can reach the real terminal, and so the menu
-    // only appears where a test scripts one.
-    keys: prompt.keys ?? null,
+    // Answers every question from a script, so no test can reach a terminal and
+    // a question only appears where a test provided an answer for it.
+    ask: askProbe.asker,
+    canAsk: () => prompt.canAsk ?? prompt.isTTY ?? false,
     // The Desktop default path is derived from these. Without them a test that
     // reaches the Desktop branch writes into the developer's real home — which
     // is exactly what happened once before these defaults existed.
@@ -132,39 +143,61 @@ function harness(
     deps,
     probe: { lines, calls, text: (): string => lines.join('\n') },
     prompt: promptProbe,
+    ask: askProbe,
   };
+}
+
+/** One question the command asked, reduced to what a test cares about. */
+interface Asked {
+  message: string;
+  choices: string[];
+  /** The line shown under each row; where the detection result lands. */
+  descriptions: (string | undefined)[];
+  default?: string;
+}
+
+interface AskProbe {
+  asker: Asker;
+  /** Every question asked, in order. One run can ask two (client, then scope). */
+  asked: Asked[];
 }
 
 /**
- * Replay a fixed key sequence, as a terminal would deliver it.
+ * Answer the questions from a script.
  *
- * The cursor is shared across subscriptions, because a run can open more than
- * one menu (client, then scope) and the second must continue where the first
- * stopped rather than replay the first menu's answer.
+ * The answers are shared across questions and consumed in order, because a
+ * single run can ask more than one: choosing Claude Code is followed by the
+ * scope question.
  */
-function scriptedKeys(events: readonly Partial<KeyEvent>[]): KeySource {
-  let next = 0;
-  return (listener) => {
-    let stopped = false;
-    // Asynchronous on purpose: a real key source never fires during subscribe.
-    void (async (): Promise<void> => {
-      while (next < events.length) {
-        await Promise.resolve();
-        if (stopped) return;
-        const event = events[next];
-        next += 1;
-        if (event === undefined) return;
-        listener({ name: '', sequence: '', ctrl: false, ...event });
-      }
-    })();
-    return (): void => {
-      stopped = true;
-    };
+function askProbeOf(answers: readonly string[]): AskProbe {
+  const queue = [...answers];
+  const asked: Asked[] = [];
+  return {
+    asked,
+    asker: {
+      select<T extends string>(question: SelectQuestion<T>): Promise<T> {
+        asked.push({
+          message: question.message,
+          choices: question.choices.map((choice) => choice.value),
+          descriptions: question.choices.map((choice) => choice.description),
+          ...(question.default === undefined ? {} : { default: question.default }),
+        });
+        if (queue.length === 0) {
+          // A question nobody scripted an answer for is a test bug, not a hang.
+          throw new PromptAbortedError('eof', `unanswered question: ${question.message}`);
+        }
+        const raw = queue.shift() ?? '';
+        const value = raw === '' ? question.default : raw;
+        const match = question.choices.find((choice) => choice.value === value);
+        if (match === undefined) throw new Error(`not a choice: ${String(value)}`);
+        return Promise.resolve(match.value);
+      },
+      text(question: TextQuestion): Promise<string> {
+        throw new Error(`install asks no text questions, but got: ${question.message}`);
+      },
+    },
   };
 }
-
-const KEY_DOWN: Partial<KeyEvent> = { name: 'down' };
-const KEY_ENTER: Partial<KeyEvent> = { name: 'return' };
 
 let tmpDir: string;
 
@@ -203,6 +236,16 @@ describe('argument parsing', () => {
     expect(probe.text()).toContain('install claude-code');
     expect(probe.text()).toContain('install claude-desktop');
     expect(probe.text()).toContain('Usage: ssh-mcp install');
+    expect(probe.calls).toHaveLength(0);
+  });
+
+  it('says why it did not ask when stdin is a terminal but the list cannot be drawn', async () => {
+    // A redirected stderr or TERM=dumb: without this line the user sees a
+    // usage error in a terminal and assumes the menu is broken.
+    const { deps, probe } = harness([], { isTTY: true, canAsk: false });
+    expect(await runInstall([], deps)).toBe(EXIT_USAGE);
+    expect(probe.text()).toContain('등록할 클라이언트를 지정하세요');
+    expect(probe.text()).toContain('이 터미널에는 목록을 그릴 수 없습니다');
     expect(probe.calls).toHaveLength(0);
   });
 
@@ -345,6 +388,33 @@ describe('registered command shape', () => {
       args: ['-y', PKG],
       env: { SSH_MCP_HOME: '/opt/h' },
     });
+  });
+});
+
+describe('shortenHome', () => {
+  // Reported: a plain `startsWith` turned `/home/mentor/bin/claude` into
+  // `~ntor/bin/claude` for a user whose home is `/home/me` — a path that
+  // points nowhere, printed as if it were the one detected. The match has to
+  // stop at a separator, not merely be a string prefix.
+  it('leaves the path alone when the match stops short of a separator', () => {
+    expect(shortenHome('/home/mentor/bin/claude', '/home/me')).toBe('/home/mentor/bin/claude');
+  });
+
+  it('still shortens once the home is followed by an actual separator', () => {
+    expect(shortenHome('/home/me/bin/claude', '/home/me')).toBe('~/bin/claude');
+    // The home directory itself, with nothing after it.
+    expect(shortenHome('/home/me', '/home/me')).toBe('~');
+  });
+
+  // Same bug, Windows spelling: `C:\Users\bob` is a string-prefix of
+  // `C:\Users\bobby\...` without being its parent directory.
+  it('applies the same boundary check to a Windows-style separator', () => {
+    expect(shortenHome('C:\\Users\\bobby\\bin\\claude.exe', 'C:\\Users\\bob')).toBe(
+      'C:\\Users\\bobby\\bin\\claude.exe'
+    );
+    expect(shortenHome('C:\\Users\\bob\\bin\\claude.exe', 'C:\\Users\\bob')).toBe(
+      '~\\bin\\claude.exe'
+    );
   });
 });
 
@@ -600,12 +670,9 @@ describe('client selection', () => {
   const missing = { found: false, where: '' };
 
   it('asks which client when none is named, and says what it detected', async () => {
-    // First Enter picks the preselected Claude Code, second answers the scope
-    // menu that follows it.
-    const { deps, probe } = harness([], {
-      isTTY: true,
-      keys: scriptedKeys([KEY_ENTER, KEY_ENTER]),
-    });
+    // Enter on the default picks Claude Code; the second answer is the scope
+    // question that follows it.
+    const { deps, probe, ask } = harness([], { isTTY: true, answers: ['', ''] });
     const code = await runInstall([], {
       ...deps,
       platform: 'linux',
@@ -613,22 +680,38 @@ describe('client selection', () => {
       detectDesktop: () => missing,
     });
     expect(code).toBe(EXIT_OK);
-    expect(probe.text()).toContain('어느 클라이언트에 등록할까요?');
-    expect(probe.text()).toContain('claude 감지됨: /usr/local/bin/claude');
-    expect(probe.text()).toContain('감지되지 않음');
-    // The instructions moved off the title so the title fits a narrow window.
-    expect(probe.text()).toContain('↑↓ 이동');
+
+    const question = ask.asked[0];
+    expect(question?.message).toBe('어느 클라이언트에 등록할까요?');
+    expect(question?.choices).toEqual(['claude-code', 'claude-desktop', 'both']);
+    expect(question?.default).toBe('claude-code');
+    expect(question?.descriptions[0]).toContain('claude 감지됨: /usr/local/bin/claude');
+    expect(question?.descriptions[1]).toContain('감지되지 않음');
+
     expect(probe.calls[0]?.args.slice(0, 3)).toEqual(['mcp', 'add', 'ssh-mcp']);
-    // The scope menu followed, so the registration is local by default.
+    // The scope question followed, so the registration is local by default.
     expect(probe.calls[0]?.args).toContain('local');
   });
 
-  it('runs only the Desktop path when the second row is chosen', async () => {
-    const target = configPath();
-    const { deps, probe } = harness([], {
-      isTTY: true,
-      keys: scriptedKeys([KEY_DOWN, KEY_ENTER]),
+  it('words the Desktop hint honestly when the reason is not "missing"', async () => {
+    const { deps, ask } = harness([], { isTTY: true, answers: ['', ''] });
+    await runInstall([], {
+      ...deps,
+      platform: 'linux',
+      detectCode: () => found,
+      detectDesktop: () => ({
+        found: false,
+        where: '감지되지 않음(WSL에서는 Windows의 Claude Desktop 설정에 접근하지 않습니다)',
+      }),
     });
+    expect(ask.asked[0]?.descriptions[1]).toContain(
+      'WSL에서는 Windows의 Claude Desktop 설정에 접근하지 않습니다'
+    );
+  });
+
+  it('runs only the Desktop path when Desktop is chosen', async () => {
+    const target = configPath();
+    const { deps, probe } = harness([], { isTTY: true, answers: ['claude-desktop'] });
     const code = await runInstall([], {
       ...deps,
       platform: 'linux',
@@ -646,11 +729,8 @@ describe('client selection', () => {
   });
 
   it('runs both in order and summarises the two results', async () => {
-    const { deps, probe } = harness([], {
-      isTTY: true,
-      // '3' picks "both"; the Enter answers the scope menu that follows.
-      keys: scriptedKeys([{ name: '3', sequence: '3' }, KEY_ENTER]),
-    });
+    // "both", then the scope question that the Claude Code half asks.
+    const { deps, probe } = harness([], { isTTY: true, answers: ['both', ''] });
     const code = await runInstall([], {
       ...deps,
       platform: 'linux',
@@ -667,11 +747,33 @@ describe('client selection', () => {
     expect(probe.text()).toContain('Claude Code: 등록 완료 / Claude Desktop: 등록 완료');
   });
 
+  it('does not claim a dry run registered anything', async () => {
+    // The summary is the only line a reader sees after a dry run, so calling it
+    // "등록 완료" would be a lie about a file that was never written.
+    const { deps, probe } = harness([], { isTTY: true, answers: ['both', ''] });
+    const desktopConfig = path.join(tmpDir, '.config', 'Claude', 'claude_desktop_config.json');
+    fs.rmSync(desktopConfig, { force: true });
+
+    const code = await runInstall(['--dry-run'], {
+      ...deps,
+      platform: 'linux',
+      homedir: () => tmpDir,
+      env: {},
+      detectCode: () => found,
+      detectDesktop: () => found,
+    });
+
+    expect(code).toBe(EXIT_OK);
+    expect(probe.calls).toHaveLength(0);
+    expect(fs.existsSync(desktopConfig)).toBe(false);
+    expect(probe.text()).toContain('[dry-run] Claude Code: 등록 예정 / Claude Desktop: 등록 예정');
+    expect(probe.text()).not.toContain('등록 완료');
+  });
+
   it('reports failure when one half of "both" fails', async () => {
     const { deps, probe } = harness([{ status: 1, stdout: '', stderr: 'boom' }], {
       isTTY: true,
-      // '3' picks "both"; the Enter answers the scope menu that follows.
-      keys: scriptedKeys([{ name: '3', sequence: '3' }, KEY_ENTER]),
+      answers: ['both', ''],
     });
     const code = await runInstall([], {
       ...deps,
@@ -685,70 +787,9 @@ describe('client selection', () => {
     expect(probe.text()).toContain('Claude Code: 실패 / Claude Desktop: 등록 완료');
   });
 
-  // TERM=dumb, or stderr redirected while stdin is still a terminal: refusing
-  // to ask would be worse than asking in a plainer way.
-  it('asks the same question as text when no menu can be drawn', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true, keys: null });
-    const pending = runInstall([], {
-      ...deps,
-      platform: 'linux',
-      // Always redirect the Desktop path: without these it resolves against the
-      // developer's real home directory.
-      homedir: () => tmpDir,
-      env: {},
-      detectCode: () => found,
-      detectDesktop: () => missing,
-    });
-    prompt.send('2\n');
-    expect(await pending).toBe(EXIT_OK);
-    expect(prompt.output()).toContain('어느 클라이언트에 등록할까요?');
-    expect(prompt.output()).toContain('선택 [1/2/3, Enter=1]');
-    // Answer 2 is Claude Desktop, so nothing was spawned.
-    expect(probe.calls).toHaveLength(0);
-    expect(
-      fs.existsSync(path.join(tmpDir, '.config', 'Claude', 'claude_desktop_config.json'))
-    ).toBe(true);
-  });
-
-  it('takes Enter as Claude Code in the text fallback', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true, keys: null });
-    const pending = runInstall([], {
-      ...deps,
-      platform: 'linux',
-      detectCode: () => found,
-      detectDesktop: () => missing,
-    });
-    // First Enter picks Claude Code, second answers the scope question that
-    // also falls back to text.
-    prompt.send('\n\n');
-    expect(await pending).toBe(EXIT_OK);
-    expect(probe.calls[0]?.args).toContain('local');
-  });
-
-  it('words the Desktop hint honestly when the reason is not "missing"', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true, keys: null });
-    const pending = runInstall([], {
-      ...deps,
-      platform: 'linux',
-      detectCode: () => found,
-      detectDesktop: () => ({
-        found: false,
-        where: '감지되지 않음(WSL에서는 Windows의 Claude Desktop 설정에 접근하지 않습니다)',
-      }),
-    });
-    prompt.send('\n\n');
-    await pending;
-    expect(prompt.output()).toContain(
-      'WSL에서는 Windows의 Claude Desktop 설정에 접근하지 않습니다'
-    );
-    expect(probe.calls).toHaveLength(1);
-  });
-
-  it('registers nothing when the client menu is aborted', async () => {
-    const { deps, probe } = harness([], {
-      isTTY: true,
-      keys: scriptedKeys([{ name: 'c', ctrl: true }]),
-    });
+  it('registers nothing when the client question is aborted', async () => {
+    // No scripted answer: the stub aborts the way Ctrl-C does.
+    const { deps, probe } = harness([], { isTTY: true });
     const code = await runInstall([], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_FAILED);
     expect(probe.calls).toHaveLength(0);
@@ -763,145 +804,100 @@ describe('claude-code scope selection', () => {
     return args[args.indexOf('-s') + 1];
   }
 
-  it('asks once in a terminal, naming the directory local would bind to', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true });
-    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux', cwd: () => tmpDir });
-    prompt.send('2\n');
-    expect(await pending).toBe(EXIT_OK);
-    expect(prompt.output()).toContain('Claude Code 어디에 등록할까요?');
-    expect(prompt.output()).toContain(tmpDir);
-    expect(prompt.output()).toContain('선택 [1/2, Enter=1]:');
-    expect(scopeOf(probe.calls)).toBe('user');
-  });
-
-  it('shows a POSIX working directory in the scope hint on linux', async () => {
-    const posixCwd = '/home/me/work/api';
-    const { deps, probe, prompt } = harness([], {
-      isTTY: true,
-      keys: scriptedKeys([KEY_ENTER]),
-    });
-    const pending = runInstall(['claude-code'], {
-      ...deps,
-      platform: 'linux',
-      cwd: () => posixCwd,
-    });
-    expect(await pending).toBe(EXIT_OK);
-    expect(probe.text()).toContain(posixCwd);
-    expect(prompt.output()).toBe('');
-    // The success line says what `local` actually covers, with the same path.
-    expect(probe.text()).toContain(`이 등록은 ${posixCwd}에서 연 Claude Code에서만 보입니다.`);
-  });
-
-  it('treats a bare Enter as local', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true });
-    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
-    prompt.send('\n');
-    expect(await pending).toBe(EXIT_OK);
-    expect(scopeOf(probe.calls)).toBe('local');
-  });
-
-  it('accepts the scope names themselves, ignoring case and spaces', async () => {
-    for (const answer of ['user', ' USER ', '2']) {
-      const { deps, probe, prompt } = harness([], { isTTY: true });
-      const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
-      prompt.send(`${answer}\n`);
-      expect(await pending).toBe(EXIT_OK);
-      expect(scopeOf(probe.calls)).toBe('user');
-    }
-    for (const answer of ['local', 'LOCAL', '1']) {
-      const { deps, probe, prompt } = harness([], { isTTY: true });
-      const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
-      prompt.send(`${answer}\n`);
-      expect(await pending).toBe(EXIT_OK);
-      expect(scopeOf(probe.calls)).toBe('local');
-    }
-  });
-
-  it('re-asks after a bad answer and takes the next good one', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true });
-    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
-    prompt.send('3\nyes\n1\n');
-    expect(await pending).toBe(EXIT_OK);
-    expect(prompt.output()).toContain('1 또는 2를 입력하세요.');
-    expect(scopeOf(probe.calls)).toBe('local');
-  });
-
-  it('registers nothing after three bad answers', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true });
-    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
-    prompt.send('x\ny\nz\n');
-    expect(await pending).toBe(EXIT_FAILED);
-    expect(probe.calls).toHaveLength(0);
-    expect(probe.text()).toContain('등록할 scope를 선택하지 않았습니다');
-  });
-
-  it('registers nothing when the input stream ends mid-question', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true });
-    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
-    prompt.end();
-    expect(await pending).toBe(EXIT_FAILED);
-    expect(probe.calls).toHaveLength(0);
-    expect(probe.text()).toContain('등록할 scope를 선택하지 않았습니다');
-  });
-
-  it('reports an unexpected prompt failure without registering anything', async () => {
-    const { deps, probe } = harness([], { isTTY: true });
-    const exploding = {
-      interactive: true,
-      write: () => undefined,
-      writeLine: () => undefined,
-      readLine: () => Promise.reject(new Error('stream exploded')),
-    } as unknown as Prompter;
+  it('asks once, naming the directory local would bind to', async () => {
+    const { deps, probe, ask } = harness([], { isTTY: true, answers: ['user'] });
     const code = await runInstall(['claude-code'], {
       ...deps,
       platform: 'linux',
-      prompter: exploding,
+      cwd: () => tmpDir,
     });
-    expect(code).toBe(EXIT_FAILED);
-    expect(probe.calls).toHaveLength(0);
-    expect(probe.text()).toContain('scope 선택이 중단되었습니다');
-    expect(probe.text()).toContain('stream exploded');
+    expect(code).toBe(EXIT_OK);
+    expect(ask.asked[0]?.message).toBe('Claude Code 어디에 등록할까요?');
+    expect(ask.asked[0]?.choices).toEqual(['local', 'user']);
+    expect(ask.asked[0]?.default).toBe('local');
+    expect(ask.asked[0]?.descriptions[0]).toContain(tmpDir);
+    expect(scopeOf(probe.calls)).toBe('user');
+  });
+
+  it('shows a POSIX working directory in the hint and the success line on linux', async () => {
+    const posixCwd = '/home/me/work/api';
+    const { deps, probe, ask } = harness([], { isTTY: true, answers: [''] });
+    expect(
+      await runInstall(['claude-code'], { ...deps, platform: 'linux', cwd: () => posixCwd })
+    ).toBe(EXIT_OK);
+    expect(ask.asked[0]?.descriptions[0]).toContain(posixCwd);
+    expect(probe.text()).toContain(`이 등록은 ${posixCwd}에서 연 Claude Code에서만 보입니다.`);
+  });
+
+  it('takes the default when the question is answered with Enter', async () => {
+    const { deps, probe } = harness([], { isTTY: true, answers: [''] });
+    expect(await runInstall(['claude-code'], { ...deps, platform: 'linux' })).toBe(EXIT_OK);
+    expect(scopeOf(probe.calls)).toBe('local');
   });
 
   it('never asks when --scope is given', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true });
+    const { deps, probe, ask } = harness([], { isTTY: true });
     expect(
       await runInstall(['claude-code', '--scope', 'user'], { ...deps, platform: 'linux' })
     ).toBe(EXIT_OK);
-    expect(prompt.output()).toBe('');
+    expect(ask.asked).toHaveLength(0);
     expect(scopeOf(probe.calls)).toBe('user');
   });
 
   it('falls back to local with one explanatory line when stdin is not a terminal', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: false });
+    const { deps, probe, ask } = harness([], { isTTY: false });
     expect(
       await runInstall(['claude-code'], { ...deps, platform: 'linux', cwd: () => tmpDir })
     ).toBe(EXIT_OK);
-    expect(prompt.output()).toBe('');
+    expect(ask.asked).toHaveLength(0);
     expect(scopeOf(probe.calls)).toBe('local');
     expect(probe.text()).toContain('--scope를 지정하지 않아 Claude Code 기본값 local');
     expect(probe.text()).toContain(tmpDir);
     expect(probe.text()).toContain('--scope user 를 지정하세요');
   });
 
+  it('registers nothing when the scope question is aborted', async () => {
+    const { deps, probe } = harness([], { isTTY: true });
+    const code = await runInstall(['claude-code'], { ...deps, platform: 'linux' });
+    expect(code).toBe(EXIT_FAILED);
+    expect(probe.calls).toHaveLength(0);
+    expect(probe.text()).toContain('등록할 scope를 선택하지 않았습니다');
+  });
+
+  it('reports an unexpected prompt failure without registering anything', async () => {
+    const { deps, probe } = harness([], { isTTY: true });
+    const code = await runInstall(['claude-code'], {
+      ...deps,
+      platform: 'linux',
+      ask: {
+        select: () => Promise.reject(new Error('prompt exploded')),
+        text: () => Promise.reject(new Error('prompt exploded')),
+      },
+    });
+    expect(code).toBe(EXIT_FAILED);
+    expect(probe.calls).toHaveLength(0);
+    expect(probe.text()).toContain('scope 선택이 중단되었습니다');
+    expect(probe.text()).toContain('prompt exploded');
+  });
+
   it('asks before a --dry-run too, and prints the chosen scope', async () => {
-    const { deps, probe, prompt } = harness([], { isTTY: true });
-    const pending = runInstall(['claude-code', '--dry-run'], { ...deps, platform: 'linux' });
-    prompt.send('2\n');
-    expect(await pending).toBe(EXIT_OK);
+    const { deps, probe } = harness([], { isTTY: true, answers: ['user'] });
+    expect(await runInstall(['claude-code', '--dry-run'], { ...deps, platform: 'linux' })).toBe(
+      EXIT_OK
+    );
     expect(probe.calls).toHaveLength(0);
     expect(probe.text()).toContain(`claude mcp add ssh-mcp -s user -- npx -y ${PKG}`);
   });
 
-  it('never consults the prompter for claude-desktop', async () => {
-    const { deps, prompt } = harness([], { isTTY: true });
+  it('never asks anything for claude-desktop', async () => {
+    const { deps, ask } = harness([], { isTTY: true });
     expect(
       await runInstall(['claude-desktop', '--config', configPath()], {
         ...deps,
         platform: 'linux',
       })
     ).toBe(EXIT_OK);
-    expect(prompt.output()).toBe('');
+    expect(ask.asked).toHaveLength(0);
   });
 
   it('says what each scope actually covers on success', async () => {
@@ -948,6 +944,51 @@ describe('claude-desktop', () => {
     expect(probe.text()).toContain('Claude Desktop을 완전히 종료했다가 다시 시작');
     expect(fs.readFileSync(target, 'utf8').endsWith('\n')).toBe(true);
   });
+
+  /**
+   * This file is not ours. It belongs to Claude Desktop and can hold other
+   * servers' credentials, so a user who restricted it must not find it
+   * world-readable afterwards. `writeFileSync` creates at 0644 and
+   * `renameSync` carries that mode onto the target, which is the regression.
+   */
+  it.skipIf(process.platform === 'win32')(
+    'preserves the mode of the config it replaces, and of the backup',
+    async () => {
+      const target = configPath();
+      fs.writeFileSync(target, JSON.stringify({ mcpServers: {} }), 'utf8');
+      fs.chmodSync(target, 0o600);
+
+      const { deps } = harness();
+      const code = await runInstall(['claude-desktop', '--config', target], {
+        ...deps,
+        platform: 'linux',
+      });
+
+      expect(code).toBe(EXIT_OK);
+      expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+      // The backup holds the same bytes, so it needs the same permissions.
+      const backup = fs
+        .readdirSync(path.dirname(target))
+        .find((name) => name.startsWith(`${path.basename(target)}.bak-`));
+      expect(backup).toBeDefined();
+      expect(fs.statSync(path.join(path.dirname(target), backup ?? '')).mode & 0o777).toBe(0o600);
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'leaves the platform default on a file it creates',
+    async () => {
+      // Nothing to preserve, so nothing is imposed either — `--config` into a
+      // fresh path must behave like any other file this process writes.
+      const target = path.join(tmpDir, 'fresh', 'claude_desktop_config.json');
+      const { deps } = harness();
+      expect(
+        await runInstall(['claude-desktop', '--config', target], { ...deps, platform: 'linux' })
+      ).toBe(EXIT_OK);
+      const expected = 0o666 & ~process.umask();
+      expect(fs.statSync(target).mode & 0o777).toBe(expected);
+    }
+  );
 
   it('merges into an existing file, preserving other servers and other keys', async () => {
     const target = configPath();

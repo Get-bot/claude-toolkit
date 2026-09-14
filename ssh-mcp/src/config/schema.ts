@@ -43,6 +43,18 @@ export const MAX_MAX_OUTPUT_BYTES = 4194304;
 /** ReDoS guard: an override pattern may not exceed this length (§5.2). */
 export const MAX_PATTERN_LENGTH = 512;
 
+/**
+ * Limits that questions and parsers must enforce *before* a host is set up.
+ *
+ * `HostEntrySchema` below is the authority, but it only runs at `store.save()`
+ * — the very last step, after the password, the key pair and the remote
+ * `authorized_keys` install. A value that only fails there leaves the public
+ * key on the remote host with nothing locally to match it, so the same numbers
+ * have to be reachable by the wizard and the argument parser.
+ */
+export const MAX_USER_LENGTH = 64;
+export const MAX_LABEL_LENGTH = 128;
+
 export const AliasSchema = z.string().regex(ALIAS_PATTERN, 'invalid host alias');
 
 function compilesAsRegExp(pattern: string): boolean {
@@ -103,7 +115,7 @@ export const HostEntrySchema = z
     user: z
       .string()
       .min(1)
-      .max(64)
+      .max(MAX_USER_LENGTH)
       .regex(/^[^\s:]+$/, 'user must not contain whitespace or ":"'),
     privateKeyPath: z.string().min(1),
     hostKey: HostKeySchema,
@@ -135,7 +147,7 @@ export const HostEntrySchema = z
       .min(MIN_MAX_OUTPUT_BYTES)
       .max(MAX_MAX_OUTPUT_BYTES)
       .default(DEFAULT_MAX_OUTPUT_BYTES),
-    label: z.string().max(128).optional(),
+    label: z.string().max(MAX_LABEL_LENGTH).optional(),
     createdAt: z.iso.datetime({ offset: true }),
   })
   .strict();

@@ -16,7 +16,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { homePath, hostsFilePath, keysDirPath } from '../../src/config/paths.js';
 import { runHost } from '../../src/host/cli.js';
-import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, runHostList } from '../../src/host/list.js';
+import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, renderTable, runHostList } from '../../src/host/list.js';
+import type { HostRow } from '../../src/host/list.js';
 import { runSetup } from '../../src/setup/cli.js';
 import type { Prompter } from '../../src/setup/prompt.js';
 import { assertNoWritesOutside, createTmpHome } from '../fixtures/tmpHome.js';
@@ -99,10 +100,31 @@ describe('host group routing', () => {
     expect(io.errText()).toContain('unknown sub-command "remove"');
   });
 
-  it('exits 0 for `host --help`', async () => {
+  /**
+   * Help that was asked for is not an error. `host list --help` already splits
+   * it this way, so the group help doing the opposite meant `ssh-mcp host
+   * --help > help.txt` produced an empty file.
+   */
+  it('sends asked-for group help to stdout and exits 0', async () => {
     const io = capture();
-    expect(await runHost(['--help'], { err: (text) => io.err.push(text) })).toBe(EXIT_OK);
+    const code = await runHost(['--help'], {
+      err: (text) => io.err.push(text),
+      out: (text) => io.out.push(text),
+    });
+    expect(code).toBe(EXIT_OK);
+    expect(io.outText()).toContain('Usage: ssh-mcp host');
+    expect(io.errText()).toBe('');
+  });
+
+  it('keeps the no-sub-command usage error on stderr', async () => {
+    const io = capture();
+    const code = await runHost([], {
+      err: (text) => io.err.push(text),
+      out: (text) => io.out.push(text),
+    });
+    expect(code).toBe(EXIT_USAGE);
     expect(io.errText()).toContain('Usage: ssh-mcp host');
+    expect(io.outText()).toBe('');
   });
 });
 
@@ -131,13 +153,85 @@ describe('`setup` is an alias of `host add`', () => {
     const hostLines: string[] = [];
     const hostCode = await runHost(['add'], {
       prompter: { write: (t: string) => hostLines.push(t), interactive: false } as never,
+      canAsk: () => false,
     });
     const setupLines: string[] = [];
     const setupCode = await runSetup([], {
       prompter: { write: (t: string) => setupLines.push(t), interactive: false } as never,
+      canAsk: () => false,
     });
     expect(hostCode).toBe(setupCode);
     expect(hostLines.join('')).toBe(setupLines.join(''));
+  });
+});
+
+/** A terminal for the steps that need one; the password must never be reached. */
+function interactivePrompter(lines: string[]): Prompter {
+  return {
+    interactive: true,
+    write: (text: string) => lines.push(text),
+    writeLine: (text = '') => lines.push(`${text}\n`),
+    readLine: () => Promise.reject(new Error('the password must never be asked for')),
+    close: () => undefined,
+  } as unknown as Prompter;
+}
+
+/**
+ * The wizard draws a list on stderr and reads keys from stdin, so a terminal
+ * that cannot do both gets the usage error rather than a stalled screen. A
+ * fully specified `host add` must keep working there: the password and
+ * fingerprint prompts ask for stdin alone.
+ */
+describe('the wizard only runs where a question can be drawn', () => {
+  it('gives the usage error instead of a wizard when the list cannot be drawn', async () => {
+    const lines: string[] = [];
+    const code = await runSetup([], {
+      prompter: {
+        write: (text: string) => lines.push(text),
+        interactive: true,
+      } as never,
+      canAsk: () => false,
+      ask: {
+        select: () => Promise.reject(new Error('nothing may be asked here')),
+        text: () => Promise.reject(new Error('nothing may be asked here')),
+      },
+    });
+    expect(code).toBe(2);
+    expect(lines.join('')).toContain('Usage: ssh-mcp host add');
+    // `host add 2>&1 | tee setup.log` is a terminal with a redirected stderr:
+    // the wizard cannot draw, and without this line it just vanishes.
+    expect(lines.join('')).toContain('이 터미널에는 목록을 그릴 수 없습니다');
+    expect(lines.join('')).toContain('인자를 모두 지정하면 질문 없이 실행됩니다.');
+  });
+
+  it('does not blame the terminal when the arguments were simply wrong', async () => {
+    // One positional is a typo, not a request to be asked, so the "cannot draw"
+    // explanation would be a non-sequitur here.
+    const lines: string[] = [];
+    const code = await runSetup(['web01'], {
+      prompter: {
+        write: (text: string) => lines.push(text),
+        interactive: true,
+      } as never,
+      canAsk: () => false,
+    });
+    expect(code).toBe(2);
+    expect(lines.join('')).not.toContain('이 터미널에는 목록을 그릴 수 없습니다');
+  });
+
+  it('still runs a fully specified host add there', async () => {
+    const probed: string[] = [];
+    const code = await runSetup(['web01', 'deploy@example.com'], {
+      prompter: interactivePrompter([]),
+      canAsk: () => false,
+      probeTcp: (host, port) => {
+        probed.push(`${host}:${String(port)}`);
+        return Promise.resolve({ ok: false, code: 'ETIMEDOUT', reason: '응답이 없습니다' });
+      },
+    });
+    // It got as far as the address check, which is all this needs to show.
+    expect(probed).toEqual(['example.com:22']);
+    expect(code).toBe(1);
   });
 });
 
@@ -147,16 +241,6 @@ describe('`setup` is an alias of `host add`', () => {
  * `getaddrinfo ENOTFOUND`. The address is checked first now.
  */
 describe('host add checks the address before anything expensive', () => {
-  function interactivePrompter(lines: string[]): Prompter {
-    return {
-      interactive: true,
-      write: (text: string) => lines.push(text),
-      writeLine: (text = '') => lines.push(`${text}\n`),
-      readLine: () => Promise.reject(new Error('the password must never be asked for')),
-      close: () => undefined,
-    } as unknown as Prompter;
-  }
-
   it('stops at connection_failed without prompting or writing a key', async () => {
     const lines: string[] = [];
     const probed: string[] = [];
@@ -321,5 +405,45 @@ describe('host list', () => {
     const help = capture();
     expect(runHostList(['--help'], { out: (text) => help.out.push(text) })).toBe(EXIT_OK);
     expect(help.outText()).toContain('Usage: ssh-mcp host list');
+  });
+});
+
+describe('renderTable', () => {
+  function row(overrides: Partial<HostRow> = {}): HostRow {
+    return {
+      alias: 'web01',
+      target: 'deploy@web01.example.com:22',
+      approvalMode: 'ask-destructive',
+      approvalFallback: 'fail-closed',
+      fingerprint: 'SHA256:47DEQpj8HBSa+/T',
+      label: '',
+      ...overrides,
+    };
+  }
+
+  /** The separator line is always the second line: header, separator, rows. */
+  function separatorLabelSegment(rows: readonly HostRow[]): string {
+    const separator = renderTable(rows).split('\n')[1] ?? '';
+    return separator.split('  ').pop() ?? '';
+  }
+
+  // Every other column's underline tracks that column's own computed width.
+  // Before this fix the label column's was pinned to `'-'.repeat(4)` — the
+  // display width of the header "라벨" — so a longer label ran past the end
+  // of its underline instead of being covered by it.
+  it('draws the label separator as long as the longest label, not a fixed 4', () => {
+    const longLabel = 'a'.repeat(20);
+    const segment = separatorLabelSegment([row({ label: longLabel })]);
+    expect(segment.length).toBe(longLabel.length);
+    expect(segment.length).toBeGreaterThan(4);
+  });
+
+  // Same fix, CJK spelling: a Hangul label must widen the separator by two
+  // display cells per character, the same convention `displayWidth` already
+  // applies to every other column.
+  it('widens the label separator by two cells per Hangul character', () => {
+    const label = '아주긴라벨이름입니다'; // 10 syllables
+    const segment = separatorLabelSegment([row({ label })]);
+    expect(segment.length).toBe(label.length * 2);
   });
 });

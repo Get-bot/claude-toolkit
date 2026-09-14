@@ -6,7 +6,7 @@
   "license": "MIT",
   "author": "Get-bot",
   "engines": {
-    "node": ">=20"
+    "node": "^20.17.0 || ^22.13.0 || >=23.5.0"
   },
   "bin": {
     "ssh-mcp": "dist/index.js"
@@ -37,7 +37,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/assert-bundle-imports.mjs --self-test && node scripts/assert-bundle-imports.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
@@ -51,6 +51,8 @@
     "prepare": "cd .. && husky ssh-mcp/.husky"
   },
   "dependencies": {
+    "@inquirer/input": "5.1.6",
+    "@inquirer/select": "5.2.5",
     "@modelcontextprotocol/sdk": "1.30.0",
     "ssh2": "1.17.0",
     "zod": "4.6.2"

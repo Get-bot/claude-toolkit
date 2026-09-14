@@ -19,6 +19,8 @@
  *   cannot leave a truncated config behind.
  * - An existing entry under the same name is never overwritten without
  *   `--force`.
+ * - The file's POSIX permissions are carried across the swap, so a config the
+ *   user had restricted does not come back world-readable.
  *
  * Re-serialisation with two-space indent is the one cosmetic change we accept
  * (the alternative is a JSON-preserving editor, which is a dependency and a
@@ -98,6 +100,38 @@ export function backupPath(target: string, now: Date): string {
 const MAX_BACKUP_SUFFIX = 1000;
 
 /**
+ * The mode of an existing file, or null when there is none to copy.
+ *
+ * Windows has no POSIX mode worth carrying, and `chmodSync` there only toggles
+ * the read-only bit, so the whole idea is skipped on win32.
+ */
+function existingMode(target: string): number | null {
+  if (process.platform === 'win32') return null;
+  try {
+    // Only the permission bits; the file-type bits must not be handed to chmod.
+    return fs.statSync(target).mode & 0o7777;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copy the target's permissions onto a file that is about to become it.
+ *
+ * `writeFileSync` creates at 0666 masked by umask — usually 0644 — and
+ * `renameSync` carries the temporary file's mode across, so without this a
+ * config the user had locked down to 0600 comes back world-readable. This file
+ * is not ours: it belongs to Claude Desktop and can hold other servers'
+ * credentials. So the target's own mode is preserved rather than a mode of our
+ * choosing being imposed; a file we are creating for the first time keeps the
+ * platform default, which is what `--config` into a fresh path should do.
+ */
+function copyMode(mode: number | null, filePath: string): void {
+  if (mode === null) return;
+  fs.chmodSync(filePath, mode);
+}
+
+/**
  * Write the backup, never over an existing one.
  *
  * The timestamp only has second resolution, so two runs in the same second
@@ -105,12 +139,15 @@ const MAX_BACKUP_SUFFIX = 1000;
  * the file the user would want back. `wx` makes the check and the write one
  * operation, so a concurrent run cannot slip between them either.
  */
-function writeBackup(target: string, now: Date, body: string): string {
+function writeBackup(target: string, now: Date, body: string, mode: number | null): string {
   const base = backupPath(target, now);
   for (let suffix = 0; suffix < MAX_BACKUP_SUFFIX; suffix += 1) {
     const candidate = suffix === 0 ? base : `${base}-${String(suffix)}`;
     try {
       fs.writeFileSync(candidate, body, { encoding: 'utf8', flag: 'wx' });
+      // The backup is a copy of the config, so it needs the config's
+      // permissions — leaving it at 0644 would publish what the original hid.
+      copyMode(mode, candidate);
       return candidate;
     } catch (err) {
       if (!isErrnoCode(err, 'EEXIST')) throw err;
@@ -196,14 +233,17 @@ export function installClaudeDesktop(options: DesktopInstallOptions): boolean {
   // A fixed `.tmp` name would let two concurrent runs write the same scratch
   // file and rename each other's half-written content into place.
   const tmp = `${target}.${String(process.pid)}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  // Read before anything is written, so it describes the file the user had.
+  const mode = existingMode(target);
   let backup: string | null = null;
 
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (raw !== null) {
-      backup = writeBackup(target, options.now(), raw);
+      backup = writeBackup(target, options.now(), raw, mode);
     }
     fs.writeFileSync(tmp, body, 'utf8');
+    copyMode(mode, tmp);
     try {
       fs.renameSync(tmp, target);
     } catch (err) {

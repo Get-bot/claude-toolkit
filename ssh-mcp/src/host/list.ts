@@ -16,6 +16,7 @@
 import { DEFAULT_APPROVAL_FALLBACK } from '../config/schema.js';
 import type { HostEntry } from '../config/schema.js';
 import * as store from '../config/store.js';
+import { stripControlChars } from '../internal/util.js';
 import { fingerprintPrefix } from '../tools/listHosts.js';
 
 export const EXIT_OK = 0;
@@ -37,12 +38,12 @@ export const USAGE = [
  * by an older build or by hand can still hold one, and this table is printed to
  * a terminal. A stored escape sequence would rewrite the screen long after it
  * was entered, so the last line of defence is here, at the point of printing.
+ *
+ * Replacing, not refusing: a table that cannot be shown because one stored
+ * label is malformed would hide every other host too.
  */
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/gu;
-
 export function printable(value: string): string {
-  return value.replace(CONTROL_CHARS, '?');
+  return stripControlChars(value);
 }
 
 /** One row of the table, already reduced to what may be shown. */
@@ -114,6 +115,7 @@ export function renderTable(rows: readonly HostRow[]): string {
     mode: width((row) => row.approvalMode),
     fallback: width((row) => row.approvalFallback),
     fingerprint: width((row) => row.fingerprint),
+    label: width((row) => row.label),
   };
 
   const line = (row: HostRow): string =>
@@ -134,7 +136,7 @@ export function renderTable(rows: readonly HostRow[]): string {
     '-'.repeat(widths.mode),
     '-'.repeat(widths.fallback),
     '-'.repeat(widths.fingerprint),
-    '-'.repeat(4),
+    '-'.repeat(widths.label),
   ].join('  ');
 
   return [line(header), separator, ...rows.map(line)].join('\n');
