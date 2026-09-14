@@ -233,7 +233,9 @@ $ npx @get-bot/ssh-mcp install claude-code --dry-run
 
 **서버가 실제로 강제할 수 있는 것은 `fail-closed`와 Claude Code의 `requiresUserInteraction`뿐입니다.** 그 외에는 클라이언트 쪽 UI(대화상자, elicitation 창)를 신뢰해야 합니다. 자세한 내용은 [보안 모델](#보안-모델)을 보세요.
 
-**elicitation 요청의 스키마.** Claude Code로 보내는 elicitation 요청은 불리언 필드 `confirm` 하나(`{ "confirm": { "type": "boolean", "title": "이 명령을 실행합니다" } }`)만 요구합니다. `confirm`이 정확히 `true`로 승인된 경우에만 실행되고, 그 외(거절·취소·타임아웃·`confirm: false`)는 전부 `command_denied`로 처리됩니다.
+**elicitation 요청의 스키마.** Claude Code로 보내는 elicitation 요청은 불리언 필드 `confirm` 하나(`{ "confirm": { "type": "boolean", "title": "이 명령을 실행합니다 (스페이스로 체크한 뒤 Accept)" } }`)만 요구합니다. `confirm`이 정확히 `true`로 승인된 경우에만 실행되고, 그 외(거절·취소·타임아웃·`confirm: false`)는 전부 `command_denied`로 처리됩니다.
+
+**승인 창에서는 체크박스를 먼저 체크해야 합니다.** Claude Code(2.1.270, Windows 11 실측)는 이 필수 불리언 필드를 체크되지 않은 체크박스 `☐`로 그리고, 체크하지 않은 채 Accept를 누르면 "This field is required"로 제출을 막습니다. 그래서 체크 없이 Accept만 누르면 창이 그대로 남아 "승인이 안 된다"처럼 보이지만 Decline은 즉시 먹힙니다. 방향키나 Tab으로 체크박스에 포커스를 옮겨 스페이스로 `☑`로 바꾼 뒤 Accept를 누르세요. 서버가 보내는 승인 메시지 마지막 줄과 체크박스 제목에도 같은 안내가 들어 있습니다. `confirm: true` 요구 자체는 "Accept 버튼이 눌렸다"와 "실행하겠다는 값이 왔다"를 분리해 두려는 의도(AC17.1b)라 유지합니다.
 
 **`confirmation_required` 응답은 명령 전문을 그대로 담습니다.** 토큰 발급 경로(`confirmation_required`)의 응답 본문에는 `confirmation_token`과 함께 명령 문자열이 최대 8192자까지(분류기의 명령 길이 상한과 동일) 잘리지 않고 담깁니다 — 모델이 사용자에게 보여줄 재료를 완제품으로 주기 위함입니다.
 

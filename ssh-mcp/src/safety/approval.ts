@@ -60,6 +60,22 @@ export const ELICITATION_TIMEOUT_MS = TOKEN_TTL_MS;
 export const ELICIT_CONFIRM_FIELD = 'confirm';
 
 /**
+ * The checkbox label and the last paragraph of the elicitation message.
+ *
+ * Claude Code (2.1.270, observed 2026-09-14) renders a required boolean as an
+ * unchecked checkbox and refuses to submit the form while it is unchecked
+ * ("This field is required"). Pressing Accept therefore does nothing until the
+ * box is ticked, while Decline works immediately — which reads as "approval is
+ * broken" to someone who has not been told about the box. The `confirm: true`
+ * requirement itself stays (AC17.1b); the fix is to say, inside the dialog,
+ * what the dialog expects.
+ */
+export const ELICIT_CONFIRM_TITLE = '이 명령을 실행합니다 (스페이스로 체크한 뒤 Accept)';
+export const ELICIT_HOW_TO_APPROVE =
+  '승인하려면 아래 체크박스로 이동해 스페이스로 체크(☑)한 뒤 Accept를 누르세요. ' +
+  '체크하지 않으면 제출되지 않습니다. 실행하지 않으려면 Decline을 누르세요.';
+
+/**
  * M1/M2 shared text. §5.6b puts the same sentence in the `exec` and
  * `run_in_session` descriptions; both read it from here so the two cannot drift
  * apart.
@@ -310,13 +326,15 @@ function buildElicitRequestFor(ctx: ApprovalContext): ElicitRequest {
     `매칭된 패턴: ${reasons}`,
     '명령 전문:',
     ctx.promptText,
+    '',
+    ELICIT_HOW_TO_APPROVE,
   ].join('\n');
 
   return {
     message,
     requestedSchema: {
       type: 'object',
-      properties: { [ELICIT_CONFIRM_FIELD]: { type: 'boolean', title: '이 명령을 실행합니다' } },
+      properties: { [ELICIT_CONFIRM_FIELD]: { type: 'boolean', title: ELICIT_CONFIRM_TITLE } },
       required: [ELICIT_CONFIRM_FIELD],
     },
   };

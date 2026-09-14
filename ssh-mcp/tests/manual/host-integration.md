@@ -119,6 +119,7 @@ npx @get-bot/ssh-mcp install claude-code
 구체적 절차:
 
 - [ ] **Claude Code에서** "myhost에서 `rm -rf /tmp/sshmcp-test` 실행"을 시킬 때 **elicitation 확인 창**이 뜬다. 거절하면 실행되지 않는다.
+- [ ] 확인 창의 메시지 마지막 줄에 "스페이스로 체크(☑)한 뒤 Accept" 안내가 있고, 체크박스 제목이 `이 명령을 실행합니다 (스페이스로 체크한 뒤 Accept)`다. 체크하지 않고 Accept를 누르면 "This field is required"로 제출이 막히고(실행되지 않음), 체크한 뒤 Accept를 누르면 실행된다. (2026-09-14 Claude Code 2.1.270 실측 — 안내 문구가 없을 때 사용자가 "승인이 안 된다"고 오해한 사례가 있었다.)
 - [ ] `/permissions`에서 `exec`를 always-allow로 설정한 뒤에도 같은 명령에 여전히 확인 창이 뜬다(`_meta`의 `requiresUserInteraction` 검증 — always-allow 무력화 확인).
 - [ ] **Claude Desktop에서** 같은 명령을 시킬 때 `confirmation_required` 응답이 오고 모델이 사용자에게 승인을 요청한다. Desktop의 도구 승인 대화상자에 명령 전문이 보인다.
 - [ ] **elicitation 창은 Desktop에서 뜨지 않는 것이 정상 동작이다.** (Desktop은 elicitation을 지원하지 않으므로 — 이것이 FAIL이 아니라 기대된 결과임을 리뷰어가 인지하고 있어야 한다)
