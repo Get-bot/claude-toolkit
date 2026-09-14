@@ -18,3 +18,13 @@ node_modules/
 ssh-mcp/dist/
 ssh-mcp/coverage/
 ssh-mcp/*.tgz
+
+# OMC 런타임 상태. CLAUDE.md 기준 .omc/** 는 기본적으로 무시되는 운영 산출물이며,
+# 계획서(README가 ADR 전문을 여기로 링크한다)와 프로젝트 스코프 스킬만 예외다.
+/.omc/*
+!/.omc/plans/
+!/.omc/skills/
+*/.omc/
+
+# Serena 도구 상태
+.serena/
