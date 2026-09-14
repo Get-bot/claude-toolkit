@@ -608,16 +608,18 @@ describe('claude-code', () => {
   });
 
   it('quotes an argument with spaces in the printed command', async () => {
+    // `--home` is resolved against the real cwd with the host's path rules, so
+    // a Windows literal here would come out as `<cwd>/C:\Program Files\...` on
+    // Linux and the assertion would miss. Build a path that is absolute on
+    // whichever platform runs the test; the space is what this is about.
+    const spaced = path.join(os.tmpdir(), 'ssh mcp home');
     const { deps, probe } = harness();
-    const code = await runInstall(
-      ['claude-code', '--dry-run', '--home', 'C:\\Program Files\\ssh-mcp'],
-      {
-        ...deps,
-        platform: 'win32',
-      }
-    );
+    const code = await runInstall(['claude-code', '--dry-run', '--home', spaced], {
+      ...deps,
+      platform: 'win32',
+    });
     expect(code).toBe(EXIT_OK);
-    expect(probe.text()).toContain('"SSH_MCP_HOME=C:\\Program Files\\ssh-mcp"');
+    expect(probe.text()).toContain(`"SSH_MCP_HOME=${spaced}"`);
     // Parts that need no quoting stay bare, so the line still reads as a command.
     expect(probe.text()).toContain('claude mcp add ssh-mcp -s local -e ');
   });

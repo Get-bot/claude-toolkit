@@ -37,9 +37,26 @@ function forbidStdout(): void {
   });
 }
 
-/** Give the prompt a turn of the loop to render or to react to a key. */
-function settle(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 20));
+/**
+ * Wait until the prompt has actually drawn `needle`, and return what it drew.
+ *
+ * A fixed 20 ms sleep used to stand here and it was not enough: the adapter
+ * pulls `@inquirer` in with a dynamic import, and on a loaded CI runner that
+ * first load ran past the sleep — the assertion then read an empty string, and
+ * the key written right after it was dropped because inquirer discards input
+ * that arrives before the first render. Measured as a flake on ubuntu 20/22
+ * and windows 20 while windows 22 passed.
+ */
+async function drawnText(read: () => string, needle: string, timeoutMs = 10_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const text = read();
+    if (text.includes(needle)) return text;
+    if (Date.now() >= deadline) {
+      throw new Error(`prompt never drew ${JSON.stringify(needle)}; drew ${JSON.stringify(text)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 describe('createAsker', () => {
@@ -61,13 +78,12 @@ describe('createAsker', () => {
       default: 'local',
     });
 
-    await settle();
-    expect(drawn).toContain('어디에 등록할까요?');
+    const shown = await drawnText(() => drawn, '어디에 등록할까요?');
     // The footer is the library's only prose, and it reads in the same language
     // as everything above it.
-    expect(drawn).toContain('이동');
-    expect(drawn).toContain('선택');
-    expect(drawn).not.toContain('navigate');
+    expect(shown).toContain('이동');
+    expect(shown).toContain('선택');
+    expect(shown).not.toContain('navigate');
     input.write(ENTER);
     expect(await pending).toBe('local');
   });
@@ -91,9 +107,8 @@ describe('createAsker', () => {
         message: '어디에 등록할까요?',
         choices: [{ value: 'local', name: '이 프로젝트만' }],
       });
-      await settle();
-      expect(drawn).toContain('이동');
-      expect(drawn).toContain('선택');
+      const shown = await drawnText(() => drawn, '이동');
+      expect(shown).toContain('선택');
       input.write(ENTER);
       expect(await pending).toBe('local');
     } finally {
@@ -111,8 +126,7 @@ describe('createAsker', () => {
 
     const input = new PassThrough();
     const pending = createAsker({ input }).text({ message: '라벨' });
-    await settle();
-    expect(drawn).toContain('라벨');
+    await drawnText(() => drawn, '라벨');
     input.write(`hello${ENTER}`);
     expect(await pending).toBe('hello');
   });
@@ -121,10 +135,15 @@ describe('createAsker', () => {
     forbidStdout();
     const input = new PassThrough();
     const output = new PassThrough();
-    output.resume();
+    let drawn = '';
+    output.on('data', (chunk: Buffer) => {
+      drawn += chunk.toString('utf8');
+    });
 
     const pending = createAsker({ input, output }).text({ message: '호스트 주소' });
-    await settle();
+    // Ctrl-C only reaches a prompt that is already listening, so wait for the
+    // question to appear rather than for a fixed number of milliseconds.
+    await drawnText(() => drawn, '호스트 주소');
     input.write(CTRL_C);
 
     await expect(pending).rejects.toBeInstanceOf(PromptAbortedError);
