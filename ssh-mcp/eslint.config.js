@@ -45,5 +45,13 @@ export default tseslint.config(
   {
     files: ['*.config.ts', '*.config.js', 'eslint.config.js'],
     rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
+    // CI helper scripts (not shipped — package.json `files` is dist/README/LICENSE). Plain ESM
+    // run by `node`, so they need the Node globals the TS block above only grants to **/*.ts,
+    // and they write their progress to stdout by design.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { ecmaVersion: 2022, sourceType: 'module', globals: { ...globals.node } },
+    rules: { 'no-console': 'off' },
   }
 );

@@ -428,7 +428,7 @@ fish와 Windows 셸은 **문서화된 부정 테스트**다. 실제 환경 검�
 - `ssh-mcp/README.md`의 Windows 섹션이 `cmd /c` 래핑 형태를 **연결 실패 시 첫 번째 조치**로 명시한다: `{"command":"cmd","args":["/c","npx","-y","@get-bot/ssh-mcp"]}`.
 - **`ssh-mcp doctor` 서브커맨드** (**MCP 도구가 아니라 CLI 서브커맨드** — 도구 수 7개 고정은 유지). 스펙 2회차가 명시적으로 추가했고, §5.11의 15개 항목을 표로 출력하며 Claude Desktop·Claude Code 설정 스니펫(Windows는 `cmd /c` 변형 병기)까지 찍어 준다. 사용자가 터미널에서 직접 돌려 서버 자체의 문제인지 호스트 연결 문제인지 즉시 분리할 수 있다.
 - `engines.node >= 20` 위반 시 문법 오류 대신 사람이 읽을 수 있는 메시지를 출력하도록 진입점 첫 줄에 버전 가드를 둔다 (ES2015 문법만 사용).
-- CI의 **`windows-spawn` 잡(Phase 7.5)**이 `npx.cmd` spawn 실패를 실제로 재현하고 `cmd /c` 형태가 통과함을 **매 PR마다** 증명한다 (Architect N14 — iteration 2는 이 역할을 `no-build-tools` 잡으로 잘못 적었다. 그 잡은 네이티브 빌드 부재만 증명한다). 별도로 `no-build-tools` 잡이 `npm ci --omit=optional` → `npm run build` → `node dist/index.js doctor` 통과를 증명한다.
+- CI의 **`windows-spawn` 잡(Phase 7.5)**이 `npx.cmd` spawn 실패를 실제로 재현하고 `cmd /c` 형태가 통과함을 **매 PR마다** 증명한다 (Architect N14 — iteration 2는 이 역할을 `no-build-tools` 잡으로 잘못 적었다. 그 잡은 네이티브 빌드 부재만 증명한다). 별도로 `no-build-tools` 잡이 풀 `npm ci`로 빌드·`npm pack`한 tarball을 새 consumer 디렉터리에 `npm install --omit=optional`로 설치하고, 설치본의 `dist/index.js doctor`가 통과함을 증명한다 (`npm ci --omit=optional`은 tsup이 쓰는 rollup·esbuild 플랫폼 바이너리까지 빼 버려 빌드 자체가 불가능하다 — 2026-09-14 CI 첫 실행에서 확인).
 
 ### PM-4. Claude Desktop에서 승인 절차가 사실상 자동 통과된다
 
@@ -462,7 +462,7 @@ AC12는 스펙 2회차 갱신본(앞·뒤 보존 + "N줄 생략")을 따른다. 
   - AC1.3 `npm run build`가 `ssh-mcp/dist/index.js`를 생성하고 첫 줄이 `#!/usr/bin/env node`다.
   - AC1.4 `npm test`가 0으로 종료하고 실패 0건이다.
 - [ ] **AC2.** npm 배포 패키지를 `npx -y <패키지>`로 실행하면 stdio MCP 서버가 기동되어 `initialize`에 응답한다.
-  - AC2.1 `npm pack` 산출 tarball을 `npx -y ./ssh-mcp-<ver>.tgz`로 실행하고 `initialize` JSON-RPC 프레임을 stdin에 넣으면 5초 안에 `result.serverInfo.name === "ssh-mcp"`를 담은 프레임이 stdout에 나온다.
+  - AC2.1 `npm pack` 산출 tarball(`get-bot-ssh-mcp-<ver>.tgz`)을 `npx -y --package=<tgz> ssh-mcp`(상대 경로면 `npx -y ./<tgz>`도 가능)로 실행하고 `initialize` JSON-RPC 프레임을 stdin에 넣으면 서버 기동 후 5초 안에 `result.serverInfo.name === "ssh-mcp"`를 담은 프레임이 stdout에 나온다. npx의 콜드 설치 시간은 이 5초에 포함하지 않는다 — CI 테스트 예산은 설치를 포함해 60초다 (Windows 콜드 실측 15~25초).
   - AC2.2 같은 프로세스에서 `tools/list`가 **정확히 7개** 도구를 반환하고 이름 집합이 `{list_hosts, exec, upload, download, open_session, run_in_session, close_session}`와 일치한다.
   - AC2.3 서버 기동부터 `initialize` 응답까지 stdout에 JSON-RPC 프레임 외 바이트가 0이다.
 - [ ] **AC3.** 루트 README 표에 항목이 추가되고 저장소 소개가 "스킬 + 도구"로 갱신된다. *(수동)*
@@ -795,9 +795,9 @@ claude-toolkit/
 | 7.1 | `build-test` 잡: matrix `os: [windows-latest, ubuntu-latest]` × `node: ['20','22']`, `defaults.run.working-directory: ssh-mcp`, `npm ci` → `npm run typecheck` → `npm run build` → `npm test` (`ENDPOINT=fixture`). `env: { MSYS_NO_PATHCONV: 1 }` (F13). `paths: ['ssh-mcp/**', '.github/workflows/ssh-mcp-ci.yml']` | `.github/workflows/ssh-mcp-ci.yml` | AC1 |
 | 7.2 | **`real-sshd` 잡 (`ubuntu-latest`, 신규 — Architect F3 / Critic C2)**: `services.sshd`로 OpenSSH 컨테이너(`linuxserver/openssh-server` 또는 동등)를 띄우고 `ENDPOINT=sshd npm run test:integration`을 실행한다. AC7·AC8·AC9·AC11.3·AC13을 **실제 sshd 상대로** 통과시킨다. 스펙 §AC 서두의 "로컬 sshd 컨테이너" 요구를 문자 그대로 만족시키는 잡이다 | `.github/workflows/ssh-mcp-ci.yml` | AC7–AC9, AC11.3, AC13 |
 | 7.2b | **셸 매트릭스 스텝** (`real-sshd` 잡 안): `apt-get install -y zsh busybox` 후 `SHELL_UNDER_TEST` 를 `bash` / `dash` / `zsh` 로 3회 돌려 `session.test.ts`를 반복 실행한다. 원격 사용자의 로그인 셸을 `chsh`로 바꾸는 대신 픽스처·컨테이너 모두 `SHELL_UNDER_TEST` 값으로 셸을 띄운다 | `.github/workflows/ssh-mcp-ci.yml` | AC14.3, AC14.4 |
-| 7.3 | `no-build-tools` 잡 (`windows-latest`): `npm ci --omit=optional` → `npm run build` → `node dist/index.js doctor`. **`~/.ssh-mcp`가 없고 호스트가 0개인 깨끗한 러너에서 종료 코드 0을 기대한다** — 점검 항목 3이 "없지만 생성 가능"을 PASS로 처리하므로 성립한다 (Architect N6, AC21.10) | `.github/workflows/ssh-mcp-ci.yml` | PM-3, AC21.10 |
-| 7.4 | `package-smoke` 잡 — **`ubuntu-latest`와 `windows-latest` 둘 다** (Critic C9): `npm pack` → `npx -y ./<tgz>`에 `initialize` + `tools/list` 프레임 주입 → 7개 도구 단언 | `.github/workflows/ssh-mcp-ci.yml` | AC2 |
-| 7.5 | **`windows-spawn` 잡 (`windows-latest`, 신규 — Critic C9)**: iteration 1의 `no-build-tools` 잡은 `npx.cmd` spawn 실패를 재현하지 못하면서 PM-3을 막는다고 주장했다. 이 잡이 실제로 재현한다. (a) `child_process.spawn('npx', ['-y','<tgz>'], { shell: false })`가 `ENOENT`로 실패함을 **단언**하고, (b) `spawn('cmd', ['/c','npx','-y','<tgz>'], { shell: false })`는 성공해 `initialize`에 응답함을 단언한다. README의 `cmd /c` 안내가 실제 문제에 대한 실제 해법임을 CI가 증명한다 | `.github/workflows/ssh-mcp-ci.yml` | PM-3, AC4/AC6 근거 |
+| 7.3 | `no-build-tools` 잡 (`windows-latest`): 풀 `npm ci` → `npm run build` → `npm pack` → **새 consumer 디렉터리**에서 `npm install --omit=optional <tgz>` → `scripts/assert-no-native-addons.mjs`(① `node_modules` 아래 `*.node` 0건 — 패키지 이름과 무관한 진짜 불변식이라 전이 의존성이 들고 온 네이티브도 잡는다, ② 설치된 ssh2의 `optionalDependencies`가 전부 부재 — 빌드 실패로 `.node`가 안 남은 경우를 ①이 놓치므로 보완. 목록은 하드코딩이 아니라 ssh2에서 읽고, 비면 무의미한 검사이므로 실패시킨다) → 설치본 `node_modules/@get-bot/ssh-mcp/dist/index.js doctor`. `npm ci --omit=optional` 뒤 빌드는 불가능하다 — tsup의 rollup·esbuild 플랫폼 바이너리도 optionalDependencies라 `@rollup/rollup-win32-x64-msvc`를 못 찾는다 (2026-09-14 CI 첫 실행). **`~/.ssh-mcp`가 없고 호스트가 0개인 깨끗한 러너에서 종료 코드 0을 기대한다** — 점검 항목 3이 "없지만 생성 가능"을 PASS로 처리하므로 성립한다 (Architect N6, AC21.10) | `.github/workflows/ssh-mcp-ci.yml` | PM-3, AC21.10 |
+| 7.4 | `package-smoke` 잡 — **`ubuntu-latest`와 `windows-latest` 둘 다** (Critic C9): `npm pack` → `npx -y --package=<tgz> ssh-mcp`(Windows는 `cmd /c` 래핑)에 `initialize` + `tools/list` 프레임 주입 → 7개 도구 단언. **절대 경로를 `npx -y <tgz>`로 넘기면 안 된다**: libnpmexec가 `resolve(node_modules/.bin, arg)`로 로컬 bin을 먼저 찾는데 절대 경로는 자기 자신으로 풀려 tgz를 명령으로 실행한다 (Linux `Exec format error` exit 126). 자식 exit·stderr를 실패 메시지에 포함한다. npx argv 조립(win32 `cmd /c` 래핑 포함)은 `tests/fixtures/stdioServer.ts`의 `npxLaunch()` 한 곳에만 있다 | `.github/workflows/ssh-mcp-ci.yml` | AC2 |
+| 7.5 | **`windows-spawn` 잡 (`windows-latest`, 신규 — Critic C9)**: iteration 1의 `no-build-tools` 잡은 `npx.cmd` spawn 실패를 재현하지 못하면서 PM-3을 막는다고 주장했다. 이 잡이 실제로 재현한다. (a) `child_process.spawn('npx', ['-y','--package=<tgz>','ssh-mcp'], { shell: false })`가 `ENOENT`로 실패함을 **단언**하고, (b) `spawn('cmd', ['/c','npx','-y','--package=<tgz>','ssh-mcp'], { shell: false })`는 성공해 `initialize`에 응답함을 단언한다. README의 `cmd /c` 안내가 실제 문제에 대한 실제 해법임을 CI가 증명한다. 워크플로 heredoc이 아니라 `ssh-mcp/scripts/windows-spawn-check.mjs`로 체크인해 prettier·eslint가 실제로 본다 | `.github/workflows/ssh-mcp-ci.yml`, `ssh-mcp/scripts/windows-spawn-check.mjs` | PM-3, AC4/AC6 근거 |
 | 7.6 | `false-positive-gate` 스텝 (`build-test` 안): safe 코퍼스 60행 중 `safe`가 아닌 판정이 **1건이라도** 나오면 실패 (Architect F11 / Critic C16) | `.github/workflows/ssh-mcp-ci.yml` | AC16 오탐 |
 
 ### Phase 8 — 문서 (AC3)
@@ -1462,8 +1462,9 @@ AC7·AC8·AC9·AC13은 **두 값 모두에서** 통과해야 한다. 엔드포�
 
 | 파일 | 내용 | AC | 실행 |
 |------|------|-----|------|
-| `tests/e2e/package.test.ts` | `npm pack` → `npx -y ./<tgz>` 자식 프로세스에 `initialize` + `tools/list` JSON-RPC 프레임 주입. 7개 도구 이름 집합 일치, stdout에 비-JSON 바이트 0 | AC1.3, AC2.1–AC2.3 | CI `package-smoke` 잡 |
-| `tests/e2e/realHost.test.ts` | `SSH_MCP_E2E_HOST`/`_USER`/`_PASS`가 있을 때만 실행. 실제 원격 sshd 상대로 setup → exec → session → sftp 전 흐름. 없으면 `describe.skip` | 전 AC의 현실 검증 | **릴리스 필수 게이트** (아래) |
+| `tests/fixtures/stdioServer.ts` | 두 e2e 파일이 공유하는 stdio 배관: spawn, 줄 단위 JSON-RPC 프레이밍, 자식 사망 시 exit·stderr 보고, `npxLaunch()`(npx argv + win32 `cmd /c`). vitest 비의존 — Node 내장만 | — | 두 e2e 파일 |
+| `tests/e2e/package.test.ts` | `npm pack` → `npx -y --package=<tgz> ssh-mcp` 자식 프로세스(Windows는 `cmd /c` 래핑)에 `initialize` + `tools/list` JSON-RPC 프레임 주입. 7개 도구 이름 집합 일치, stdout 비-JSON 라인 0건 단언(AC2.3). 자식이 먼저 죽으면 exit 코드·stderr 꼬리를 담아 즉시 실패 | AC1.3, AC2.1–AC2.3 | CI `package-smoke` 잡 |
+| `tests/e2e/realHost.test.ts` | `stdioServer.ts`를 함께 쓴다(릴리스 게이트가 "timed out" 한 줄만 뱉던 옛 사본을 버림). `SSH_MCP_E2E_HOST`/`_USER`/`_PASS`가 있을 때만 실행. 실제 원격 sshd 상대로 setup → exec → session → sftp 전 흐름. 없으면 `describe.skip` | 전 AC의 현실 검증 | **릴리스 필수 게이트** (아래) |
 
 > **`realHost.test.ts`는 릴리스 전 필수다 (Architect F3).** iteration 1은 "개발자 수동 / 선택"으로 뒀으나, `real-sshd` CI 잡도 결국 컨테이너 안의 sshd이므로 "사용자의 실제 서버"와는 다르다. `npm publish` 전에 이 테스트를 실제 원격 호스트 상대로 1회 통과시키고 결과를 릴리스 노트에 기록한다. `ssh-mcp/package.json`의 `prepublishOnly`는 빌드만 하므로(자동 배포 비목표), 이 게이트는 §8.7 릴리스 체크리스트의 항목으로 둔다.
 > Docker sshd 로컬 실행 방법(`docker run -d -p 2222:22 …`)은 `ssh-mcp/README.md`에 개발자 편의로 문서화한다. Windows 개발자는 Docker 없이 `ENDPOINT=fixture`로 전체 스위트를 돌릴 수 있다.
@@ -1571,6 +1572,8 @@ npm run test:e2e                                # package.test.ts 통과
 # 수동 확인용 1회 왕복
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
   | npx -y ./get-bot-ssh-mcp-<ver>.tgz
+# 반드시 상대 경로(./) 또는 `npx -y --package=<tgz> ssh-mcp` 형태로. 절대 경로를 `npx -y`에
+# 직접 주면 npx가 tgz를 이미 설치된 실행 파일로 오인해 그대로 실행한다 (CI 첫 실행에서 확인).
 # 기대: result.serverInfo.name === "ssh-mcp" 를 담은 JSON-RPC 프레임 1건이 stdout에,
 #       그 외 stdout 바이트 0
 ```
@@ -1578,15 +1581,22 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 ### 8.3 Windows 무빌드툴 경로 (PM-3)
 
 ```powershell
+# `npm ci --omit=optional` 뒤에는 빌드가 안 된다 (tsup의 rollup/esbuild 플랫폼 바이너리도
+# optional). 최종 사용자 경로 그대로, 풀 의존성으로 pack한 tarball을 새 디렉터리에 설치한다.
 cd D:\workspace\claude-toolkit\ssh-mcp
-npm ci --omit=optional     # 기대: exit 0, 네이티브 빌드 시도 없음
+npm ci
 npm run build
-node dist\index.js doctor
+npm pack                   # get-bot-ssh-mcp-<ver>.tgz
+mkdir $env:TEMP\ssh-mcp-consumer; cd $env:TEMP\ssh-mcp-consumer
+npm init -y | Out-Null
+npm install --omit=optional D:\workspace\claude-toolkit\ssh-mcp\get-bot-ssh-mcp-<ver>.tgz
+# 기대: exit 0, node_modules\cpu-features 와 node_modules\nan 이 없다
+node node_modules\@get-bot\ssh-mcp\dist\index.js doctor
 # 기대: exit 0. ~/.ssh-mcp 가 없고 호스트가 0개인 상태에서도 0이어야 한다
 #       (점검 항목 3이 "없지만 생성 가능"을 PASS로 처리 — AC21.10).
 #       stdout에 15개 항목 진단 표, Claude Desktop/Claude Code 스니펫
 #       (Windows에서는 cmd /c 변형 병기)
-node dist\index.js doctor --json
+node node_modules\@get-bot\ssh-mcp\dist\index.js doctor --json
 # 기대: exit 0, stdout에 { ok: true, checks: [...], snippets: {...} } 단일 JSON
 ```
 
@@ -1597,8 +1607,8 @@ PR을 열고 `.github/workflows/ssh-mcp-ci.yml`의 잡이 모두 초록인지 �
 | 잡 | 러너 | 기대 |
 |----|------|------|
 | `build-test` (4 레그: windows/ubuntu × node 20/22) | 양쪽 | 전부 통과. `false-positive-gate` 스텝에서 safe 코퍼스 오탐 0건 |
-| `real-sshd` | ubuntu-latest | 실제 OpenSSH 컨테이너 상대로 AC7·AC8·AC9·AC11.3·AC13 통과 |
-| `no-build-tools` | windows-latest | 통과 (네이티브 빌드 시도 없음) |
+| `shell-matrix` | ubuntu-latest | `session.test.ts`를 `SHELL_UNDER_TEST=bash/dash/zsh`로 3회 통과 (ENDPOINT=fixture; 실제 OpenSSH 컨테이너 티어 `real-sshd`는 v1.1) |
+| `no-build-tools` | windows-latest | 통과 (consumer 디렉터리 `--omit=optional` 설치에 `cpu-features`·`nan` 없음, 설치본 `doctor` exit 0) |
 | `package-smoke` | ubuntu-latest + windows-latest | 양쪽에서 7개 도구 확인 |
 | `windows-spawn` | windows-latest | `spawn('npx', …, {shell:false})`가 `ENOENT`로 실패하고 `cmd /c` 형태는 성공함을 단언 |
 
@@ -2269,3 +2279,24 @@ OPT-0의 한계 정직 서술, 기본값의 "실제 최종 상태" 비교 논증
 - **CI real-sshd 티어 v1.1 유예**: 통과 불가하던 real-sshd 통합 스텝(continue-on-error, sshd 컨테이너)과 대기 스텝을 제거하고 `shell-matrix` 잡(ENDPOINT=fixture, bash/dash/zsh)만 유지. allow-to-fail 잡은 신호가 없어 유지보다 제거가 정직. AC7~9/11.3/13/14 게이팅 증거는 build-test의 인프로세스 ssh2 Server 픽스처(실제 bash 브리지). 통합 테스트는 이미 ENDPOINT=fixture|sshd로 파라미터화돼 컨테이너 티어 추가를 막지 않음.
 
 **team-verify 최종: PASS** (수정 루프 1회). verifier PASS, security FAIL→해소, code-review APPROVE-with-nits→해소. 전체 테스트 1101건 3회 무결점, 빌드·`--version`·`doctor`·e2e·stdio 스모크 통과, 보안 지점(F1·F4·F9·F17·AC19) 실측 통과. 수동 항목 AC3~AC6은 `ssh-mcp/tests/manual/host-integration.md` 체크리스트.
+
+### CI 첫 실행 실패 수정 (PR #11, 2026-09-14)
+
+PR #11의 첫 CI 실행(run 34760770363)에서 `build-test` 4레그는 통과, 나머지 5잡이 실패했다. 서버 코드 결함은 없었고 원인은 셋이다.
+
+- **`package-smoke` ×2, `windows-spawn` — `npx -y <절대경로 tgz>`는 패키지를 설치하지 않는다.** libnpmexec는 패키지 없이 명령만 받으면 `resolve(node_modules/.bin, args[0])`로 로컬 bin을 먼저 찾는다. 절대 경로는 자기 자신으로 풀리고 tgz 파일이 실제로 있으니 "이미 설치된 bin"으로 판정해 tgz 경로를 셸로 실행한다 — Linux `Exec format error` exit 126(0.6초), Windows는 .tgz 연결 프로그램 실행. npm 10.8.2(CI)와 11.9.0 코드가 같다. 테스트·스크립트가 자식 exit를 보지 않아 30초/20초 타임아웃으로만 보였다. Windows `package-smoke`는 추가로 `spawn('npx', {shell:false})` 자체가 ENOENT였다(README가 경고하는 케이스를 테스트가 밟음). **수정**: `npx -y --package=<tgz> ssh-mcp` 형태로 통일, win32는 `cmd /c` 래핑, 자식 exit·error·stderr 꼬리를 실패 메시지에 포함, 응답 대기 60초. node 20.20.2/npm 10.8.2 컨테이너에서 cold 8.6초, Windows `cmd /c` 형태 cold 14.9초에 `initialize` 응답 확인. 계획 7.4·7.5·8.2·테스트 표 갱신.
+- **`shell-matrix` zsh 레그 — `if then fi`는 zsh에서 문법 오류가 아니다.** zsh 5.9는 빈 `if` 리스트를 허용해 rc=0을 낸다. try 안의 `expect(bad.exit_code).not.toBe(0)`가 AssertionError를 던지고 catch가 잡아 `isCodedError` 단언 실패로 보고됐다. **수정**: 프로브를 짝 없는 `fi`로 교체 — 세 셸 모두 *파스* 에러이며 셸 옵션에 영향받지 않는다(zsh rc=1, bash rc=2, dash는 셸 종료; Alpine 컨테이너에서 확인). 처음 고른 `echo (`는 리뷰에서 반려 — zsh에서는 파스 에러가 아니라 글로브 에러(`bad pattern`)라 `setopt noglob` 호스트에서 rc=0이 된다. 결과를 `.then(ok, fail)`로 먼저 확정한 뒤 단언하도록 구조도 바꿔, try 안의 단언 실패가 catch로 흘러 오진되는 함정을 제거했다. 주석의 "bash and zsh return status 2"도 zsh=1로 정정.
+- **`no-build-tools` — `npm ci --omit=optional` 뒤 빌드는 원리적으로 불가능하다.** tsup이 쓰는 rollup·esbuild 플랫폼 바이너리(`@rollup/rollup-win32-x64-msvc` 등)도 optionalDependencies다. **수정**: 풀 `npm ci` → build → `npm pack` → `${{ runner.temp }}/consumer`에 `npm install --omit=optional <tgz>` → `cpu-features`·`nan` 부재 단언 → 설치본 `dist/index.js --version`·`doctor`. Windows 로컬 검증: 설치 12초, 99패키지, 두 네이티브 optional 없음, `doctor` exit 0. 계획 7.3·§431·8.3·8.4 갱신. README의 사용자 안내(`npm install --omit=optional`)는 그대로 유효.
+- **리뷰 후속(code-reviewer, APPROVE-with-nits)**: e2e의 stdout 라인 리더를 대기 호출 단위에서 `ServerProcess` 단위로 올려 두 대기 사이·한 청크의 두 프레임이 유실되지 않게 함. 워크플로 헤더 "Six jobs"→"Five jobs", 5개 잡에 `timeout-minutes: 20`, consumer 디렉터리 `mkdir -p`. 계획 AC2.1의 5초를 "서버 기동 후" 기준으로 명확화하고 tarball 실제 이름(`get-bot-ssh-mcp-<ver>.tgz`) 반영, §8.4 표의 사라진 `real-sshd` 행을 `shell-matrix`로 교체.
+
+### CI 수정분 정리 패스 (/simplify, 2026-09-14)
+
+CI 첫 실행 수정이 만든 중복을 걷어냈다. 동작 변경 없음 — 전체 1101건 통과, e2e는 dist 경로와 tarball(npx) 경로 양쪽에서 확인.
+
+- **stdio 배관 단일화**: `package.test.ts`와 `realHost.test.ts`가 각자 들고 있던 `sendFrame`/`waitForResponse`/줄 리더 사본을 `tests/fixtures/stdioServer.ts` 하나로 합쳤다. 수정 전에는 `package.test.ts`만 exit·stderr 진단을 얻고, 정작 **릴리스 필수 게이트**인 `realHost.test.ts`는 "timed out after 30000ms" 한 줄만 뱉는 옛 사본에 머물러 있었다. `realHost.test.ts` 177→89줄. npx argv 지식(`--package=<tgz> <bin>` + win32 `cmd /c`)도 `npxLaunch()` 한 곳으로 모았다.
+- **`waitForResponse` 단일 조건화**: 선-체크 2개 + `message`/`gone` 핸들러 2개로 흩어져 있던 같은 판정을 `update` 이벤트 하나 + `check()` 하나로 접었다(등록 직후 1회 호출이 두 선-체크를 대체).
+- **zsh 프로브 검증 완성**: `exit_code !== 0`만으로는 `fi: command not found`(127)도 통과한다 — 프로브가 조용히 의미를 잃는 실패 유형의 나머지 절반이 열려 있었다. 216행 주석이 약속하던 "네 셸 모두에서 *파스* 에러"를 `expect(stderr).toMatch(/syntax error|parse error/i)`로 강제한다. 컨테이너 실측: bash `syntax error near unexpected token`(rc=2), dash `Syntax error: "fi" unexpected`(rc=2), busybox ash `syntax error: unexpected "fi"`(rc=2), zsh `parse error near`(rc=1) — 넷 다 매치. 프로브를 `definitely-not-a-command`로 바꾸면 실제로 실패함을 확인.
+- **AC2.3 실제 단언 추가**: 리더가 파싱 못 한 stdout 라인을 모으고 0건임을 단언한다. 기존 주석은 "아래에 전용 단언이 있다"고 적혀 있었으나 그런 단언은 없었다(§1475가 요구하던 항목).
+- **워크플로 403→261줄**: 3중 복붙된 tarball 경로 해석 `node -e`를 `scripts/resolve-tarball-path.mjs`로, 110줄 heredoc JS를 `scripts/windows-spawn-check.mjs`로 체크인했다. YAML 문자열 안 JS는 prettier·eslint·tsc 어느 것도 보지 않아 오타가 Windows 러너 실행 시점에만 드러났다. `eslint.config.js`에 `scripts/**/*.mjs` 블록 추가.
+- **optional 의존성 단언 일반화**: `cpu-features`·`nan` 하드코딩 목록 대신 설치된 ssh2의 `optionalDependencies`를 읽는다. ssh2가 optional 목록을 바꿔도 따라가고, 목록이 비면 검사가 무의미해지므로 실패시킨다.
+- **e2e 최악 실패 비용 절반**: `vitest.e2e.config.ts`에 `bail: 1`. 테스트들이 자식 서버 하나를 공유하므로 첫 대기가 60초를 태우면 나머지도 태운다.

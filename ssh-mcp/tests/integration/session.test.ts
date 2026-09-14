@@ -207,40 +207,52 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
 
   /**
    * A syntax error inside `eval` is where bash and dash genuinely differ.
-   * bash and zsh return status 2 and carry on, which is the reason the frame
-   * uses `eval` instead of an inline `{ ... }`. dash and busybox ash follow
-   * POSIX to the letter: a syntax error in a special builtin ends a
-   * non-interactive shell. Both are handled — the caller is told at once and
-   * the session state afterwards matches what it was told.
+   * bash (status 2) and zsh (status 1) report it and carry on, which is the
+   * reason the frame uses `eval` instead of an inline `{ ... }`. dash and
+   * busybox ash follow POSIX to the letter: a syntax error in a special
+   * builtin ends a non-interactive shell. Both are handled — the caller is
+   * told at once and the session state afterwards matches what it was told.
+   *
+   * The probe has to be a *parse* error in every supported shell, independent
+   * of shell options: a stray `fi` with no `if` is one. `if then fi` is not
+   * (zsh accepts empty `if` lists and exits 0), and `echo (` is a glob error
+   * in zsh rather than a parse error, so `setopt noglob` in a login rc file
+   * would turn it into a successful echo.
    */
   it('handles a syntax error without hanging or desynchronising', async () => {
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
-    let survived: boolean;
-    try {
-      const bad = await runInSession(session.session_id, 'if then fi', {
-        ...budget,
-        timeoutMs: 8000,
-      });
-      expect(bad.exit_code).not.toBe(0);
-      survived = true;
-    } catch (err) {
-      expect(isCodedError(err)).toBe(true);
-      if (isCodedError(err)) expect(err.code).toBe('session_terminated');
-      survived = false;
-    }
+    // Settle the outcome first and assert afterwards. An `expect` inside a
+    // `try` is swallowed by its `catch`, which then reports the wrong error
+    // type instead of the real assertion — that is how the zsh leg hid its
+    // actual failure the first time this ran in CI.
+    const outcome = await runInSession(session.session_id, 'fi', {
+      ...budget,
+      timeoutMs: 8000,
+    }).then(
+      (result) => ({ survived: true as const, result }),
+      (error: unknown) => ({ survived: false as const, error })
+    );
 
-    if (survived) {
+    if (outcome.survived) {
+      expect(outcome.result.exit_code).not.toBe(0);
+      // A non-zero exit alone would also accept `fi: command not found` (127), i.e. a probe that
+      // has quietly stopped being a syntax error at all — the same way it quietly stopped being
+      // one under zsh. Pin it to the diagnostic every supported shell prints for a parse failure
+      // (measured: bash "syntax error near unexpected token", dash `Syntax error: "fi"
+      // unexpected`, busybox ash `syntax error: unexpected "fi"`, zsh "parse error near").
+      expect(outcome.result.stderr).toMatch(/syntax error|parse error/i);
       const good = await runInSession(session.session_id, 'echo alive', budget);
       expect(good.stdout).toBe('alive\n');
     } else {
+      expect(outcome.error).toMatchObject({ code: 'session_terminated' });
       await expect(runInSession(session.session_id, 'echo alive', budget)).rejects.toMatchObject({
         code: 'session_terminated',
       });
     }
 
-    if (SHELL === 'bash' || SHELL === 'zsh') expect(survived).toBe(true);
+    if (SHELL === 'bash' || SHELL === 'zsh') expect(outcome.survived).toBe(true);
   });
 
   it('flags a backgrounded command (AC10.4)', async () => {

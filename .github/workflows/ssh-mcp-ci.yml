@@ -1,12 +1,16 @@
 name: ssh-mcp CI
 
-# Phase 7 (plan .omc/plans/ssh-mcp-plan.md §Phase 7). Six jobs:
+# Phase 7 (plan .omc/plans/ssh-mcp-plan.md §Phase 7). Five jobs:
 #   build-test        — matrix build/typecheck/test + false-positive gate (7.1, 7.6)
 #   shell-matrix      — session.test.ts on bash/dash/zsh against the fixture tier (7.2b); the real
 #                       OpenSSH container tier (7.2) is deferred to v1.1
-#   no-build-tools    — Windows path with optional native deps skipped (7.3)
+#   no-build-tools    — Windows consumer install of the packed tarball with optional native deps
+#                       skipped (7.3)
 #   package-smoke     — npm pack + npx smoke test, both OS (7.4)
 #   windows-spawn     — proves the npx/cmd spawn(ENOENT) behavior the README warns about (7.5)
+#
+# The smoke jobs never pass a bare tarball to npx — `npxLaunch` in
+# ssh-mcp/tests/fixtures/stdioServer.ts is the single source for the argv and explains why.
 
 on:
   pull_request:
@@ -36,6 +40,7 @@ jobs:
   build-test:
     name: build-test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +95,7 @@ jobs:
   shell-matrix:
     name: shell-matrix (ubuntu-latest)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -129,6 +135,7 @@ jobs:
   no-build-tools:
     name: no-build-tools (windows-latest)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -138,20 +145,48 @@ jobs:
           cache: npm
           cache-dependency-path: ssh-mcp/package-lock.json
 
-      - name: npm ci --omit=optional (no native build tools)
-        run: npm ci --omit=optional
+      # The scenario under test is an end user on a Windows box without native build tools
+      # running `npm install --omit=optional @get-bot/ssh-mcp` (README, Windows section). It
+      # cannot be modelled as `npm ci --omit=optional` in this repo: tsup's rollup and esbuild
+      # platform binaries are optionalDependencies too, so the build itself breaks ("Cannot find
+      # module @rollup/rollup-win32-x64-msvc"). So build and pack with the full dev tree, then
+      # install the tarball with --omit=optional into a fresh consumer directory and run the
+      # installed copy.
+      - name: npm ci
+        run: npm ci
 
       - name: build
         run: npm run build
 
+      - name: npm pack
+        run: npm pack
+
+      - name: resolve packed tarball path
+        shell: bash
+        run: node scripts/resolve-tarball-path.mjs
+
+      - name: install tarball with --omit=optional into a fresh consumer dir
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p consumer && cd consumer
+          npm init -y > /dev/null
+          npm install --omit=optional --no-fund --no-audit "$SSH_MCP_TGZ"
+          node "$GITHUB_WORKSPACE/ssh-mcp/scripts/assert-no-native-addons.mjs"
+
       # A clean runner has no ~/.ssh-mcp and zero registered hosts. doctor's check #3 treats
       # "missing but creatable" as PASS, so this must exit 0 (AC21.10, PM-3).
-      - name: doctor (expect exit 0 on a clean runner)
-        run: node dist/index.js doctor
+      - name: doctor from the consumer install (expect exit 0 on a clean runner)
+        shell: bash
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          node node_modules/@get-bot/ssh-mcp/dist/index.js --version
+          node node_modules/@get-bot/ssh-mcp/dist/index.js doctor
 
   package-smoke:
     name: package-smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -174,18 +209,9 @@ jobs:
       - name: npm pack
         run: npm pack
 
-      # Resolve the packed tarball's absolute path with Node so the logic is identical on both
-      # OSes (bash vs pwsh globbing differs; Node's fs.readdirSync does not).
       - name: resolve packed tarball path
         shell: bash
-        run: |
-          node -e "
-            const fs = require('node:fs');
-            const path = require('node:path');
-            const tgz = fs.readdirSync('.').find((f) => f.endsWith('.tgz'));
-            if (!tgz) { console.error('no .tgz produced by npm pack'); process.exit(1); }
-            fs.appendFileSync(process.env.GITHUB_ENV, 'SSH_MCP_TGZ=' + path.resolve(tgz) + require('node:os').EOL);
-          "
+        run: node scripts/resolve-tarball-path.mjs
 
       # `test:e2e` runs tests/e2e/**/*.test.ts (realHost.test.ts self-skips without
       # SSH_MCP_E2E_HOST, so it's safe to include in the same run).
@@ -195,6 +221,7 @@ jobs:
   windows-spawn:
     name: windows-spawn (windows-latest)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -215,114 +242,10 @@ jobs:
 
       - name: resolve packed tarball path
         shell: bash
-        run: |
-          node -e "
-            const fs = require('node:fs');
-            const path = require('node:path');
-            const tgz = fs.readdirSync('.').find((f) => f.endsWith('.tgz'));
-            if (!tgz) { console.error('no .tgz produced by npm pack'); process.exit(1); }
-            fs.appendFileSync(process.env.GITHUB_ENV, 'SSH_MCP_TGZ=' + path.resolve(tgz) + require('node:os').EOL);
-          "
+        run: node scripts/resolve-tarball-path.mjs
 
-      # PM-3 / AC4-AC6 evidence: on Windows, `npx` is a .cmd shim. spawn(..., { shell: false })
-      # never goes through cmd.exe, so Node's spawn cannot locate/execute a .cmd file directly and
-      # fails with ENOENT — this is exactly the failure mode the README's "use cmd /c npx ..."
-      # guidance exists to avoid. Wrapping with `cmd /c` fixes it because cmd.exe itself resolves
-      # the .cmd shim's PATHEXT association.
+      # PM-3 / AC4-AC6 evidence. The check is a checked-in script rather than a heredoc so that
+      # prettier and eslint actually see it — a typo in YAML-embedded JS only surfaces at run
+      # time, on a Windows runner. See scripts/windows-spawn-check.mjs for what it proves.
       - name: assert npx spawn(shell:false) fails, cmd /c npx succeeds
-        shell: bash
-        run: |
-          cat <<'EOF' > "$RUNNER_TEMP/windows-spawn-check.mjs"
-          import { spawn } from 'node:child_process';
-
-          const tgz = process.env.SSH_MCP_TGZ;
-          if (!tgz) throw new Error('SSH_MCP_TGZ not set');
-
-          const REQ_INIT = JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'initialize',
-            params: {
-              protocolVersion: '2026-07-28',
-              capabilities: {},
-              clientInfo: { name: 'ci-windows-spawn', version: '0.0.0' },
-            },
-          }) + '\n';
-
-          function expectEnoent(cmd, args) {
-            return new Promise((resolvePromise, reject) => {
-              let settled = false;
-              const child = spawn(cmd, args, { shell: false });
-              const giveUp = setTimeout(() => {
-                if (settled) return;
-                settled = true;
-                child.kill();
-                reject(new Error(`expected ${cmd} spawn to fail with ENOENT, but it did not within 5s`));
-              }, 5000);
-
-              child.on('error', (err) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(giveUp);
-                if (err.code === 'ENOENT') resolvePromise(err.code);
-                else reject(new Error(`expected ENOENT from ${cmd}, got ${err.code}: ${err.message}`));
-              });
-            });
-          }
-
-          function expectInitializeResponse(cmd, args) {
-            return new Promise((resolvePromise, reject) => {
-              let settled = false;
-              let buf = '';
-              const child = spawn(cmd, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
-              const timer = setTimeout(() => {
-                if (settled) return;
-                settled = true;
-                child.kill();
-                reject(new Error(`${cmd} did not answer initialize within 20s`));
-              }, 20000);
-
-              child.on('error', (err) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timer);
-                reject(new Error(`unexpected spawn error for ${cmd}: ${err.message}`));
-              });
-
-              child.stdout.on('data', (d) => {
-                buf += d.toString('utf8');
-                let nl;
-                while ((nl = buf.indexOf('\n')) !== -1) {
-                  const line = buf.slice(0, nl);
-                  buf = buf.slice(nl + 1);
-                  if (!line.trim()) continue;
-                  try {
-                    const msg = JSON.parse(line);
-                    if (msg.id === 1 && msg.result && msg.result.serverInfo) {
-                      settled = true;
-                      clearTimeout(timer);
-                      child.kill();
-                      resolvePromise(msg.result.serverInfo);
-                      return;
-                    }
-                  } catch {
-                    // ignore non-JSON stdout noise
-                  }
-                }
-              });
-
-              child.stdin.write(REQ_INIT);
-            });
-          }
-
-          console.log('[1/2] spawn("npx", ["-y", tgz], { shell: false }) — expecting ENOENT');
-          const code = await expectEnoent('npx', ['-y', tgz]);
-          console.log('  -> failed as expected:', code);
-
-          console.log('[2/2] spawn("cmd", ["/c", "npx", "-y", tgz], { shell: false }) — expecting initialize response');
-          const serverInfo = await expectInitializeResponse('cmd', ['/c', 'npx', '-y', tgz]);
-          console.log('  -> responded:', JSON.stringify(serverInfo));
-
-          console.log('windows-spawn check: PASS');
-          EOF
-          node "$RUNNER_TEMP/windows-spawn-check.mjs"
+        run: node scripts/windows-spawn-check.mjs
