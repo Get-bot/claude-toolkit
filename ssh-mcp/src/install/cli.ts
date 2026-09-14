@@ -27,19 +27,22 @@
  * Not in the plan (`.omc/plans/ssh-mcp-plan.md`); added 2026-09-14. Rationale:
  * remove the friction of a user having to know about `cmd /c` wrapping on
  * Windows in order to register this server at all.
+ *
+ * The one place this command asks a question is the Claude Code scope, and only
+ * when `--scope` is absent — see `scope.ts` for why a silent `local` default is
+ * a trap. `claude-desktop` never asks, because Desktop has no scopes.
  */
 import os from 'node:os';
 import path from 'node:path';
 
 import { PACKAGE_NAME } from '../config/registration.js';
-import {
-  CLAUDE_CODE_SCOPES,
-  DEFAULT_CLAUDE_CODE_SCOPE,
-  defaultSpawner,
-  installClaudeCode,
-} from './claudeCode.js';
-import type { ClaudeCodeScope, Spawner } from './claudeCode.js';
+import { processPrompter } from '../setup/prompt.js';
+import type { Prompter } from '../setup/prompt.js';
+import { defaultSpawner, installClaudeCode } from './claudeCode.js';
+import type { Spawner } from './claudeCode.js';
 import { installClaudeDesktop } from './desktop.js';
+import { CLAUDE_CODE_SCOPES, resolveScope } from './scope.js';
+import type { ClaudeCodeScope } from './scope.js';
 
 /** Success. */
 export const EXIT_OK = 0;
@@ -59,7 +62,9 @@ export const USAGE = [
   '',
   'Options:',
   '  --name <name>                 등록할 MCP 서버 이름 (기본 ssh-mcp)',
-  '  --scope <local|user|project>  claude-code 전용. 기본 local',
+  '  --scope <local|user|project>  claude-code 전용. local(기본, 현재 디렉터리의 프로젝트에서만) |',
+  '                                user(모든 프로젝트) | project(.mcp.json 공유).',
+  '                                생략하면 터미널에서 묻습니다.',
   '  --home <path>                 SSH_MCP_HOME 환경변수를 함께 등록합니다 (선택)',
   '  --config <path>               claude-desktop 전용. 설정 파일 경로를 재지정합니다',
   '  --force                       같은 이름이 이미 등록돼 있으면 교체합니다',
@@ -76,7 +81,8 @@ export const USAGE = [
 export interface InstallArgs {
   client: InstallClient;
   name: string;
-  scope: ClaudeCodeScope;
+  /** null when `--scope` was absent: the scope is settled later, by asking. */
+  scope: ClaudeCodeScope | null;
   home: string | null;
   configPath: string | null;
   force: boolean;
@@ -240,7 +246,7 @@ export function parseInstallArgs(
     args: {
       client,
       name: name ?? DEFAULT_SERVER_NAME,
-      scope: scope ?? DEFAULT_CLAUDE_CODE_SCOPE,
+      scope,
       home,
       configPath,
       force,
@@ -254,6 +260,12 @@ export interface InstallDeps {
   spawn?: Spawner;
   /** Injected so tests can capture output; defaults to stderr. */
   write?: (text: string) => void;
+  /**
+   * Used only to ask for the Claude Code scope. Injected so tests can drive
+   * both the TTY and the non-TTY branch without a terminal; the
+   * `claude-desktop` path never touches it, because Desktop has no scopes.
+   */
+  prompter?: Prompter;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -267,12 +279,13 @@ export interface InstallDeps {
  * Run the install flow. Returns the process exit code; never throws for an
  * expected failure.
  */
-export function runInstall(argv: readonly string[], deps: InstallDeps = {}): number {
+export async function runInstall(argv: readonly string[], deps: InstallDeps = {}): Promise<number> {
   const write = deps.write ?? ((text: string): void => void process.stderr.write(`${text}\n`));
   const platform = deps.platform ?? process.platform;
   const packageName = deps.packageName ?? PACKAGE_NAME;
+  const cwd = deps.cwd ?? ((): string => process.cwd());
 
-  const parsed = parseInstallArgs(argv, deps.cwd ?? ((): string => process.cwd()));
+  const parsed = parseInstallArgs(argv, cwd);
   if (parsed.ok && parsed.help) {
     write(USAGE);
     return EXIT_OK;
@@ -286,32 +299,47 @@ export function runInstall(argv: readonly string[], deps: InstallDeps = {}): num
 
   const args = parsed.args;
 
-  const ok =
-    args.client === 'claude-code'
-      ? installClaudeCode({
-          name: args.name,
-          scope: args.scope,
-          home: args.home,
-          force: args.force,
-          dryRun: args.dryRun,
-          platform,
-          packageName,
-          spawn: deps.spawn ?? defaultSpawner,
-          write,
-        })
-      : installClaudeDesktop({
-          name: args.name,
-          home: args.home,
-          configPath: args.configPath,
-          force: args.force,
-          dryRun: args.dryRun,
-          platform,
-          packageName,
-          env: deps.env ?? process.env,
-          homedir: deps.homedir ?? ((): string => os.homedir()),
-          now: deps.now ?? ((): Date => new Date()),
-          write,
-        });
+  if (args.client === 'claude-desktop') {
+    // Desktop has no scopes, so the prompter is never consulted on this path.
+    const ok = installClaudeDesktop({
+      name: args.name,
+      home: args.home,
+      configPath: args.configPath,
+      force: args.force,
+      dryRun: args.dryRun,
+      platform,
+      packageName,
+      env: deps.env ?? process.env,
+      homedir: deps.homedir ?? ((): string => os.homedir()),
+      now: deps.now ?? ((): Date => new Date()),
+      write,
+    });
+    return ok ? EXIT_OK : EXIT_FAILED;
+  }
+
+  const workingDir = cwd();
+  // Settled before anything runs, so `--dry-run` prints the scope it would
+  // actually use rather than a guess.
+  const scope = await resolveScope({
+    requested: args.scope,
+    prompter: deps.prompter ?? processPrompter(),
+    cwd: workingDir,
+    write,
+  });
+  if (scope === null) return EXIT_FAILED;
+
+  const ok = installClaudeCode({
+    name: args.name,
+    scope,
+    cwd: workingDir,
+    home: args.home,
+    force: args.force,
+    dryRun: args.dryRun,
+    platform,
+    packageName,
+    spawn: deps.spawn ?? defaultSpawner,
+    write,
+  });
 
   return ok ? EXIT_OK : EXIT_FAILED;
 }

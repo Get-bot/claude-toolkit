@@ -26,19 +26,22 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildSnippets } from '../../src/doctor/checks.js';
 import {
   buildDesktopEntry,
   buildServerCommand,
   formatServerCommand,
 } from '../../src/config/registration.js';
+import { buildSnippets } from '../../src/doctor/checks.js';
 import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, runInstall } from '../../src/install/cli.js';
 import type { InstallDeps } from '../../src/install/cli.js';
-import { desktopConfigPath } from '../../src/install/desktop.js';
 import type { SpawnOutcome } from '../../src/install/claudeCode.js';
+import { desktopConfigPath } from '../../src/install/desktop.js';
+import { createPrompter } from '../../src/setup/prompt.js';
+import type { Prompter } from '../../src/setup/prompt.js';
 
 const PKG = '@get-bot/ssh-mcp';
 
@@ -53,11 +56,51 @@ interface Harness {
   text: () => string;
 }
 
-/** Collect output and spawned argv instead of performing either. */
-function harness(outcomes: SpawnOutcome[] = []): { deps: InstallDeps; probe: Harness } {
+interface PromptProbe {
+  prompter: Prompter;
+  /** Feed keystrokes, exactly as `tests/unit/setupPrompt.test.ts` does. */
+  send(text: string): void;
+  /** Everything the prompt wrote. Empty means the user was never asked. */
+  output(): string;
+}
+
+function promptHarness(isTTY: boolean): PromptProbe {
+  const input = new PassThrough();
+  if (isTTY) (input as unknown as { isTTY?: boolean }).isTTY = true;
+  let written = '';
+  const prompter = createPrompter({
+    input: input as never,
+    output: {
+      write(chunk: string) {
+        written += chunk;
+        return true;
+      },
+    },
+    isTTY,
+  });
+  return {
+    prompter,
+    send: (text: string): void => {
+      input.write(text);
+    },
+    output: (): string => written,
+  };
+}
+
+/**
+ * Collect output and spawned argv instead of performing either.
+ *
+ * The prompter defaults to a non-TTY one so no test can reach the real stdin,
+ * and so the scope question only appears where a test asks for it.
+ */
+function harness(
+  outcomes: SpawnOutcome[] = [],
+  prompt: { isTTY?: boolean } = {}
+): { deps: InstallDeps; probe: Harness; prompt: PromptProbe } {
   const lines: string[] = [];
   const calls: SpawnCall[] = [];
   let index = 0;
+  const promptProbe = promptHarness(prompt.isTTY ?? false);
   const deps: InstallDeps = {
     write: (text) => {
       lines.push(text);
@@ -68,9 +111,14 @@ function harness(outcomes: SpawnOutcome[] = []): { deps: InstallDeps; probe: Har
       index += 1;
       return outcome;
     },
+    prompter: promptProbe.prompter,
     packageName: PKG,
   };
-  return { deps, probe: { lines, calls, text: (): string => lines.join('\n') } };
+  return {
+    deps,
+    probe: { lines, calls, text: (): string => lines.join('\n') },
+    prompt: promptProbe,
+  };
 }
 
 let tmpDir: string;
@@ -96,55 +144,55 @@ function backupFiles(): string[] {
 }
 
 describe('argument parsing', () => {
-  it('prints usage and exits 0 for --help, with no client given', () => {
+  it('prints usage and exits 0 for --help, with no client given', async () => {
     const { deps, probe } = harness();
-    expect(runInstall(['--help'], deps)).toBe(EXIT_OK);
+    expect(await runInstall(['--help'], deps)).toBe(EXIT_OK);
     expect(probe.text()).toContain('Usage: ssh-mcp install <claude-code|claude-desktop>');
     expect(probe.calls).toHaveLength(0);
   });
 
-  it('exits 2 when the client is missing', () => {
+  it('exits 2 when the client is missing', async () => {
     const { deps, probe } = harness();
-    expect(runInstall([], deps)).toBe(EXIT_USAGE);
+    expect(await runInstall([], deps)).toBe(EXIT_USAGE);
     expect(probe.text()).toContain('install needs a client');
     expect(probe.text()).toContain('Usage: ssh-mcp install');
   });
 
-  it('exits 2 for an unknown client', () => {
+  it('exits 2 for an unknown client', async () => {
     const { deps, probe } = harness();
-    expect(runInstall(['claude-desktopp'], deps)).toBe(EXIT_USAGE);
+    expect(await runInstall(['claude-desktopp'], deps)).toBe(EXIT_USAGE);
     expect(probe.text()).toContain('unknown client "claude-desktopp"');
   });
 
-  it('exits 2 for --scope on claude-desktop', () => {
+  it('exits 2 for --scope on claude-desktop', async () => {
     const { deps, probe } = harness();
-    expect(runInstall(['claude-desktop', '--scope', 'user'], deps)).toBe(EXIT_USAGE);
+    expect(await runInstall(['claude-desktop', '--scope', 'user'], deps)).toBe(EXIT_USAGE);
     expect(probe.text()).toContain('--scope는 claude-code 전용입니다');
   });
 
-  it('exits 2 for --config on claude-code', () => {
+  it('exits 2 for --config on claude-code', async () => {
     const { deps, probe } = harness();
-    expect(runInstall(['claude-code', '--config', configPath()], deps)).toBe(EXIT_USAGE);
+    expect(await runInstall(['claude-code', '--config', configPath()], deps)).toBe(EXIT_USAGE);
     expect(probe.text()).toContain('--config는 claude-desktop 전용입니다');
   });
 
-  it('exits 2 for an invalid scope value and for an unknown option', () => {
+  it('exits 2 for an invalid scope value and for an unknown option', async () => {
     const first = harness();
-    expect(runInstall(['claude-code', '--scope', 'global'], first.deps)).toBe(EXIT_USAGE);
+    expect(await runInstall(['claude-code', '--scope', 'global'], first.deps)).toBe(EXIT_USAGE);
     expect(first.probe.text()).toContain('--scope must be one of: local, user, project');
 
     const second = harness();
-    expect(runInstall(['claude-code', '--verbose'], second.deps)).toBe(EXIT_USAGE);
+    expect(await runInstall(['claude-code', '--verbose'], second.deps)).toBe(EXIT_USAGE);
     expect(second.probe.text()).toContain('unknown option: --verbose');
   });
 
   // Reported from the built CLI: `--home --dry-run` registered
   // `SSH_MCP_HOME=--dry-run` and wrote the file for real, because the flag that
   // should have prevented the write was consumed as the value.
-  it('never swallows a following flag as an option value', () => {
+  it('never swallows a following flag as an option value', async () => {
     const target = configPath();
     const { deps, probe } = harness();
-    const code = runInstall(['claude-desktop', '--config', target, '--home', '--dry-run'], {
+    const code = await runInstall(['claude-desktop', '--config', target, '--home', '--dry-run'], {
       ...deps,
       platform: 'win32',
     });
@@ -154,7 +202,7 @@ describe('argument parsing', () => {
     expect(probe.text()).toContain('--dry-run');
   });
 
-  it('exits 2 when any value-taking flag is last on the line', () => {
+  it('exits 2 when any value-taking flag is last on the line', async () => {
     for (const argv of [
       ['claude-code', '--name'],
       ['claude-code', '--scope'],
@@ -162,42 +210,45 @@ describe('argument parsing', () => {
       ['claude-desktop', '--config'],
     ]) {
       const { deps, probe } = harness();
-      expect(runInstall(argv, deps)).toBe(EXIT_USAGE);
+      expect(await runInstall(argv, deps)).toBe(EXIT_USAGE);
       expect(probe.text()).toContain(`${argv[1] ?? ''} needs a value`);
     }
   });
 
-  it('rejects a name outside the allowed character set', () => {
+  it('rejects a name outside the allowed character set', async () => {
     for (const bad of ['ssh mcp', 'a&b', 'bad name!', 'x'.repeat(65), 'q"uote']) {
       const { deps, probe } = harness();
-      expect(runInstall(['claude-code', '--name', bad], deps)).toBe(EXIT_USAGE);
+      expect(await runInstall(['claude-code', '--name', bad], deps)).toBe(EXIT_USAGE);
       expect(probe.text()).toContain(`invalid name "${bad}"`);
     }
 
     // A leading `-` never reaches the pattern: the value guard rejects it first,
     // and that is the message the user should see.
     const dashed = harness();
-    expect(runInstall(['claude-code', '--name', '-lead'], dashed.deps)).toBe(EXIT_USAGE);
+    expect(await runInstall(['claude-code', '--name', '-lead'], dashed.deps)).toBe(EXIT_USAGE);
     expect(dashed.probe.text()).toContain('--name needs a value, but got the option "-lead"');
 
     const ok = harness();
     expect(
-      runInstall(['claude-code', '--name', 'ssh-mcp.prod_2'], { ...ok.deps, platform: 'linux' })
+      await runInstall(['claude-code', '--name', 'ssh-mcp.prod_2'], {
+        ...ok.deps,
+        platform: 'linux',
+      })
     ).toBe(EXIT_OK);
   });
 
-  it('resolves relative --home and --config against the working directory', () => {
+  it('resolves relative --home and --config against the working directory', async () => {
     const cwd = (): string => tmpDir;
 
     const { deps, probe } = harness();
     expect(
-      runInstall(['claude-code', '--home', './relhome'], { ...deps, platform: 'linux', cwd })
+      await runInstall(['claude-code', '--home', './relhome'], { ...deps, platform: 'linux', cwd })
     ).toBe(EXIT_OK);
     expect(probe.calls[0]?.args).toContain(`SSH_MCP_HOME=${path.join(tmpDir, 'relhome')}`);
 
     const desktop = harness();
     expect(
-      runInstall(['claude-desktop', '--config', 'claude_desktop_config.json', '--dry-run'], {
+      await runInstall(['claude-desktop', '--config', 'claude_desktop_config.json', '--dry-run'], {
         ...desktop.deps,
         platform: 'linux',
         cwd,
@@ -208,7 +259,7 @@ describe('argument parsing', () => {
 });
 
 describe('registered command shape', () => {
-  it('wraps the command in cmd /c on win32 and leaves it bare elsewhere', () => {
+  it('wraps the command in cmd /c on win32 and leaves it bare elsewhere', async () => {
     expect(buildServerCommand({ platform: 'win32', packageName: PKG })).toEqual({
       command: 'cmd',
       args: ['/c', 'npx', '-y', PKG],
@@ -226,7 +277,7 @@ describe('registered command shape', () => {
     );
   });
 
-  it('adds env only when a home is given', () => {
+  it('adds env only when a home is given', async () => {
     expect(buildDesktopEntry({ platform: 'linux', packageName: PKG })).toEqual({
       command: 'npx',
       args: ['-y', PKG],
@@ -240,9 +291,9 @@ describe('registered command shape', () => {
 });
 
 describe('claude-code', () => {
-  it('passes scope, env and the server command after --', () => {
+  it('passes scope, env and the server command after --', async () => {
     const { deps, probe } = harness();
-    const code = runInstall(['claude-code', '--scope', 'user', '--home', '/opt/ssh-mcp'], {
+    const code = await runInstall(['claude-code', '--scope', 'user', '--home', '/opt/ssh-mcp'], {
       ...deps,
       platform: 'linux',
     });
@@ -266,9 +317,12 @@ describe('claude-code', () => {
     });
   });
 
-  it('registers the cmd /c form on win32 and honours --name', () => {
+  it('registers the cmd /c form on win32 and honours --name', async () => {
     const { deps, probe } = harness();
-    const code = runInstall(['claude-code', '--name', 'remote'], { ...deps, platform: 'win32' });
+    const code = await runInstall(['claude-code', '--name', 'remote'], {
+      ...deps,
+      platform: 'win32',
+    });
     expect(code).toBe(EXIT_OK);
     expect(probe.calls[0]?.args).toEqual([
       'mcp',
@@ -285,26 +339,26 @@ describe('claude-code', () => {
     ]);
   });
 
-  it('removes before adding when --force is given', () => {
+  it('removes before adding when --force is given', async () => {
     const { deps, probe } = harness();
-    const code = runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
+    const code = await runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_OK);
     expect(probe.calls).toHaveLength(2);
     expect(probe.calls[0]?.args).toEqual(['mcp', 'remove', '-s', 'local', 'ssh-mcp']);
     expect(probe.calls[1]?.args.slice(0, 2)).toEqual(['mcp', 'add']);
   });
 
-  it('ignores a failing remove and still adds', () => {
+  it('ignores a failing remove and still adds', async () => {
     const { deps, probe } = harness([
       { status: 1, stdout: '', stderr: 'No MCP server found with name: ssh-mcp' },
       { status: 0, stdout: 'Added', stderr: '' },
     ]);
-    const code = runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
+    const code = await runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_OK);
     expect(probe.calls).toHaveLength(2);
   });
 
-  it('exits 1 with a manual command when claude is not on PATH', () => {
+  it('exits 1 with a manual command when claude is not on PATH', async () => {
     const enoent: SpawnOutcome = {
       status: null,
       stdout: '',
@@ -312,13 +366,13 @@ describe('claude-code', () => {
       error: Object.assign(new Error('spawnSync claude ENOENT'), { code: 'ENOENT' }),
     };
     const { deps, probe } = harness([enoent]);
-    const code = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+    const code = await runInstall(['claude-code'], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_FAILED);
     expect(probe.text()).toContain('Claude Code CLI(`claude`)를 PATH에서 찾을 수 없습니다');
     expect(probe.text()).toContain(`claude mcp add ssh-mcp -s local -- npx -y ${PKG}`);
   });
 
-  it('retries through cmd /c on win32 before giving up', () => {
+  it('retries through cmd /c on win32 before giving up', async () => {
     const enoent: SpawnOutcome = {
       status: null,
       stdout: '',
@@ -326,7 +380,7 @@ describe('claude-code', () => {
       error: Object.assign(new Error('spawnSync claude ENOENT'), { code: 'ENOENT' }),
     };
     const { deps, probe } = harness([enoent, { status: 0, stdout: '', stderr: '' }]);
-    const code = runInstall(['claude-code'], { ...deps, platform: 'win32' });
+    const code = await runInstall(['claude-code'], { ...deps, platform: 'win32' });
     expect(code).toBe(EXIT_OK);
     expect(probe.calls).toHaveLength(2);
     expect(probe.calls[1]?.command).toBe('cmd');
@@ -335,7 +389,7 @@ describe('claude-code', () => {
 
   // Reported from the built CLI: `--home 'C:\R&D\ssh-mcp'` reached cmd.exe
   // unquoted on the retry path, so `&` started a second command.
-  it('refuses the cmd /c retry when an argument carries a cmd.exe metacharacter', () => {
+  it('refuses the cmd /c retry when an argument carries a cmd.exe metacharacter', async () => {
     const enoent: SpawnOutcome = {
       status: null,
       stdout: '',
@@ -343,7 +397,7 @@ describe('claude-code', () => {
       error: Object.assign(new Error('spawnSync claude ENOENT'), { code: 'ENOENT' }),
     };
     const { deps, probe } = harness([enoent]);
-    const code = runInstall(['claude-code', '--home', 'C:\\R&D\\ssh-mcp'], {
+    const code = await runInstall(['claude-code', '--home', 'C:\\R&D\\ssh-mcp'], {
       ...deps,
       platform: 'win32',
     });
@@ -354,7 +408,7 @@ describe('claude-code', () => {
     expect(probe.text()).toContain('claude mcp add ssh-mcp -s local');
   });
 
-  it('still retries through cmd /c when only spaces are present', () => {
+  it('still retries through cmd /c when only spaces are present', async () => {
     const enoent: SpawnOutcome = {
       status: null,
       stdout: '',
@@ -362,7 +416,7 @@ describe('claude-code', () => {
       error: Object.assign(new Error('spawnSync claude ENOENT'), { code: 'ENOENT' }),
     };
     const { deps, probe } = harness([enoent, { status: 0, stdout: '', stderr: '' }]);
-    const code = runInstall(['claude-code', '--home', 'C:\\Program Files\\ssh-mcp'], {
+    const code = await runInstall(['claude-code', '--home', 'C:\\Program Files\\ssh-mcp'], {
       ...deps,
       platform: 'win32',
     });
@@ -371,7 +425,7 @@ describe('claude-code', () => {
     expect(probe.calls[1]?.command).toBe('cmd');
   });
 
-  it('blames the missing binary, not --force, when the cmd retry also fails', () => {
+  it('blames the missing binary, not --force, when the cmd retry also fails', async () => {
     const enoent: SpawnOutcome = {
       status: null,
       stdout: '',
@@ -382,7 +436,7 @@ describe('claude-code', () => {
       enoent,
       { status: 1, stdout: '', stderr: "'claude' is not recognized" },
     ]);
-    const code = runInstall(['claude-code'], { ...deps, platform: 'win32' });
+    const code = await runInstall(['claude-code'], { ...deps, platform: 'win32' });
     expect(code).toBe(EXIT_FAILED);
     expect(probe.text()).toContain('`claude`가 설치되어 PATH에 있는지');
     expect(probe.text()).not.toContain('--force를 붙여 교체하세요');
@@ -391,7 +445,7 @@ describe('claude-code', () => {
   // Reported with a fake `claude.cmd`: `remove` went through the cmd fallback
   // and `add` was refused for its `-e SSH_MCP_HOME=...&...`, so the run deleted
   // the registration and put nothing back.
-  it('refuses the whole --force sequence before removing anything', () => {
+  it('refuses the whole --force sequence before removing anything', async () => {
     const enoent: SpawnOutcome = {
       status: null,
       stdout: '',
@@ -399,7 +453,7 @@ describe('claude-code', () => {
       error: Object.assign(new Error('spawnSync claude ENOENT'), { code: 'ENOENT' }),
     };
     const { deps, probe } = harness([enoent]);
-    const code = runInstall(['claude-code', '--force', '--home', 'C:\\R&D\\x'], {
+    const code = await runInstall(['claude-code', '--force', '--home', 'C:\\R&D\\x'], {
       ...deps,
       platform: 'win32',
     });
@@ -411,7 +465,7 @@ describe('claude-code', () => {
     expect(probe.text()).toContain('cmd 경유 재시도는 이 문자를 안전하게 전달할 수 없습니다');
   });
 
-  it('stays quiet about a failed remove spawn and lets add do the diagnosing', () => {
+  it('stays quiet about a failed remove spawn and lets add do the diagnosing', async () => {
     const enoent: SpawnOutcome = {
       status: null,
       stdout: '',
@@ -419,57 +473,60 @@ describe('claude-code', () => {
       error: Object.assign(new Error('spawnSync claude ENOENT'), { code: 'ENOENT' }),
     };
     const { deps, probe } = harness([enoent, enoent]);
-    const code = runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
+    const code = await runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_FAILED);
     expect(probe.text()).not.toContain('기존 등록이 없어 remove는 건너뜁니다');
     expect(probe.text()).toContain('PATH에서 찾을 수 없습니다');
   });
 
-  it('quotes an argument with spaces in the printed command', () => {
+  it('quotes an argument with spaces in the printed command', async () => {
     const { deps, probe } = harness();
-    const code = runInstall(['claude-code', '--dry-run', '--home', 'C:\\Program Files\\ssh-mcp'], {
-      ...deps,
-      platform: 'win32',
-    });
+    const code = await runInstall(
+      ['claude-code', '--dry-run', '--home', 'C:\\Program Files\\ssh-mcp'],
+      {
+        ...deps,
+        platform: 'win32',
+      }
+    );
     expect(code).toBe(EXIT_OK);
     expect(probe.text()).toContain('"SSH_MCP_HOME=C:\\Program Files\\ssh-mcp"');
     // Parts that need no quoting stay bare, so the line still reads as a command.
     expect(probe.text()).toContain('claude mcp add ssh-mcp -s local -e ');
   });
 
-  it('reports a signal death as a signal, not as exit code null', () => {
+  it('reports a signal death as a signal, not as exit code null', async () => {
     const { deps, probe } = harness([{ status: null, stdout: '', stderr: '' }]);
-    const code = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+    const code = await runInstall(['claude-code'], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_FAILED);
     expect(probe.text()).toContain('시그널로 종료됐습니다');
     expect(probe.text()).not.toContain('null');
   });
 
-  it('says it skipped the remove instead of relaying a not-found error', () => {
+  it('says it skipped the remove instead of relaying a not-found error', async () => {
     const { deps, probe } = harness([
       { status: 1, stdout: '', stderr: 'No MCP server named ssh-mcp in local scope' },
       { status: 0, stdout: 'Added', stderr: '' },
     ]);
-    const code = runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
+    const code = await runInstall(['claude-code', '--force'], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_OK);
     expect(probe.text()).toContain('기존 등록이 없어 remove는 건너뜁니다');
     expect(probe.text()).not.toContain('No MCP server named');
   });
 
-  it('exits 1 when claude exits non-zero, relaying its output', () => {
+  it('exits 1 when claude exits non-zero, relaying its output', async () => {
     const { deps, probe } = harness([
       { status: 1, stdout: '', stderr: 'already exists in local config' },
     ]);
-    const code = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+    const code = await runInstall(['claude-code'], { ...deps, platform: 'linux' });
     expect(code).toBe(EXIT_FAILED);
     expect(probe.text()).toContain('already exists in local config');
     expect(probe.text()).toContain('종료 코드 1로 끝났습니다');
     expect(probe.text()).toContain('--force');
   });
 
-  it('never spawns anything for --dry-run', () => {
+  it('never spawns anything for --dry-run', async () => {
     const { deps, probe } = harness();
-    const code = runInstall(['claude-code', '--dry-run', '--force'], {
+    const code = await runInstall(['claude-code', '--dry-run', '--force'], {
       ...deps,
       platform: 'win32',
     });
@@ -480,11 +537,142 @@ describe('claude-code', () => {
   });
 });
 
+describe('claude-code scope selection', () => {
+  /** Every case here runs with `--scope` absent unless it says otherwise. */
+  function scopeOf(calls: SpawnCall[]): string | undefined {
+    const args = calls[0]?.args ?? [];
+    return args[args.indexOf('-s') + 1];
+  }
+
+  it('asks once in a terminal, naming the directory local would bind to', async () => {
+    const { deps, probe, prompt } = harness([], { isTTY: true });
+    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux', cwd: () => tmpDir });
+    prompt.send('2\n');
+    expect(await pending).toBe(EXIT_OK);
+    expect(prompt.output()).toContain('Claude Code 어디에 등록할까요?');
+    expect(prompt.output()).toContain(tmpDir);
+    expect(prompt.output()).toContain('선택 [1/2, Enter=1]:');
+    expect(scopeOf(probe.calls)).toBe('user');
+  });
+
+  it('treats a bare Enter as local', async () => {
+    const { deps, probe, prompt } = harness([], { isTTY: true });
+    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+    prompt.send('\n');
+    expect(await pending).toBe(EXIT_OK);
+    expect(scopeOf(probe.calls)).toBe('local');
+  });
+
+  it('accepts the scope names themselves, ignoring case and spaces', async () => {
+    for (const answer of ['user', ' USER ', '2']) {
+      const { deps, probe, prompt } = harness([], { isTTY: true });
+      const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+      prompt.send(`${answer}\n`);
+      expect(await pending).toBe(EXIT_OK);
+      expect(scopeOf(probe.calls)).toBe('user');
+    }
+    for (const answer of ['local', 'LOCAL', '1']) {
+      const { deps, probe, prompt } = harness([], { isTTY: true });
+      const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+      prompt.send(`${answer}\n`);
+      expect(await pending).toBe(EXIT_OK);
+      expect(scopeOf(probe.calls)).toBe('local');
+    }
+  });
+
+  it('re-asks after a bad answer and takes the next good one', async () => {
+    const { deps, probe, prompt } = harness([], { isTTY: true });
+    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+    prompt.send('3\nyes\n1\n');
+    expect(await pending).toBe(EXIT_OK);
+    expect(prompt.output()).toContain('1 또는 2를 입력하세요.');
+    expect(scopeOf(probe.calls)).toBe('local');
+  });
+
+  it('registers nothing after three bad answers', async () => {
+    const { deps, probe, prompt } = harness([], { isTTY: true });
+    const pending = runInstall(['claude-code'], { ...deps, platform: 'linux' });
+    prompt.send('x\ny\nz\n');
+    expect(await pending).toBe(EXIT_FAILED);
+    expect(probe.calls).toHaveLength(0);
+    expect(probe.text()).toContain('등록할 scope를 선택하지 않았습니다');
+  });
+
+  it('never asks when --scope is given', async () => {
+    const { deps, probe, prompt } = harness([], { isTTY: true });
+    expect(
+      await runInstall(['claude-code', '--scope', 'user'], { ...deps, platform: 'linux' })
+    ).toBe(EXIT_OK);
+    expect(prompt.output()).toBe('');
+    expect(scopeOf(probe.calls)).toBe('user');
+  });
+
+  it('falls back to local with one explanatory line when stdin is not a terminal', async () => {
+    const { deps, probe, prompt } = harness([], { isTTY: false });
+    expect(
+      await runInstall(['claude-code'], { ...deps, platform: 'linux', cwd: () => tmpDir })
+    ).toBe(EXIT_OK);
+    expect(prompt.output()).toBe('');
+    expect(scopeOf(probe.calls)).toBe('local');
+    expect(probe.text()).toContain('--scope를 지정하지 않아 Claude Code 기본값 local');
+    expect(probe.text()).toContain(tmpDir);
+    expect(probe.text()).toContain('--scope user 를 지정하세요');
+  });
+
+  it('asks before a --dry-run too, and prints the chosen scope', async () => {
+    const { deps, probe, prompt } = harness([], { isTTY: true });
+    const pending = runInstall(['claude-code', '--dry-run'], { ...deps, platform: 'linux' });
+    prompt.send('2\n');
+    expect(await pending).toBe(EXIT_OK);
+    expect(probe.calls).toHaveLength(0);
+    expect(probe.text()).toContain(`claude mcp add ssh-mcp -s user -- npx -y ${PKG}`);
+  });
+
+  it('never consults the prompter for claude-desktop', async () => {
+    const { deps, prompt } = harness([], { isTTY: true });
+    expect(
+      await runInstall(['claude-desktop', '--config', configPath()], {
+        ...deps,
+        platform: 'linux',
+      })
+    ).toBe(EXIT_OK);
+    expect(prompt.output()).toBe('');
+  });
+
+  it('says what each scope actually covers on success', async () => {
+    const local = harness();
+    expect(
+      await runInstall(['claude-code', '--scope', 'local'], {
+        ...local.deps,
+        platform: 'linux',
+        cwd: () => tmpDir,
+      })
+    ).toBe(EXIT_OK);
+    expect(local.probe.text()).toContain(`이 등록은 ${tmpDir}에서 연 Claude Code에서만 보입니다.`);
+    expect(local.probe.text()).toContain('--scope user 로 다시 등록하세요');
+
+    const user = harness();
+    expect(
+      await runInstall(['claude-code', '--scope', 'user'], { ...user.deps, platform: 'linux' })
+    ).toBe(EXIT_OK);
+    expect(user.probe.text()).toContain('모든 프로젝트에서 보입니다.');
+
+    const project = harness();
+    expect(
+      await runInstall(['claude-code', '--scope', 'project'], {
+        ...project.deps,
+        platform: 'linux',
+      })
+    ).toBe(EXIT_OK);
+    expect(project.probe.text()).toContain('.mcp.json에 기록되어 이 저장소를 공유하는 사람에게도');
+  });
+});
+
 describe('claude-desktop', () => {
-  it('creates the file and its directory when nothing exists', () => {
+  it('creates the file and its directory when nothing exists', async () => {
     const target = path.join(tmpDir, 'nested', 'claude_desktop_config.json');
     const { deps, probe } = harness();
-    const code = runInstall(['claude-desktop', '--config', target], {
+    const code = await runInstall(['claude-desktop', '--config', target], {
       ...deps,
       platform: 'linux',
     });
@@ -496,7 +684,7 @@ describe('claude-desktop', () => {
     expect(fs.readFileSync(target, 'utf8').endsWith('\n')).toBe(true);
   });
 
-  it('merges into an existing file, preserving other servers and other keys', () => {
+  it('merges into an existing file, preserving other servers and other keys', async () => {
     const target = configPath();
     fs.writeFileSync(
       target,
@@ -511,7 +699,7 @@ describe('claude-desktop', () => {
       'utf8'
     );
     const { deps } = harness();
-    const code = runInstall(['claude-desktop', '--config', target], {
+    const code = await runInstall(['claude-desktop', '--config', target], {
       ...deps,
       platform: 'win32',
     });
@@ -525,10 +713,10 @@ describe('claude-desktop', () => {
     });
   });
 
-  it('registers SSH_MCP_HOME under env when --home is given', () => {
+  it('registers SSH_MCP_HOME under env when --home is given', async () => {
     const target = configPath();
     const { deps } = harness();
-    const code = runInstall(['claude-desktop', '--config', target, '--home', '/srv/h'], {
+    const code = await runInstall(['claude-desktop', '--config', target, '--home', '/srv/h'], {
       ...deps,
       platform: 'linux',
     });
@@ -544,7 +732,7 @@ describe('claude-desktop', () => {
     });
   });
 
-  it('refuses a name collision without --force and leaves the bytes untouched', () => {
+  it('refuses a name collision without --force and leaves the bytes untouched', async () => {
     const target = configPath();
     const original = JSON.stringify(
       { mcpServers: { 'ssh-mcp': { command: 'old', args: [] } } },
@@ -553,7 +741,7 @@ describe('claude-desktop', () => {
     );
     fs.writeFileSync(target, original, 'utf8');
     const { deps, probe } = harness();
-    const code = runInstall(['claude-desktop', '--config', target], {
+    const code = await runInstall(['claude-desktop', '--config', target], {
       ...deps,
       platform: 'linux',
     });
@@ -563,7 +751,7 @@ describe('claude-desktop', () => {
     expect(probe.text()).toContain('--force');
   });
 
-  it('replaces the entry with --force and leaves a timestamped backup', () => {
+  it('replaces the entry with --force and leaves a timestamped backup', async () => {
     const target = configPath();
     const original = JSON.stringify(
       { mcpServers: { 'ssh-mcp': { command: 'old', args: [] }, other: { command: 'keep' } } },
@@ -572,7 +760,7 @@ describe('claude-desktop', () => {
     );
     fs.writeFileSync(target, original, 'utf8');
     const { deps, probe } = harness();
-    const code = runInstall(['claude-desktop', '--config', target, '--force'], {
+    const code = await runInstall(['claude-desktop', '--config', target, '--force'], {
       ...deps,
       platform: 'linux',
       now: () => new Date(2026, 8, 14, 1, 2, 3),
@@ -591,7 +779,7 @@ describe('claude-desktop', () => {
 
   // Reported: two `--force` runs inside the same second made the second backup
   // overwrite the first, losing the only copy of the original file.
-  it('never overwrites an existing backup when the timestamp repeats', () => {
+  it('never overwrites an existing backup when the timestamp repeats', async () => {
     const target = configPath();
     const original = JSON.stringify({ mcpServers: { 'ssh-mcp': { command: 'v1' } } }, null, 2);
     fs.writeFileSync(target, original, 'utf8');
@@ -599,7 +787,7 @@ describe('claude-desktop', () => {
 
     const first = harness();
     expect(
-      runInstall(['claude-desktop', '--config', target, '--force'], {
+      await runInstall(['claude-desktop', '--config', target, '--force'], {
         ...first.deps,
         platform: 'linux',
         now: frozen,
@@ -608,7 +796,7 @@ describe('claude-desktop', () => {
 
     const second = harness();
     expect(
-      runInstall(['claude-desktop', '--config', target, '--force'], {
+      await runInstall(['claude-desktop', '--config', target, '--force'], {
         ...second.deps,
         platform: 'linux',
         now: frozen,
@@ -624,11 +812,11 @@ describe('claude-desktop', () => {
     );
   });
 
-  it('treats a prototype member name as absent, not as a collision', () => {
+  it('treats a prototype member name as absent, not as a collision', async () => {
     const target = configPath();
     fs.writeFileSync(target, JSON.stringify({ mcpServers: {} }, null, 2), 'utf8');
     const { deps } = harness();
-    const code = runInstall(['claude-desktop', '--config', target, '--name', 'constructor'], {
+    const code = await runInstall(['claude-desktop', '--config', target, '--name', 'constructor'], {
       ...deps,
       platform: 'linux',
     });
@@ -638,21 +826,21 @@ describe('claude-desktop', () => {
     });
   });
 
-  it('leaves no temporary file behind', () => {
+  it('leaves no temporary file behind', async () => {
     const target = configPath();
     const { deps } = harness();
-    expect(runInstall(['claude-desktop', '--config', target], { ...deps, platform: 'linux' })).toBe(
-      EXIT_OK
-    );
+    expect(
+      await runInstall(['claude-desktop', '--config', target], { ...deps, platform: 'linux' })
+    ).toBe(EXIT_OK);
     expect(fs.readdirSync(tmpDir).filter((entry) => entry.endsWith('.tmp'))).toEqual([]);
   });
 
-  it('refuses broken JSON without writing anything', () => {
+  it('refuses broken JSON without writing anything', async () => {
     const target = configPath();
     const original = '{ "mcpServers": { ';
     fs.writeFileSync(target, original, 'utf8');
     const { deps, probe } = harness();
-    const code = runInstall(['claude-desktop', '--config', target], {
+    const code = await runInstall(['claude-desktop', '--config', target], {
       ...deps,
       platform: 'linux',
     });
@@ -663,12 +851,12 @@ describe('claude-desktop', () => {
     expect(probe.text()).toContain(target);
   });
 
-  it('refuses a non-object mcpServers without writing anything', () => {
+  it('refuses a non-object mcpServers without writing anything', async () => {
     const target = configPath();
     const original = JSON.stringify({ mcpServers: ['ssh-mcp'] }, null, 2);
     fs.writeFileSync(target, original, 'utf8');
     const { deps, probe } = harness();
-    const code = runInstall(['claude-desktop', '--config', target], {
+    const code = await runInstall(['claude-desktop', '--config', target], {
       ...deps,
       platform: 'linux',
     });
@@ -677,10 +865,10 @@ describe('claude-desktop', () => {
     expect(probe.text()).toContain('mcpServers가 JSON 객체가 아닙니다');
   });
 
-  it('writes nothing for --dry-run', () => {
+  it('writes nothing for --dry-run', async () => {
     const target = configPath();
     const { deps, probe } = harness();
-    const code = runInstall(['claude-desktop', '--config', target, '--dry-run'], {
+    const code = await runInstall(['claude-desktop', '--config', target, '--dry-run'], {
       ...deps,
       platform: 'win32',
     });
@@ -690,7 +878,7 @@ describe('claude-desktop', () => {
     expect(probe.text()).toContain('"command": "cmd"');
   });
 
-  it('resolves the platform default path when --config is absent', () => {
+  it('resolves the platform default path when --config is absent', async () => {
     const home = path.join(tmpDir, 'home');
     const homedir = (): string => home;
     expect(desktopConfigPath('win32', { APPDATA: 'C:\\Roaming' }, homedir)).toBe(
@@ -709,7 +897,7 @@ describe('claude-desktop', () => {
 });
 
 describe('doctor snippets are unchanged by the shared registration module', () => {
-  it('pins all three snippet strings', () => {
+  it('pins all three snippet strings', async () => {
     const snippets = buildSnippets(PKG);
     expect(snippets.claudeDesktop).toBe(
       [

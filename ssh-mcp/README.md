@@ -34,9 +34,10 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 별도 설치 없이 npx로 바로 씁니다. 세 명령이면 끝납니다.
 
 ```bash
-# 1. Claude에 등록한다. Claude Code는 이 서버를 쓸 프로젝트 디렉터리에서 실행한다.
+# 1. Claude에 등록한다. scope를 생략하면 어디에 등록할지 물어본다.
+#    기본은 local — 지금 디렉터리에서 연 Claude Code에서만 보인다.
 npx @get-bot/ssh-mcp install claude-code
-#    모든 프로젝트에서 쓰려면 user scope로 등록한다 (디렉터리 무관):
+#    묻지 않게 하려면 직접 지정한다. user는 디렉터리와 무관하게 모든 프로젝트에서 보인다:
 npx @get-bot/ssh-mcp install claude-code --scope user
 #    Claude Desktop이면 (Desktop은 앱 전역에 등록된다):
 npx @get-bot/ssh-mcp install claude-desktop
@@ -135,15 +136,15 @@ npx @get-bot/ssh-mcp install claude-code
 npx @get-bot/ssh-mcp install claude-desktop
 ```
 
-| 옵션                             | 설명                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `--name <name>`                  | 등록할 MCP 서버 이름. 기본 `ssh-mcp`. 영숫자로 시작하고 영숫자·`.`·`_`·`-`만 쓸 수 있습니다(최대 64자) |
-| `--scope <local\|user\|project>` | `claude-code` 전용. 기본 `local`. `claude-desktop`에 주면 사용법 오류                                  |
-| `--home <path>`                  | `SSH_MCP_HOME` 환경변수를 함께 등록합니다                                                              |
-| `--config <path>`                | `claude-desktop` 전용. 설정 파일 경로를 재지정합니다                                                   |
-| `--force`                        | 같은 이름이 이미 등록돼 있으면 교체합니다                                                              |
-| `--dry-run`                      | 아무것도 바꾸지 않고 수행할 내용만 출력합니다                                                          |
-| `-h`, `--help`                   | 도움말                                                                                                 |
+| 옵션                             | 설명                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--name <name>`                  | 등록할 MCP 서버 이름. 기본 `ssh-mcp`. 영숫자로 시작하고 영숫자·`.`·`_`·`-`만 쓸 수 있습니다(최대 64자)           |
+| `--scope <local\|user\|project>` | `claude-code` 전용. 생략하면 터미널에서 묻습니다([scope 선택](#scope-선택)). `claude-desktop`에 주면 사용법 오류 |
+| `--home <path>`                  | `SSH_MCP_HOME` 환경변수를 함께 등록합니다                                                                        |
+| `--config <path>`                | `claude-desktop` 전용. 설정 파일 경로를 재지정합니다                                                             |
+| `--force`                        | 같은 이름이 이미 등록돼 있으면 교체합니다                                                                        |
+| `--dry-run`                      | 아무것도 바꾸지 않고 수행할 내용만 출력합니다                                                                    |
+| `-h`, `--help`                   | 도움말                                                                                                           |
 
 종료 코드는 `setup`과 같습니다 — `0` 성공, `1` 실패, `2` 사용법 오류. 모든 출력은 stderr로 나갑니다(`doctor`가 stdout을 쓰는 것과 대비됩니다).
 
@@ -170,6 +171,32 @@ Windows에서는 **두 클라이언트 모두** `cmd /c`로 감쌉니다. Claude
 
 성공하면 `claude mcp list` 또는 Claude Code 안의 `/mcp`로 확인하세요.
 
+### scope 선택
+
+Claude Code는 등록을 세 가지 범위 중 하나에 저장합니다. **기본값인 `local`은 명령을 실행한 그 디렉터리에만 적용됩니다.** 홈 디렉터리에서 설치 명령을 치면 홈 디렉터리 전용으로 등록되고, 정작 일하는 프로젝트에서 Claude Code를 열면 도구가 보이지 않습니다. 그래서 `--scope`를 생략하면 터미널에서 한 번 묻습니다.
+
+```
+Claude Code 어디에 등록할까요?
+  1) 이 프로젝트만 (local)  — /home/me/project 에서 연 Claude Code에만 보입니다. Claude Code의 기본값입니다.
+  2) 모든 프로젝트 (user)   — 어느 디렉터리에서 열어도 보입니다.
+팀과 저장소로 공유하려면 --scope project 를 직접 지정하세요.
+선택 [1/2, Enter=1]:
+```
+
+`1`/`local`, `2`/`user`를 받습니다(대소문자 무시). Enter만 누르면 `local`입니다. 세 번 연속 잘못 입력하면 **아무것도 등록하지 않고** 종료 코드 1로 끝냅니다.
+
+- `--scope`를 지정하면 묻지 않습니다. 문서의 한 줄 명령과 스크립트는 그대로 비대화형으로 동작합니다.
+- 파이프나 CI처럼 stdin이 터미널이 아니면 묻지 않고 `local`로 진행하되, 그 사실과 바꾸는 방법을 한 줄로 알립니다.
+- `--dry-run`도 같은 규칙을 따릅니다. 출력의 `-s <scope>`는 최종 선택값입니다.
+
+| scope     | 저장 위치                             | 보이는 범위                                            |
+| --------- | ------------------------------------- | ------------------------------------------------------ |
+| `local`   | `~/.claude.json`의 해당 프로젝트 항목 | 그 디렉터리에서 연 Claude Code에서만                   |
+| `user`    | `~/.claude.json` 최상위               | 어느 디렉터리에서 열어도                               |
+| `project` | 저장소의 `.mcp.json`                  | 저장소를 공유하는 모든 사람(첫 사용 시 각자 승인 필요) |
+
+같은 이름이 `local`과 `user` 양쪽에 있으면 해당 프로젝트에서는 `local`이 우선합니다. `user`로 등록했는데 한 프로젝트에서만 옛 설정이 보인다면 그 프로젝트의 `local` 항목을 지우세요.
+
 ### `install claude-desktop`
 
 `claude_desktop_config.json`을 직접 편집합니다. 기본 경로는 Windows `%APPDATA%\Claude\`, macOS `~/Library/Application Support/Claude/`, 그 외 `~/.config/Claude/`입니다.
@@ -186,10 +213,10 @@ Windows에서는 **두 클라이언트 모두** `cmd /c`로 감쌉니다. Claude
 
 ### `--dry-run`
 
-아무것도 바꾸지 않고, `claude-code`는 실행할 명령 한 줄을, `claude-desktop`은 대상 경로와 추가·교체될 항목 JSON을 출력합니다.
+아무것도 바꾸지 않고, `claude-code`는 실행할 명령 한 줄을, `claude-desktop`은 대상 경로와 추가·교체될 항목 JSON을 출력합니다. `claude-code`에서 `--scope`를 생략했다면 [scope 질문](#scope-선택)은 그대로 뜹니다.
 
 ```bash
-$ npx @get-bot/ssh-mcp install claude-code --dry-run
+$ npx @get-bot/ssh-mcp install claude-code --scope local --dry-run
 [dry-run] 아무것도 바꾸지 않았습니다. 실행할 명령:
   claude mcp add ssh-mcp -s local -- cmd /c npx -y @get-bot/ssh-mcp
 ```

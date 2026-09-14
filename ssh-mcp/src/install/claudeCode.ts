@@ -31,11 +31,8 @@
 import { spawnSync } from 'node:child_process';
 
 import { buildServerCommand, formatServerCommand } from '../config/registration.js';
-
-/** Scopes accepted by `claude mcp add -s`. */
-export const CLAUDE_CODE_SCOPES = ['local', 'user', 'project'] as const;
-export type ClaudeCodeScope = (typeof CLAUDE_CODE_SCOPES)[number];
-export const DEFAULT_CLAUDE_CODE_SCOPE: ClaudeCodeScope = 'local';
+import { scopeMeaning } from './scope.js';
+import type { ClaudeCodeScope } from './scope.js';
 
 /** The CLI we drive. Not configurable: `claude mcp add` is the only supported path. */
 const CLAUDE_BIN = 'claude';
@@ -63,7 +60,10 @@ export function defaultSpawner(command: string, args: readonly string[]): SpawnO
 
 export interface ClaudeCodeInstallOptions {
   name: string;
+  /** Already settled by `resolveScope()`; this module never asks. */
   scope: ClaudeCodeScope;
+  /** Absolute working directory, so the success message can say what `local` covers. */
+  cwd: string;
   /** `SSH_MCP_HOME` to register alongside the server, or null. */
   home: string | null;
   force: boolean;
@@ -292,6 +292,9 @@ export function installClaudeCode(options: ClaudeCodeInstallOptions): boolean {
     `Claude Code에 "${options.name}"을(를) ${options.scope} 스코프로 등록했습니다: ` +
       formatServerCommand(server)
   );
+  // "Registered" is not the same as "visible where you work", and `local` in
+  // particular binds to one directory. Say which.
+  options.write(scopeMeaning(options.scope, options.cwd));
   if (options.home !== null) options.write(`SSH_MCP_HOME=${options.home}`);
   options.write('확인: `claude mcp list`, 또는 Claude Code 안에서 `/mcp`.');
   return true;

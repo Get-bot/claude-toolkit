@@ -70,13 +70,18 @@ npx @get-bot/ssh-mcp install claude-code --dry-run
 npx @get-bot/ssh-mcp install claude-code
 ```
 
-- [ ] `--dry-run`이 아래 두 줄만 출력하고 아무것도 바꾸지 않는다(Windows 기준).
+- [ ] `--dry-run`이 scope 질문 뒤에 아래 두 줄만 출력하고 아무것도 바꾸지 않는다(Windows 기준, Enter로 local 선택 시).
 
   ```
   [dry-run] 아무것도 바꾸지 않았습니다. 실행할 명령:
     claude mcp add ssh-mcp -s local -- cmd /c npx -y @get-bot/ssh-mcp
   ```
 
+- [ ] `--scope` 없이 실행하면 "Claude Code 어디에 등록할까요?" 질문이 뜨고, 1) 줄에 **현재 디렉터리의 절대 경로**가 보인다. Enter만 누르면 `local`로 진행한다.
+- [ ] 질문에 `2`를 입력하면 `-s user`로 등록되고, 다른 디렉터리에서 Claude Code를 열어도 7개 도구가 보인다.
+- [ ] `--scope user`를 붙이면 질문이 **뜨지 않는다**.
+- [ ] `npx @get-bot/ssh-mcp install claude-code < /dev/null`(비TTY)은 묻지 않고 `local`로 진행하며 "--scope를 지정하지 않아 ..." 한 줄을 남긴다.
+- [ ] 성공 메시지에 scope의 의미가 한 줄 나온다(`local`이면 현재 디렉터리 경로가 포함된다).
 - [ ] `--dry-run` 없이 실행하면 `claude mcp list`에 `ssh-mcp`가 나타나고 `/mcp`에서 7개 도구가 보인다.
 - [ ] 같은 명령을 한 번 더 실행하면 `claude`가 중복 등록을 거부하고 종료 코드 1로 끝난다. `--force`를 주면 remove 후 add가 진행되어 성공한다.
 - [ ] `install claude-desktop --config <임시경로> --home --dry-run`이 종료 코드 2로 끝나고 **파일을 만들지 않는다**(값 자리에 플래그가 오는 경우).

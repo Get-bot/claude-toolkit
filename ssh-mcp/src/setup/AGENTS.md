@@ -14,7 +14,7 @@
 | `cli.ts`     | 명령 오케스트레이션. `runSetup(argv, deps)`, `parseSetupArgs()`, `parseTarget()`, `defaultConnector`, `readKeyAlgo()`. 종료 코드 `EXIT_OK=0` / `EXIT_FAILED=1` / `EXIT_NOT_INTERACTIVE=2`. 검증 명령은 `VERIFY_COMMAND = 'echo ssh-mcp-ok'`. |
 | `keygen.ts`  | ed25519 키 생성과 백업/복원. `generateKeyPair()`, `backupKeyPair()`/`restoreKeyPair()`/`removeKeyPair()`, `describePublicKey()`, `MAX_GENERATION_ATTEMPTS = 12`.                                                                             |
 | `install.ts` | 원격 `authorized_keys` 설치. `installAuthorizedKey()`, `AUTHORIZED_KEYS_SCRIPT`, 마커 `SSHMCP_INSTALLED` / `SSHMCP_ALREADY_PRESENT`, `RemoteInstallError`.                                                                                   |
-| `prompt.ts`  | 대화형 프롬프트. `Prompter` 클래스와 `promptPassword()`/`promptYes()`/`promptChoice()`, `createPrompter()`, `NonInteractiveError`, `PromptAbortedError`.                                                                                     |
+| `prompt.ts`  | 대화형 프롬프트. `Prompter` 클래스와 `promptPassword()`/`promptYes()`/`promptChoice()`, `createPrompter()`, `NonInteractiveError`, `PromptAbortedError`. `install`의 scope 질문도 이 모듈을 씁니다.                                          |
 | `winacl.ts`  | Windows ACL 하드닝. `hardenWindowsAcl()`, `inspectWindowsAcl()`, `parseIcaclsPrincipals()`, `currentWindowsPrincipal()`, `ALLOWED_FOREIGN_PRINCIPALS = ['NT AUTHORITY\\SYSTEM']`.                                                            |
 
 ## Setup flow
@@ -39,6 +39,7 @@
 - **ACL 하드닝은 반드시 키 생성보다 먼저입니다.** 순서를 뒤집으면 두 번의 네트워크 왕복과 사람의 프롬프트가 진행되는 동안 상속된 NTFS ACL 아래에 암호화되지 않은 개인키가 놓입니다.
 - **절반만 쓰인 상태를 남기지 마세요.** 키 생성 이후의 모든 실패 경로는 `finally`에서 `restoreKeyPair(backup)`으로 이전 키 상태를 정확히 되돌리고(원래 없던 파일은 삭제) `hosts.json`을 건드리지 않습니다. `succeeded` 플래그가 서는 시점은 마지막 `store.save()` 직후입니다(AC7.5, AC7.7).
 - **`generateKeyPair()`는 새 쌍을 쓰기 전에 기존 파일을 `fs.rmSync`로 먼저 지웁니다.** `writeFileSync`가 기존 파일의 모드를 유지하기 때문에, 이전 실행에서 world-readable로 남은 파일이 그대로 재사용되는 것을 막기 위함입니다.
+- **`promptChoice`의 기본 동작은 D3입니다 — 기본값 없음, 빈 입력은 재질문.** `ChoicePromptOptions`(`defaultValue`/`caseInsensitive`/`aliases`/`invalidMessage`)는 `install`의 scope 질문을 위해 나중에 붙은 **opt-in** 확장이며, 아무것도 넘기지 않으면 동작이 예전과 동일합니다. 승인 폴백 호출부에 이 옵션을 붙이지 마세요. `tests/unit/setupPrompt.test.ts`가 양쪽을 모두 고정합니다.
 - **비대화형 실행은 지원하지 않습니다.** 비밀번호 프롬프트가 non-TTY stdin을 거부하며, `--approval-fallback`은 승인 질문만 건너뛸 뿐 이 요구를 해제하지 않습니다(D4, D5).
 - **비밀번호는 `Buffer`로 다룹니다.** JavaScript 문자열은 지울 수 없기 때문입니다. 다만 `ssh2` 1.17.0의 `ConnectConfig.password`가 문자열만 받아 접속 시점에 문자열 복사본이 한 번 생기며, 이는 README의 "알려진 한계"에 명시된 잔여 위험입니다. 프롬프트 쪽 `Buffer` 처리를 문자열로 "단순화"하지 마세요.
 - **muted read는 raw 모드를 씁니다.** raw 모드가 아니면 터미널 자체가 키 입력을 에코하며, 우리 쪽에서 아무리 조심해도 숨길 수 없습니다.

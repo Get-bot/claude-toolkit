@@ -363,27 +363,73 @@ export async function promptYes(
 }
 
 /**
+ * Optional relaxations of {@link promptChoice}.
+ *
+ * Every field is off by default, so a call that passes none behaves exactly as
+ * it did before these existed. That matters: `setup`'s approval-fallback
+ * question is decision D3 — no preselected value, an empty line re-asks — and
+ * it must keep answering that way no matter what other callers need.
+ */
+export interface ChoicePromptOptions {
+  /** Returned for an empty line. Without it an empty line re-asks (D3). */
+  defaultValue?: string;
+  /** Match answers ignoring case. */
+  caseInsensitive?: boolean;
+  /** Extra spellings accepted for a value, e.g. `{ local: ['1'] }`. */
+  aliases?: Readonly<Record<string, readonly string[]>>;
+  /** Replaces the generic "that is not one of these" sentence. */
+  invalidMessage?: string;
+}
+
+/** The option an answer selects, or null when it selects none. */
+function resolveChoice(
+  answer: string,
+  options: readonly string[],
+  config: ChoicePromptOptions
+): string | null {
+  if (answer === '' && config.defaultValue !== undefined) return config.defaultValue;
+  if (options.includes(answer)) return answer;
+
+  const aliases = config.aliases;
+  const equal = (a: string, b: string): boolean =>
+    config.caseInsensitive === true ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+  for (const option of options) {
+    if (config.caseInsensitive === true && equal(option, answer)) return option;
+    for (const alias of aliases?.[option] ?? []) {
+      if (equal(alias, answer)) return option;
+    }
+  }
+  return null;
+}
+
+/**
  * Ask for one of `options` with **no preselected value** (decision D3).
  *
  * An empty line re-asks; so does an unknown value. After `attempts` tries the
  * call throws {@link PromptAbortedError} and the caller must write nothing
- * (AC17.12a).
+ * (AC17.12a). {@link ChoicePromptOptions} can relax any of that for callers
+ * whose question genuinely has a safe default; omitting it keeps D3 exactly.
  */
 export async function promptChoice(
   question: string,
   options: readonly string[],
   prompter: Prompter = processPrompter(),
-  attempts: number = DEFAULT_CHOICE_ATTEMPTS
+  attempts: number = DEFAULT_CHOICE_ATTEMPTS,
+  config: ChoicePromptOptions = {}
 ): Promise<string> {
   if (options.length === 0) throw new Error('promptChoice needs at least one option');
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     prompter.write(question);
     const answer = decode(await prompter.readLine({ muted: false }));
-    if (options.includes(answer)) return answer;
+    const chosen = resolveChoice(answer, options, config);
+    if (chosen !== null) return chosen;
     const remaining = attempts - attempt;
     if (remaining === 0) break;
     if (answer === '') {
       prompter.writeLine(`값을 입력해야 합니다. 남은 기회 ${String(remaining)}회.`);
+    } else if (config.invalidMessage !== undefined) {
+      prompter.writeLine(`${config.invalidMessage} 남은 기회 ${String(remaining)}회.`);
     } else {
       prompter.writeLine(
         `"${answer}"는 선택할 수 없습니다. ${options.join(' 또는 ')} 중 하나를 입력하세요. ` +
