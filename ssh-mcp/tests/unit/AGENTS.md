@@ -9,27 +9,28 @@
 
 ## Key Files
 
-| File                    | Description                                                                                                                      |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `classify.test.ts`      | 표 기반 분류 코퍼스(safe / privileged / destructive / bypass) + **오탐 게이트**. 코퍼스가 계약이며 분류기보다 먼저 작성됐습니다. |
-| `normalize.test.ts`     | `normalize()`의 dequote, `matchTarget` NUL 치환, 세그먼트 분할, `MAX_SUBSTITUTION_DEPTH`                                         |
-| `interactive.test.ts`   | `UNCONDITIONAL_PROGRAMS`/`CONDITIONAL_PROGRAMS` 판정과, 게이트를 통과한 명령이 분류기에 걸리는지                                 |
-| `approval.test.ts`      | §5.5 승인 표 전체(호스트 × 모드 × 등급 × elicitation × 폴백) + 표로 표현할 수 없는 규칙들                                        |
-| `tokens.test.ts`        | 토큰 발급·소비·만료·tombstone·`MAX_TOKENS` 축출                                                                                  |
-| `secrets.test.ts`       | `maskCommandSecrets()`와, 마스킹이 분류 결과를 바꾸지 않는다는 것                                                                |
-| `excerpt.test.ts`       | §5.8 발췌(AC12.1~AC12.9). 줄 수는 **생성기에서** 가져옵니다                                                                      |
-| `markerFraming.test.ts` | 세션 완료 프레임 감지. 프레임이 TCP 바이트 경계에서 임의로 쪼개지는 모든 경우를 재현                                             |
-| `shellDetect.test.ts`   | 셸 감지 표와 프리앰블. `set +o pipefail` 회귀 가드                                                                               |
-| `fingerprint.test.ts`   | `SHA256:` 지문. 고정 벡터는 `ssh-keygen -lf`가 만든 값                                                                           |
-| `hostKeys.test.ts`      | 픽스처 키 생성기의 검증 루프(ssh2 1.17.0의 불량 ed25519 쌍 대응)                                                                 |
-| `keygen.test.ts`        | 키 생성. POSIX 모드 단언은 Windows에서 의도적으로 skip                                                                           |
-| `setupPrompt.test.ts`   | 프롬프트 규칙(에코 금지, 비-TTY 거부, `yes` 정확 일치, 3회 후 포기)                                                              |
-| `redact.test.ts`        | 키 이름 기반 redaction, PEM 마스킹, 2 KiB 필드 상한                                                                              |
-| `schema.test.ts`        | `hosts.json` 스키마 기본값과 `.strict()` 거부                                                                                    |
-| `store.test.ts`         | 레지스트리 로드/저장, 폴백 정규화, 손상 파일 처리                                                                                |
-| `audit.test.ts`         | 감사 레코드 형태, 줄 길이 상한, 로테이션                                                                                         |
-| `errors.test.ts`        | `ERROR_CODES` 목록과 `isErrorCode()`                                                                                             |
-| `toolsList.test.ts`     | 실제 클라이언트–서버 쌍으로 `tools/list` 검증. 스냅샷이 아니라 **필드 단위**로 단언                                              |
+| File                     | Description                                                                                                                                                                                                       |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `classify.test.ts`       | 표 기반 분류 코퍼스(safe / privileged / destructive / bypass) + **오탐 게이트**. 코퍼스가 계약이며 분류기보다 먼저 작성됐습니다.                                                                                  |
+| `normalize.test.ts`      | `normalize()`의 dequote, `matchTarget` NUL 치환, 세그먼트 분할, `MAX_SUBSTITUTION_DEPTH`                                                                                                                          |
+| `interactive.test.ts`    | `UNCONDITIONAL_PROGRAMS`/`CONDITIONAL_PROGRAMS` 판정과, 게이트를 통과한 명령이 분류기에 걸리는지                                                                                                                  |
+| `approval.test.ts`       | §5.5 승인 표 전체(호스트 × 모드 × 등급 × elicitation × 폴백) + 표로 표현할 수 없는 규칙들                                                                                                                         |
+| `tokens.test.ts`         | 토큰 발급·소비·만료·tombstone·`MAX_TOKENS` 축출                                                                                                                                                                   |
+| `secrets.test.ts`        | `maskCommandSecrets()`와, 마스킹이 분류 결과를 바꾸지 않는다는 것                                                                                                                                                 |
+| `excerpt.test.ts`        | §5.8 발췌(AC12.1~AC12.9). 줄 수는 **생성기에서** 가져옵니다                                                                                                                                                       |
+| `markerFraming.test.ts`  | 세션 완료 프레임 감지. 프레임이 TCP 바이트 경계에서 임의로 쪼개지는 모든 경우를 재현                                                                                                                              |
+| `shellDetect.test.ts`    | 셸 감지 표와 프리앰블. `set +o pipefail` 회귀 가드                                                                                                                                                                |
+| `fingerprint.test.ts`    | `SHA256:` 지문. 고정 벡터는 `ssh-keygen -lf`가 만든 값                                                                                                                                                            |
+| `hostKeys.test.ts`       | 픽스처 키 생성기의 검증 루프(ssh2 1.17.0의 불량 ed25519 쌍 대응)                                                                                                                                                  |
+| `keygen.test.ts`         | 키 생성. POSIX 모드 단언은 Windows에서 의도적으로 skip                                                                                                                                                            |
+| `setupPrompt.test.ts`    | 프롬프트 규칙(에코 금지, 비-TTY 거부, `yes` 정확 일치, 3회 후 포기)                                                                                                                                               |
+| `redact.test.ts`         | 키 이름 기반 redaction, PEM 마스킹, 2 KiB 필드 상한                                                                                                                                                               |
+| `schema.test.ts`         | `hosts.json` 스키마 기본값과 `.strict()` 거부                                                                                                                                                                     |
+| `store.test.ts`          | 레지스트리 로드/저장, 폴백 정규화, 손상 파일 처리                                                                                                                                                                 |
+| `audit.test.ts`          | 감사 레코드 형태, 줄 길이 상한, 로테이션                                                                                                                                                                          |
+| `errors.test.ts`         | `ERROR_CODES` 목록과 `isErrorCode()`                                                                                                                                                                              |
+| `toolsList.test.ts`      | 실제 클라이언트–서버 쌍으로 `tools/list` 검증. 스냅샷이 아니라 **필드 단위**로 단언                                                                                                                               |
+| `installCommand.test.ts` | `ssh-mcp install`. 플랫폼을 주입해 win32/그 외 명령 형태를 둘 다 검증하고, 스텁 spawner로 `claude` argv를 단언하며, Desktop 설정의 거부 경로가 파일 바이트를 그대로 두는지 확인. `buildSnippets()` 세 필드도 고정 |
 
 ## Conventions
 

@@ -9,10 +9,10 @@
 
 ## Key Files
 
-| File        | Description                                                                                                                                                                                 |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `checks.ts` | 점검 정의 전체. `CHECK_KINDS`(15종, 표 순서), `PER_HOST_KINDS`(6종), `buildChecks(options)`, `runChecks()`, `defaultHostProber`, `loadPatternRows()`, `buildSnippets()`/`formatSnippets()`. |
-| `cli.ts`    | argv 파싱과 렌더링. `parseDoctorArgs()`, `runDoctor(argv, options)`, `USAGE`, 종료 코드 상수 `EXIT_OK=0` / `EXIT_CHECK_FAILED=1` / `EXIT_USAGE=2`.                                          |
+| File        | Description                                                                                                                                                                                                                                                                                     |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `checks.ts` | 점검 정의 전체. `CHECK_KINDS`(15종, 표 순서), `PER_HOST_KINDS`(6종), `buildChecks(options)`, `runChecks()`, `defaultHostProber`, `loadPatternRows()`, `buildSnippets()`/`formatSnippets()`. 스니펫이 쓰는 **명령 형태 자체**는 `../config/registration.ts`로 옮겨졌고 여기서는 렌더링만 합니다. |
+| `cli.ts`    | argv 파싱과 렌더링. `parseDoctorArgs()`, `runDoctor(argv, options)`, `USAGE`, 종료 코드 상수 `EXIT_OK=0` / `EXIT_CHECK_FAILED=1` / `EXIT_USAGE=2`. 표 모드에서만 스니펫 뒤에 `INSTALL_HINT` 한 줄을 덧붙입니다.                                                                                 |
 
 ## What checks exist
 
@@ -50,6 +50,8 @@
 - **`--patterns`는 점검 없이 단독 실행되며 항상 종료 코드 0입니다.** 정규식 표와 함께 `ARGV_RULES` 표를 따로 출력하고, argv 규칙은 "정규식이 아니며 해제할 수 없다"고 명시합니다.
 - `patterns` 점검은 `safety/patterns.ts`의 `PatternDef.source`(명령 경로 접두사가 붙기 **전** 문자열)를 출력합니다 — 이 문자열이 곧 사용자가 `patternOverrides.<grade>.remove`에 적을 값입니다(AC21.9).
 - `buildChecks(options)`는 `DoctorOptions`로 호스트 프로버를 주입받습니다. 테스트는 이것으로 네트워크 없이 호스트 점검을 검증하므로 주입 지점을 없애지 마세요.
+- **`INSTALL_HINT`는 `--json`에 들어가지 않습니다.** `install`로 자동 등록하라는 안내 한 줄은 `runDoctor`의 표 경로에서만 출력합니다. `--json` 페이로드(`{ ok, checks, snippets }`)는 기계가 읽는 계약이므로 산문을 덧붙이지 마세요.
+- **`buildSnippets()`가 출력하는 문자열은 계약입니다.** 사용자가 그대로 붙여넣고 `tests/integration/doctor.test.ts`와 `tests/unit/installCommand.test.ts`가 세 필드를 고정합니다. 명령 형태는 이제 `../config/registration.ts`의 `buildServerCommand()`/`buildDesktopEntry()`에서 오며 `install`이 실제로 등록하는 것과 같은 출처입니다 — 안내와 자동화가 어긋나지 못하게 하는 것이 분리의 목적이므로, 형태를 바꾸려면 그 모듈을 고치고 양쪽 테스트를 함께 갱신하세요.
 
 ## Testing
 
@@ -63,7 +65,7 @@ npm run test:integration
 
 ### Internal
 
-`../config/paths.js`, `../config/schema.js`, `../config/state.js`, `../config/store.js`, `../errors.js`, `../safety/classify.js`, `../safety/patterns.js`, `../setup/winacl.js`, `../ssh/fingerprint.js`
+`../config/paths.js`, `../config/registration.js`, `../config/schema.js`, `../config/state.js`, `../config/store.js`, `../errors.js`, `../safety/classify.js`, `../safety/patterns.js`, `../setup/winacl.js`, `../ssh/fingerprint.js`
 
 ### External
 

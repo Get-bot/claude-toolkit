@@ -31,7 +31,7 @@
 10. **키 전용 재접속 검증** — 새 개인키만으로 다시 접속해 `VERIFY_COMMAND`를 실행하고 출력에 `ssh-mcp-ok`가 있고 종료 코드가 0인지 확인합니다.
 11. **승인 폴백 선택** — `approvalFallback`에는 기본값이 없으므로 `promptChoice()`로 `token` / `fail-closed` 중 하나를 **사전 선택값 없이** 고르게 합니다(D3, `--approval-fallback`으로 미리 줄 수 있음).
 12. **레지스트리 기록** — `store.save()`로 `hosts.json`에 항목을 추가합니다. 이것이 레지스트리에 쓰는 **처음이자 유일한** 지점이며, 이 단계 이전의 어떤 실패도 레지스트리를 건드리지 않습니다.
-13. **완료 안내** — `doctor`의 `formatSnippets()`가 만든 클라이언트 등록 스니펫을 출력합니다.
+13. **완료 안내** — `doctor`의 `formatSnippets()`가 만든 클라이언트 등록 스니펫과, 그 뒤에 `config/registration.ts`의 `INSTALL_HINT`(`ssh-mcp install`로 자동 등록하라는 한 줄)를 출력합니다. `INSTALL_HINT`는 `formatSnippets()` **밖에** 있습니다 — 그 함수의 반환 문자열은 `tests/integration/doctor.test.ts`와 `doctor --json`이 고정하고 있기 때문입니다.
 
 ## Invariants & gotchas for AI agents
 
@@ -66,7 +66,7 @@ npm run test:integration
 
 ### Internal
 
-`../config/paths.js`, `../config/schema.js`, `../config/store.js`, `../doctor/checks.js`, `../errors.js`, `../log.js`, `../ssh/fingerprint.js`
+`../config/paths.js`, `../config/registration.js`, `../config/schema.js`, `../config/store.js`, `../doctor/checks.js`, `../errors.js`, `../log.js`, `../ssh/fingerprint.js`
 
 ### External
 

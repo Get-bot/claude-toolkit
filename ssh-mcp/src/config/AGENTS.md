@@ -9,12 +9,13 @@ ssh-mcp의 디스크 상태를 담당합니다 — 상태 디렉터리의 경로
 
 ## Key Files
 
-| File        | Description                                                                                                                                                                                                                                                    |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `paths.ts`  | `homePath()`, `hostsFilePath()`, `stateFilePath()`, `auditFilePath()`, `keysDirPath()`, `privateKeyPath()`, `ensureHome()`, `ensureKeysDir()`, `applyStateFileMode()`. 모드 상수 `HOME_DIR_MODE=0o700`, `STATE_FILE_MODE=0o600`, `PUBLIC_KEY_FILE_MODE=0o644`. |
-| `schema.ts` | `HostsFileSchema` / `HostEntrySchema` / `HostKeySchema` / `PatternOverridesSchema`와 모든 기본값·한계 상수. 공용 어휘 `APPROVAL_MODES`, `APPROVAL_FALLBACKS`, `AUDIT_MODES`, `COMMAND_GRADES`도 여기서 나옵니다.                                               |
-| `store.ts`  | `load()` → `ConfigLoadResult`(`ConfigValid \| ConfigInvalid`), `save()`, `getHost()`, `resolveApprovalFallback()`.                                                                                                                                             |
-| `state.ts`  | `loadState()`, `saveState()`, `recordClient()`, `recordObservedShell()`, `emptyState()`. `STATE_SCHEMA_VERSION = 1`.                                                                                                                                           |
+| File              | Description                                                                                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `paths.ts`        | `homePath()`, `hostsFilePath()`, `stateFilePath()`, `auditFilePath()`, `keysDirPath()`, `privateKeyPath()`, `ensureHome()`, `ensureKeysDir()`, `applyStateFileMode()`. 모드 상수 `HOME_DIR_MODE=0o700`, `STATE_FILE_MODE=0o600`, `PUBLIC_KEY_FILE_MODE=0o644`.                             |
+| `schema.ts`       | `HostsFileSchema` / `HostEntrySchema` / `HostKeySchema` / `PatternOverridesSchema`와 모든 기본값·한계 상수. 공용 어휘 `APPROVAL_MODES`, `APPROVAL_FALLBACKS`, `AUDIT_MODES`, `COMMAND_GRADES`도 여기서 나옵니다.                                                                           |
+| `store.ts`        | `load()` → `ConfigLoadResult`(`ConfigValid \| ConfigInvalid`), `save()`, `getHost()`, `resolveApprovalFallback()`.                                                                                                                                                                         |
+| `state.ts`        | `loadState()`, `saveState()`, `recordClient()`, `recordObservedShell()`, `emptyState()`. `STATE_SCHEMA_VERSION = 1`.                                                                                                                                                                       |
+| `registration.ts` | MCP 호스트에 등록되는 **서버 명령 형태**. `PACKAGE_NAME`, `buildServerCommand()`, `formatServerCommand()`, `buildDesktopEntry()`, 그리고 `setup`·`doctor` 표가 스니펫 뒤에 덧붙이는 `INSTALL_HINT`. 디스크 상태가 아니라 설정의 모양을 다루며 `src/` 안에서 아무것도 import 하지 않습니다. |
 
 ## Config model
 
@@ -60,6 +61,7 @@ ssh-mcp의 디스크 상태를 담당합니다 — 상태 디렉터리의 경로
 - **`schemaVersion`은 `z.literal(1)`이고 마이그레이션이 없습니다.** `load()`는 raw JSON에서 `schemaVersion`을 먼저 꺼내 `CONFIG_SCHEMA_VERSION`(1)보다 크면 `unsupported_schema_version`으로 즉시 거부합니다 — 파일을 손보는 대신 ssh-mcp를 올리라는 뜻입니다.
 - **`state.json`은 캐시이므로 손상 시 기본값으로 대체합니다.** `config_invalid`로 격상시키지 마세요 — 관측값이 없다고 도구가 막혀선 안 됩니다.
 - 쓰기는 임시 파일(`hostsTmpFilePath()` / `stateTmpFilePath()`) 경유 후 rename하고 `applyStateFileMode()`로 `0600`을 적용합니다. 새 상태 파일을 추가할 때 같은 절차를 따르세요.
+- **`registration.ts`는 `doctor`와 `install`의 공동 출처입니다.** `doctor`가 인쇄하는 스니펫과 `install`이 실제로 쓰는 등록이 어긋나지 못하게 하려고 한 곳에 모았습니다. Windows에서 `cmd /c`로 감싸는 이유(`npx`가 `npx.cmd` 배치 파일이라 `shell:false` 스폰이 `ENOENT`로 실패함)는 그 파일의 헤더 주석에 있고, 두 클라이언트 모두 감싸는 결정도 거기에 기록돼 있습니다. 이 모듈은 **`src/` 안에서 아무것도 import 하지 않아야** 어느 레이어에서든 쓸 수 있습니다.
 
 ## Testing
 
@@ -81,6 +83,7 @@ npm run test:unit
 - `paths.ts` → `../setup/winacl.js`
 - `state.ts`, `store.ts` → `../internal/util.js`, `../log.js`, `./paths.js` (+ `store.ts`는 `./schema.js`)
 - `schema.ts` → 없음
+- `registration.ts` → 없음 (`../doctor/checks.ts`와 `../install/`이 이것을 씁니다)
 
 ### External
 

@@ -5,13 +5,13 @@
 
 ## Purpose
 
-ssh-mcp 서버 구현 전체가 있는 디렉터리입니다. 최상위 파일들은 진입점(`index.ts`)과 서버 부트스트랩(`server.ts`), 그리고 모든 레이어가 공유하는 횡단 관심사 — 로깅·비밀정보 마스킹(`log.ts`), 감사 로그(`audit.ts`), 오류 코드 분류체계(`errors.ts`), 버전 조회(`version.ts`) — 를 담당합니다. 실제 기능은 하위 디렉터리로 나뉩니다: 설정 저장소(`config/`), 명령 분류와 승인(`safety/`), SSH/SFTP 전송(`ssh/`), MCP 도구 표면(`tools/`), 호스트 등록 CLI(`setup/`), 진단 CLI(`doctor/`).
+ssh-mcp 서버 구현 전체가 있는 디렉터리입니다. 최상위 파일들은 진입점(`index.ts`)과 서버 부트스트랩(`server.ts`), 그리고 모든 레이어가 공유하는 횡단 관심사 — 로깅·비밀정보 마스킹(`log.ts`), 감사 로그(`audit.ts`), 오류 코드 분류체계(`errors.ts`), 버전 조회(`version.ts`) — 를 담당합니다. 실제 기능은 하위 디렉터리로 나뉩니다: 설정 저장소(`config/`), 명령 분류와 승인(`safety/`), SSH/SFTP 전송(`ssh/`), MCP 도구 표면(`tools/`), 호스트 등록 CLI(`setup/`), 진단 CLI(`doctor/`), 클라이언트 등록 CLI(`install/`).
 
 ## Key Files
 
 | File         | Description                                                                                                                                                                                                                  |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.ts`   | bin 진입점. Node 20 이상 가드 후 argv 라우팅(`setup` / `doctor` / `--version`·`-v`·`version` / 그 외는 서버). `run(argv)`, `MIN_NODE_MAJOR` export. 서브커맨드 모듈은 **동적 import**입니다.                                 |
+| `index.ts`   | bin 진입점. Node 20 이상 가드 후 argv 라우팅(`setup` / `doctor` / `install` / `--version`·`-v`·`version` / 그 외는 서버). `run(argv)`, `MIN_NODE_MAJOR` export. 서브커맨드 모듈은 **동적 import**입니다.                     |
 | `server.ts`  | `createServer()`가 정확히 7개 도구를 등록하고 `assertSevenTools()`로 기동 시 검증합니다. `startServer()`는 stdio 전송을 연결하고, `supportsFormElicitation()`이 클라이언트의 elicitation 지원 여부(Branch A/B)를 판정합니다. |
 | `audit.ts`   | `~/.ssh-mcp/audit.jsonl`에 도구 호출당 정확히 한 줄. `TOOL_NAMES`(7개 도구의 정식 목록), `APPROVAL_OUTCOMES`(8가지), `AUDIT_SCHEMA_VERSION`의 출처.                                                                          |
 | `log.ts`     | stderr 전용 구조화 로거 + 공유 redaction. `logger`, `redact`/`redactRecord`, `truncateUtf8`, `installStdoutGuard`/`captureProcessStdout`/`protocolStdoutStream`.                                                             |
@@ -20,15 +20,16 @@ ssh-mcp 서버 구현 전체가 있는 디렉터리입니다. 최상위 파일�
 
 ## Subdirectories
 
-| Directory   | Purpose                                                            |
-| ----------- | ------------------------------------------------------------------ |
-| `config/`   | `hosts.json`·`state.json` 스키마와 영속화 (see `config/AGENTS.md`) |
-| `doctor/`   | `ssh-mcp doctor` 진단 CLI (see `doctor/AGENTS.md`)                 |
-| `internal/` | 의존성 0인 최하단 유틸리티 (see `internal/AGENTS.md`)              |
-| `safety/`   | 명령 정규화·분류·승인 게이트·토큰 (see `safety/AGENTS.md`)         |
-| `setup/`    | `ssh-mcp setup` 호스트 등록 CLI (see `setup/AGENTS.md`)            |
-| `ssh/`      | SSH/SFTP 전송, 연결 풀, 세션 (see `ssh/AGENTS.md`)                 |
-| `tools/`    | MCP 도구 7종과 공용 래퍼 (see `tools/AGENTS.md`)                   |
+| Directory   | Purpose                                                                                   |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| `config/`   | `hosts.json`·`state.json` 스키마와 영속화, 호스트 등록 명령 형태 (see `config/AGENTS.md`) |
+| `doctor/`   | `ssh-mcp doctor` 진단 CLI (see `doctor/AGENTS.md`)                                        |
+| `install/`  | `ssh-mcp install` 클라이언트 등록 CLI (see `install/AGENTS.md`)                           |
+| `internal/` | 의존성 0인 최하단 유틸리티 (see `internal/AGENTS.md`)                                     |
+| `safety/`   | 명령 정규화·분류·승인 게이트·토큰 (see `safety/AGENTS.md`)                                |
+| `setup/`    | `ssh-mcp setup` 호스트 등록 CLI (see `setup/AGENTS.md`)                                   |
+| `ssh/`      | SSH/SFTP 전송, 연결 풀, 세션 (see `ssh/AGENTS.md`)                                        |
+| `tools/`    | MCP 도구 7종과 공용 래퍼 (see `tools/AGENTS.md`)                                          |
 
 ## Architecture
 

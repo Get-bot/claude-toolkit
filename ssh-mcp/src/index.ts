@@ -4,6 +4,7 @@
  * Node version guard, then argv routing:
  *   `setup ...`   -> setup CLI      (exit code from `runSetup`)
  *   `doctor ...`  -> doctor CLI     (exit code from `runDoctor`)
+ *   `install ...` -> install CLI    (exit code from `runInstall`)
  *   `--version`   -> version to stdout
  *   anything else -> stdio MCP server
  *
@@ -45,6 +46,11 @@ export async function run(argv: string[]): Promise<number> {
   if (command === 'doctor') {
     const { runDoctor } = await import('./doctor/cli.js');
     return runDoctor(argv.slice(1));
+  }
+
+  if (command === 'install') {
+    const { runInstall } = await import('./install/cli.js');
+    return runInstall(argv.slice(1));
   }
 
   if (command === '--version' || command === '-v' || command === 'version') {

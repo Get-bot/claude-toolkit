@@ -19,6 +19,7 @@ import ssh2, { Client } from 'ssh2';
 import type { AuthenticationType, ClientChannel, ConnectConfig } from 'ssh2';
 
 import { ensureKeysDir, homePath, keysDirPath, privateKeyPath } from '../config/paths.js';
+import { INSTALL_HINT } from '../config/registration.js';
 import {
   APPROVAL_FALLBACKS,
   APPROVAL_MODES,
@@ -686,6 +687,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     }
     err('');
     err(formatSnippets());
+    err(INSTALL_HINT);
     return EXIT_OK;
   } catch (error) {
     // A CodedError carries a diagnosis worth showing verbatim (key generation

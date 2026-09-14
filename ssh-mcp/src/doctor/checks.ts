@@ -30,6 +30,12 @@ import {
   homePath,
   keysDirPath,
 } from '../config/paths.js';
+import {
+  PACKAGE_NAME,
+  buildDesktopEntry,
+  buildServerCommand,
+  formatServerCommand,
+} from '../config/registration.js';
 import { DEFAULT_APPROVAL_FALLBACK } from '../config/schema.js';
 import type { HostEntry } from '../config/schema.js';
 import { loadState } from '../config/state.js';
@@ -105,7 +111,10 @@ export const HOST_PROBE_TIMEOUT_MS = 5000;
 // Registration snippets (§5.11 item 15, row 5b.5, AC21.7)
 // --------------------------------------------------------------------------
 
-export const PACKAGE_NAME = '@get-bot/ssh-mcp';
+export { PACKAGE_NAME };
+
+/** Server name used by the printed snippets, matching `install`'s default. */
+const SNIPPET_SERVER_NAME = 'ssh-mcp';
 
 export interface Snippets {
   /** `claude_desktop_config.json` fragment. */
@@ -116,24 +125,30 @@ export interface Snippets {
   windows: string;
 }
 
+/**
+ * Both platform variants are rendered unconditionally, so the table can show
+ * the POSIX form and the Windows form side by side regardless of where
+ * `doctor` runs. The command shapes come from `config/registration.ts`, which
+ * `install` also uses — the snippet a user copies and the registration
+ * `install` writes must not be able to disagree.
+ */
 export function buildSnippets(packageName: string = PACKAGE_NAME): Snippets {
-  const desktop = {
-    mcpServers: {
-      'ssh-mcp': { command: 'npx', args: ['-y', packageName] },
-    },
-  };
-  const windowsDesktop = {
-    mcpServers: {
-      'ssh-mcp': { command: 'cmd', args: ['/c', 'npx', '-y', packageName] },
-    },
-  };
+  const render = (platform: NodeJS.Platform): { desktop: string; cli: string } => ({
+    desktop: JSON.stringify(
+      { mcpServers: { [SNIPPET_SERVER_NAME]: buildDesktopEntry({ platform, packageName }) } },
+      null,
+      2
+    ),
+    cli:
+      `claude mcp add ${SNIPPET_SERVER_NAME} -- ` +
+      formatServerCommand(buildServerCommand({ platform, packageName })),
+  });
+  const posix = render('linux');
+  const windows = render('win32');
   return {
-    claudeDesktop: JSON.stringify(desktop, null, 2),
-    claudeCode: `claude mcp add ssh-mcp -- npx -y ${packageName}`,
-    windows: [
-      JSON.stringify(windowsDesktop, null, 2),
-      `claude mcp add ssh-mcp -- cmd /c npx -y ${packageName}`,
-    ].join('\n'),
+    claudeDesktop: posix.desktop,
+    claudeCode: posix.cli,
+    windows: [windows.desktop, windows.cli].join('\n'),
   };
 }
 

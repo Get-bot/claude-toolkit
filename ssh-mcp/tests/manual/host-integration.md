@@ -34,6 +34,22 @@
 - [ ] 도구 목록에 **정확히 7개**(`list_hosts`, `exec`, `upload`, `download`, `open_session`, `run_in_session`, `close_session`)가 보인다.
 - [ ] (참고용) `command: "npx"` 형태(감싸지 않은 버전)도 한 번 시도해 실제로 실패/성공 여부를 기록한다. README의 `cmd /c` 권고가 실제로 필요한지 재확인하는 목적이다.
 
+### AC4 추가 항목(계획 외) — `install claude-desktop` 자동 경로
+
+> `install`은 계획서 §8.5에 없는 2026-09-14 추가분이라 AC 번호가 없습니다. AC4의 하위 항목으로 함께 확인하세요.
+
+손으로 편집하는 대신 아래 명령으로 등록한다. **패키지 디렉터리 밖**에서 실행한다(`ssh-mcp/` 안에서는 npx가 같은 이름의 로컬 프로젝트를 집는다).
+
+```bash
+npx @get-bot/ssh-mcp install claude-desktop
+```
+
+- [ ] `%APPDATA%\Claude\claude_desktop_config.json`에 `"command": "cmd"`, `"args": ["/c", "npx", "-y", "@get-bot/ssh-mcp"]` 항목이 생긴다.
+- [ ] 기존에 다른 MCP 서버가 등록돼 있었다면 그 항목과 `mcpServers` 밖의 다른 키가 모두 그대로 남아 있다.
+- [ ] 기존 파일이 있었다면 같은 디렉터리에 `claude_desktop_config.json.bak-<YYYYMMDD-HHmmss>` 백업이 생긴다.
+- [ ] 같은 명령을 한 번 더 실행하면 종료 코드 1로 거부하고 파일이 바뀌지 않는다. `--force`를 주면 교체되고 백업이 하나 더 생긴다. 같은 초 안에 `--force`를 두 번 실행해도 첫 백업이 남고 `-1` 접미사가 붙은 백업이 추가된다.
+- [ ] Claude Desktop을 완전히 재시작하면 도구 목록에 **정확히 7개**가 보인다.
+
 ## AC5 — Claude Code 등록
 
 ```bash
@@ -41,6 +57,30 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 ```
 
 - [ ] `/mcp` 명령에서 같은 7개 도구가 보인다.
+- [ ] 감싸지 않은 `claude mcp add ssh-mcp -- npx -y @get-bot/ssh-mcp` 형태도 연결된다(2.1.270 / Windows 11에서 2026-09-14 실측). 사용한 Claude Code 버전과 결과를 기록한다.
+
+### AC5 추가 항목(계획 외) — `install claude-code` 자동 경로
+
+> `install`은 계획서 §8.5에 없는 2026-09-14 추가분이라 AC 번호가 없습니다. AC5의 하위 항목으로 함께 확인하세요.
+
+**패키지 디렉터리 밖**에서 실행한다.
+
+```bash
+npx @get-bot/ssh-mcp install claude-code --dry-run
+npx @get-bot/ssh-mcp install claude-code
+```
+
+- [ ] `--dry-run`이 아래 두 줄만 출력하고 아무것도 바꾸지 않는다(Windows 기준).
+
+  ```
+  [dry-run] 아무것도 바꾸지 않았습니다. 실행할 명령:
+    claude mcp add ssh-mcp -s local -- cmd /c npx -y @get-bot/ssh-mcp
+  ```
+
+- [ ] `--dry-run` 없이 실행하면 `claude mcp list`에 `ssh-mcp`가 나타나고 `/mcp`에서 7개 도구가 보인다.
+- [ ] 같은 명령을 한 번 더 실행하면 `claude`가 중복 등록을 거부하고 종료 코드 1로 끝난다. `--force`를 주면 remove 후 add가 진행되어 성공한다.
+- [ ] `install claude-desktop --config <임시경로> --home --dry-run`이 종료 코드 2로 끝나고 **파일을 만들지 않는다**(값 자리에 플래그가 오는 경우).
+- [ ] `install claude-code --home "C:\R&D\ssh-mcp"`를 `claude`가 PATH에 없는 셸에서 실행하면 `cmd` 재시도 없이 수동 명령을 출력하고 종료 코드 1로 끝난다.
 
 ## AC6 — Windows 11 검증
 
@@ -114,6 +154,8 @@ claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 | ------------- | --------------- | ------------------------- | ------ | ---- |
 | AC3           |                 |                           |        |      |
 | AC4           |                 |                           |        |      |
+| AC4 추가 항목 |                 |                           |        |      |
 | AC5           |                 |                           |        |      |
+| AC5 추가 항목 |                 |                           |        |      |
 | AC6           |                 |                           |        |      |
 | 실호스트 확인 |                 |                           |        |      |
