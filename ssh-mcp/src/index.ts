@@ -7,6 +7,7 @@
  *   `doctor ...`  -> doctor CLI     (exit code from `runDoctor`)
  *   `install ...` -> install CLI    (exit code from `runInstall`)
  *   `--version`   -> version to stdout
+ *   `help ...`    -> command overview, or one command's own usage
  *   anything else -> stdio MCP server
  *
  * Sub-command modules are imported dynamically so that starting the server
@@ -74,6 +75,15 @@ export async function run(argv: string[]): Promise<number> {
   if (command === '--version' || command === '-v' || command === 'version') {
     process.stdout.write(`${readPackageVersion()}\n`);
     return 0;
+  }
+
+  // Before the fall-through below, because every one of these used to reach it:
+  // asking `ssh-mcp --help` started a server and waited on stdin forever.
+  // `help <command>` re-enters this router rather than restating a sub-command's
+  // flags, so the usage strings stay in one place each.
+  if (command === 'help' || command === '--help' || command === '-h') {
+    const { runHelp } = await import('./help.js');
+    return runHelp(argv.slice(1), { delegate: (topic) => run([topic, '--help']) });
   }
 
   // Server mode: stdout carries JSON-RPC frames only, so redirect every

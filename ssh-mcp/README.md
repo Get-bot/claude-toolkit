@@ -9,6 +9,7 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 ## 목차
 
 - [설치](#설치)
+- [help — 명령어 목록](#help--명령어-목록)
 - [host add — 호스트 등록](#host-add--호스트-등록)
 - [host list — 등록된 호스트 보기](#host-list--등록된-호스트-보기)
 - [install — 클라이언트 등록](#install--클라이언트-등록)
@@ -76,6 +77,30 @@ npm test
 ```
 
 커밋 시 husky + lint-staged로 구성된 pre-commit 훅이 staged 파일을 자동으로 포맷합니다. `ssh-mcp/`가 저장소 루트가 아니라 하위 디렉터리이므로 `prepare` 스크립트는 husky의 서브디렉터리 설치 형태(`cd .. && husky ssh-mcp/.husky`)를 씁니다 — 훅 자체는 저장소 루트의 `.git`에 등록되지만 훅 스크립트는 `ssh-mcp/.husky`에 둡니다. CI나 그 밖의 비대화형 자동화 환경에서는 `npm ci`/`npm install`이 이 훅 설치를 시도하지 않도록 `HUSKY=0` 환경변수를 설정하세요 — `.github/workflows/ssh-mcp-ci.yml`의 모든 잡에 이미 적용되어 있습니다.
+
+## help — 명령어 목록
+
+`ssh-mcp help`, `ssh-mcp --help`, `ssh-mcp -h` 셋 다 명령어 목록을 stdout에 내고 종료 코드 0으로 끝납니다.
+
+```
+$ npx -y @get-bot/ssh-mcp --help
+Usage: ssh-mcp [<command>] [options]
+
+인자 없이 실행하면 stdio MCP 서버로 동작합니다. 이 형태는 보통 직접 치지 않고
+Claude Code 같은 클라이언트가 실행합니다.
+
+Commands:
+  install [claude-code|claude-desktop]   이 서버를 클라이언트에 등록합니다.
+  host add [<alias> <user@host[:port]>]  호스트를 등록합니다(키 생성·지문 고정).
+  host list [--json]                     등록된 호스트를 표로 출력합니다.
+  doctor [--json] [--patterns]           설정·키·연결 상태를 진단합니다.
+  help [<command>]                       이 도움말, 또는 해당 명령의 사용법.
+...
+```
+
+`help <command>`는 해당 명령의 사용법으로 넘깁니다 — `ssh-mcp help doctor`와 `ssh-mcp doctor --help`는 같은 출력입니다. 각 명령의 플래그는 그 명령의 usage 한 곳에만 적혀 있고 이 목록이 복사해 두지 않습니다. 없는 명령을 물으면 stderr에 한 줄과 목록을 내고 종료 코드 2입니다.
+
+**인자 없이 실행하면 서버가 뜹니다.** `ssh-mcp`만 치면 도움말이 아니라 stdio MCP 서버가 시작되어 stdin을 기다립니다 — 클라이언트가 이 형태로 실행하기 때문입니다. 터미널에서 뭘 할 수 있는지 보려면 `--help`를 붙이세요.
 
 ## host add — 호스트 등록
 

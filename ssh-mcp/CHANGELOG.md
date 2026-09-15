@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- `ssh-mcp help` — 명령어 목록. `--help`, `-h`도 같습니다. 사용할 수 있는 명령(`install`, `host add`, `host list`, `doctor`, `help`)과 인자 없이 실행하면 MCP 서버가 뜬다는 사실, 그리고 빠른 시작 세 줄을 stdout에 내고 종료 코드 0으로 끝납니다.
+- `ssh-mcp help <command>` — 해당 명령의 사용법으로 넘깁니다. `ssh-mcp help doctor`는 `ssh-mcp doctor --help`와 같은 출력입니다. 명령별 플래그는 각자의 usage 한 곳에만 있고 목록이 복사해 두지 않습니다. 없는 명령은 stderr 한 줄 + 목록 + 종료 코드 2.
+
+### Fixed
+
+- **`ssh-mcp --help`가 도움말 대신 서버를 띄우던 문제.** `help`·`--help`·`-h` 셋 다 라우터를 그냥 통과해 서버 모드로 떨어졌습니다. 터미널에서 치면 아무것도 출력하지 않고 stdin을 기다리며 멈춰 있었습니다 — 프로그램에 무엇을 할 수 있냐고 물었을 때 침묵과 멈춘 터미널이 돌아온 셈입니다. 하위 명령들은 이미 각자 `--help`를 갖고 있었고 최상위에만 없었습니다.
+
 ## [0.2.1] - 2026-09-15
 
 ### Fixed

@@ -12,6 +12,7 @@
 // The stdio plumbing (spawn, line-delimited JSON-RPC framing, child-fate reporting) lives in
 // tests/fixtures/stdioServer.ts, shared with realHost.test.ts.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,5 +125,59 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
   // banner, a deprecation warning or a stray console.log on the wrong stream all land here.
   it('put nothing but JSON-RPC frames on stdout (AC2.3)', () => {
     expect(server.nonJsonStdoutLines).toEqual([]);
+  });
+});
+
+// The routing in index.ts has no unit test — importing that module runs the CLI — so the only
+// place "the help token actually reaches the help code" can be checked is here, against the
+// real entrypoint. It is worth checking: all three tokens used to fall through into server mode,
+// where the process printed nothing and waited on stdin until it was killed. A regression would
+// look exactly like that again, which is why these assert termination as much as output.
+describe('package e2e — top-level help reaches the terminal, not the server', () => {
+  const launch = (): Launch => resolveEntrypoint();
+
+  it.each(['--help', '-h', 'help'])('`%s` prints the command list and exits 0', (token) => {
+    const { cmd, args } = launch();
+    const result = spawnSync(cmd, [...args, token], {
+      encoding: 'utf8',
+      // Closed stdin, so a server-mode regression ends instead of hanging the suite. The timeout
+      // is the backstop for a build that ignores EOF.
+      input: '',
+      timeout: 30_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: ssh-mcp');
+    for (const command of ['install', 'host add', 'host list', 'doctor']) {
+      expect(result.stdout).toContain(command);
+    }
+    // Server mode announces itself on stderr; help mode has nothing to say there.
+    expect(result.stderr).not.toContain('server ready');
+  });
+
+  it('`help doctor` forwards to that command rather than the overview', () => {
+    const { cmd, args } = launch();
+    const result = spawnSync(cmd, [...args, 'help', 'doctor'], {
+      encoding: 'utf8',
+      input: '',
+      timeout: 30_000,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: ssh-mcp doctor');
+  });
+
+  it('refuses a command it does not have, on stderr', () => {
+    const { cmd, args } = launch();
+    const result = spawnSync(cmd, [...args, 'help', 'bogus'], {
+      encoding: 'utf8',
+      input: '',
+      timeout: 30_000,
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('bogus');
   });
 });
