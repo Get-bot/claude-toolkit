@@ -60,7 +60,7 @@ export const ELICITATION_TIMEOUT_MS = TOKEN_TTL_MS;
 export const ELICIT_CONFIRM_FIELD = 'confirm';
 
 /**
- * The checkbox label and the last paragraph of the elicitation message.
+ * The checkbox label, which is also where the dialog explains itself.
  *
  * Claude Code (2.1.270, observed 2026-09-14) renders a required boolean as an
  * unchecked checkbox and refuses to submit the form while it is unchecked
@@ -69,11 +69,28 @@ export const ELICIT_CONFIRM_FIELD = 'confirm';
  * broken" to someone who has not been told about the box. The `confirm: true`
  * requirement itself stays (AC17.1b); the fix is to say, inside the dialog,
  * what the dialog expects.
+ *
+ * It is said here rather than in the message because 2.1.271 cuts this label at
+ * roughly 46 display columns and shows only the first three lines of the
+ * message: the previous wording lost its own "Accept)" to the cut, while the
+ * paragraph that explained the box sat on line nine and was folded away unread.
+ * This one leads with the key it wants pressed, stays under 26 columns so it
+ * survives the cut and a narrower pane, and sits beside the box it describes.
  */
-export const ELICIT_CONFIRM_TITLE = '이 명령을 실행합니다 (스페이스로 체크한 뒤 Accept)';
-export const ELICIT_HOW_TO_APPROVE =
-  '승인하려면 아래 체크박스로 이동해 스페이스로 체크(☑)한 뒤 Accept를 누르세요. ' +
-  '체크하지 않으면 제출되지 않습니다. 실행하지 않으려면 Decline을 누르세요.';
+export const ELICIT_CONFIRM_TITLE = '스페이스로 체크 후 Accept';
+
+/**
+ * The second line the checkbox is allowed, per `BooleanSchema.description`.
+ *
+ * The label has to stay short enough to survive the cut, which leaves no room
+ * for the part that actually trips people up: an unchecked Accept looks like a
+ * dead key rather than a rejected form. The spec has a field for exactly this,
+ * so the sentence goes there instead of being dropped. Whether a given client
+ * paints it is the client's business — the MCP schema is deliberately about
+ * content, not layout — but an unrendered sentence costs nothing, and a
+ * rendered one is the explanation the truncated label cannot carry.
+ */
+export const ELICIT_CONFIRM_DESCRIPTION = '체크하지 않은 채 Accept를 눌러도 제출되지 않습니다.';
 
 /**
  * M1/M2 shared text. §5.6b puts the same sentence in the `exec` and
@@ -91,10 +108,22 @@ export const TOOL_DESCRIPTION_APPROVAL_RULE =
 
 /** Shape of the MCP `elicitation/create` request we ask the caller to send. */
 export interface ElicitRequest {
+  /**
+   * Stated rather than left to the default, though the field is optional in the
+   * schema (`mode: z.literal('form').optional()`).
+   *
+   * Form mode is the only mode this gate can use: the other one hands the
+   * person a URL to answer at, and an approval that happens out of band cannot
+   * be the thing a tool call waits on here. Saying so is also the line that
+   * keeps us honest about the spec's rule that secrets — a sudo password, an
+   * API key — must never be collected in a form. Nothing here asks for one, and
+   * the field is the reminder of why nothing here ever should.
+   */
+  mode: 'form';
   message: string;
   requestedSchema: {
     type: 'object';
-    properties: Record<string, { type: 'boolean'; title: string }>;
+    properties: Record<string, { type: 'boolean'; title: string; description?: string }>;
     required: string[];
   };
 }
@@ -314,27 +343,78 @@ function contextDetails(ctx: ApprovalContext): Record<string, unknown> {
   };
 }
 
+/**
+ * Columns one message line gets before the pane wraps it.
+ *
+ * Measured on the client that folds the message (2.1.271 in a narrow pane): its
+ * label cut landed at about 46 columns and a 44 column message line rendered
+ * whole. Whether a wrapped line counts once or twice toward the three-line fold
+ * is not something we can see from here, so the budget sits at the measured
+ * floor instead of guessing upward.
+ */
+const ELICIT_LINE_BUDGET = 46;
+
+/**
+ * The `사유` clause, trimmed to what fits beside the grade.
+ *
+ * Reasons arrive as `<grade>:<id>` and the grade is already three words to the
+ * left on the same line, so the prefix goes: it spends twelve columns repeating
+ * what was just said. The rest is arithmetic — ids are ASCII at one column
+ * each, and the fixed Korean labels are two columns per glyph, so `등급: ` is
+ * six and ` · 사유: ` is nine. Whatever still does not fit is counted rather
+ * than listed; the unabridged set is on the audit line either way.
+ */
+function reasonsClause(grade: CommandGrade, reasons: readonly string[]): string {
+  if (reasons.length === 0) return '(없음)';
+  const ids = reasons.map((reason) =>
+    reason.startsWith(`${grade}:`) ? reason.slice(grade.length + 1) : reason
+  );
+  const budget = ELICIT_LINE_BUDGET - (15 + grade.length);
+  const widthOf = (count: number): number => {
+    const listed = ids.slice(0, count).join(', ').length;
+    const dropped = ids.length - count;
+    return dropped === 0 ? listed : listed + 6 + String(dropped).length;
+  };
+
+  // At least one id is always shown: a single long id spilling a few columns is
+  // worth more to the reader than a bare count.
+  let kept = ids.length;
+  while (kept > 1 && widthOf(kept) > budget) kept -= 1;
+
+  const dropped = ids.length - kept;
+  const listed = ids.slice(0, kept).join(', ');
+  return dropped === 0 ? listed : `${listed} 외 ${String(dropped)}개`;
+}
+
 /** §5.5: grade, matched pattern ids, host alias and the command text. */
 function buildElicitRequestFor(ctx: ApprovalContext): ElicitRequest {
-  const reasons =
-    ctx.classification.reasons.length > 0 ? ctx.classification.reasons.join(', ') : '(없음)';
+  const reasons = reasonsClause(ctx.classification.grade, ctx.classification.reasons);
+  const session = ctx.sessionId === null ? '' : ` (session ${ctx.sessionId})`;
+  // Three lines, because three lines is the whole visible budget: Claude Code
+  // 2.1.271 shows the first three and folds the rest behind a "… (+N more
+  // lines)" notice that does not open. The nine-line version put the command on
+  // line seven, so the one thing being approved was never on screen — the
+  // dialog asked "run this?" while hiding the "this", and the person could only
+  // see which host and which tool. What runs comes first now, then where, then
+  // why it had to ask at all.
   const message = [
-    'SSH 명령 실행 승인이 필요합니다.',
-    `호스트: ${ctx.host.alias} (${ctx.host.user}@${ctx.host.hostname}:${String(ctx.host.port)})`,
-    `도구: ${ctx.toolName}${ctx.sessionId === null ? '' : ` (session ${ctx.sessionId})`}`,
-    `등급: ${ctx.classification.grade}`,
-    `매칭된 패턴: ${reasons}`,
-    '명령 전문:',
     ctx.promptText,
-    '',
-    ELICIT_HOW_TO_APPROVE,
+    `${ctx.host.alias} (${ctx.host.user}@${ctx.host.hostname}:${String(ctx.host.port)}) · ${ctx.toolName}${session}`,
+    `등급: ${ctx.classification.grade} · 사유: ${reasons}`,
   ].join('\n');
 
   return {
+    mode: 'form',
     message,
     requestedSchema: {
       type: 'object',
-      properties: { [ELICIT_CONFIRM_FIELD]: { type: 'boolean', title: ELICIT_CONFIRM_TITLE } },
+      properties: {
+        [ELICIT_CONFIRM_FIELD]: {
+          type: 'boolean',
+          title: ELICIT_CONFIRM_TITLE,
+          description: ELICIT_CONFIRM_DESCRIPTION,
+        },
+      },
       required: [ELICIT_CONFIRM_FIELD],
     },
   };

@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-15
+
+### Fixed
+
+- **승인 창이 정작 승인 대상인 명령을 보여주지 않던 문제.** Claude Code는 elicitation 메시지의 첫 세 줄만 그리고 나머지를 `… (+N more lines)`로 접는데, 이 접힌 부분은 펼칠 수 없습니다. 메시지가 아홉 줄이었고 명령 전문이 일곱째 줄이라, 사람이 보는 것은 호스트와 도구뿐이었습니다. 즉 "이 명령을 실행할까요"라고 물으면서 "이 명령"을 가리고 있었습니다. 이제 메시지는 세 줄이며 첫 줄이 명령 전문, 둘째 줄이 호스트와 도구, 셋째 줄이 등급과 사유입니다. 분류 사유가 길면 셋째 줄이 접히지 않도록 `외 N개`로 세어 줄입니다(전체 목록은 감사 로그의 `reasons`에 그대로 남습니다).
+- 체크박스 제목이 잘려 정작 눌러야 할 `Accept`가 사라지던 문제. 0.2.0에서 넣은 안내 `이 명령을 실행합니다 (스페이스로 체크한 뒤 Accept)`는 50칸이라 46칸 근처에서 잘렸고, 같은 안내를 담은 메시지 마지막 줄은 위의 접힘에 가려 아무도 읽을 수 없었습니다. 제목을 `스페이스로 체크 후 Accept`(25칸)로 줄여 눌러야 할 키를 앞에 두었고, 자세한 설명은 스펙이 그 용도로 둔 `description` 필드로 옮겼습니다. **0.2.0의 같은 항목을 대체합니다.**
+
+### Changed
+
+- elicitation 요청에 `mode: "form"`을 명시합니다. 선택 필드이고 form이 기본값이라 동작은 같지만, 이 게이트가 쓸 수 있는 모드는 form뿐이라는 것(URL 모드는 사람이 브라우저에서 답하므로 도구 호출이 기다릴 수 없습니다)과 폼으로 비밀번호 같은 비밀을 받지 않는다는 규칙을 코드에 남겨 둡니다.
+- 승인 창의 체크박스에 `description`을 붙였습니다. 제목이 짧아야 잘리지 않으므로, 체크 없이 Accept를 누르면 제출되지 않는다는 설명은 이쪽으로 옮겼습니다. 클라이언트가 이 필드를 그리지 않을 수도 있어 제목만으로도 뜻이 통하게 두었습니다.
+- `confirm: true` 요구, 승인 판정, 토큰 발급, 감사 기록은 전부 그대로입니다. 바뀐 것은 사람이 보는 화면뿐입니다.
+
 ## [0.2.0] - 2026-09-14
 
 ### Added
@@ -54,6 +67,7 @@
 - append-only JSONL 감사 로그(호출당 1줄, 10 MiB × 4 회전, 출력 본문 미기록).
 - 원격 셸 지원: `bash`, `zsh`, `sh`/`dash`, busybox `ash`. `fish`·`cmd`·PowerShell은 `open_session` 미지원(`exec`는 동작).
 
-[Unreleased]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.0...HEAD
+[Unreleased]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.1...HEAD
+[0.2.1]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.0...ssh-mcp-v0.2.1
 [0.2.0]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.1.0...ssh-mcp-v0.2.0
 [0.1.0]: https://github.com/Get-bot/claude-toolkit/releases/tag/ssh-mcp-v0.1.0

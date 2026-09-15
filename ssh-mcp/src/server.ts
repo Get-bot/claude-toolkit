@@ -159,7 +159,7 @@ export function createServer(options: CreateServerOptions = {}): ServerHandle {
   const elicit = async (request: ElicitRequest): Promise<ElicitOutcome> => {
     const budget = options.approvalTimeoutMs ?? ELICITATION_TIMEOUT_MS;
     const result = await mcp.server.elicitInput(
-      { message: request.message, requestedSchema: request.requestedSchema },
+      { mode: request.mode, message: request.message, requestedSchema: request.requestedSchema },
       // The gate owns the deadline: it turns "no answer" into a refusal. The
       // transport timeout is only a backstop against a request outliving the
       // process, so it must not fire first — the SDK's default is far below the
