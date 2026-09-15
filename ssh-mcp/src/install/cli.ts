@@ -267,6 +267,13 @@ export interface InstallDeps {
   /** Injected so tests can capture output; defaults to stderr. */
   write?: (text: string) => void;
   /**
+   * Where `--help` goes; defaults to stdout. Help that was asked for is not an
+   * error, so it must not share the stream everything else here uses — on
+   * stderr, `install --help | less` showed nothing. `host`, `host list` and
+   * `doctor` already make this split.
+   */
+  out?: (text: string) => void;
+  /**
    * Used only to ask for the Claude Code scope. Injected so tests can drive
    * both the TTY and the non-TTY branch without a terminal; the
    * `claude-desktop` path never touches it, because Desktop has no scopes.
@@ -355,13 +362,14 @@ export function shortenHome(target: string, home: string): string {
  */
 export async function runInstall(argv: readonly string[], deps: InstallDeps = {}): Promise<number> {
   const write = deps.write ?? ((text: string): void => void process.stderr.write(`${text}\n`));
+  const out = deps.out ?? ((text: string): void => void process.stdout.write(`${text}\n`));
   const platform = deps.platform ?? process.platform;
   const packageName = deps.packageName ?? PACKAGE_NAME;
   const cwd = deps.cwd ?? ((): string => process.cwd());
 
   const parsed = parseInstallArgs(argv, cwd);
   if (parsed.ok && parsed.help) {
-    write(USAGE);
+    out(USAGE);
     return EXIT_OK;
   }
   if (!parsed.ok) {

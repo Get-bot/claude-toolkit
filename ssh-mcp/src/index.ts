@@ -11,8 +11,12 @@
  *   anything else -> stdio MCP server
  *
  * Sub-command modules are imported dynamically so that starting the server
- * never loads the CLI code, and vice versa.
+ * never loads the CLI code, and vice versa. `help.ts` is the one static import:
+ * it is string literals with no dependencies, and the router has to read
+ * `HELP_TOKENS` from it rather than keep a copy — a copy that drifted would
+ * send a help spelling into server mode, which is the bug `help` exists to fix.
  */
+import { HELP_TOKENS, runHelp } from './help.js';
 import { installStdoutGuard } from './log.js';
 import { readPackageVersion } from './version.js';
 
@@ -79,11 +83,13 @@ export async function run(argv: string[]): Promise<number> {
 
   // Before the fall-through below, because every one of these used to reach it:
   // asking `ssh-mcp --help` started a server and waited on stdin forever.
-  // `help <command>` re-enters this router rather than restating a sub-command's
-  // flags, so the usage strings stay in one place each.
-  if (command === 'help' || command === '--help' || command === '-h') {
-    const { runHelp } = await import('./help.js');
-    return runHelp(argv.slice(1), { delegate: (topic) => run([topic, '--help']) });
+  // `help <command> ...` re-enters this router as `<command> ... --help` rather
+  // than restating a sub-command's flags, so the usage strings stay in one
+  // place each and `help host add` lands on `host add`, not on the group.
+  if (command !== undefined && (HELP_TOKENS as readonly string[]).includes(command)) {
+    return runHelp(argv.slice(1), {
+      delegate: (topic, rest) => run([topic, ...rest, '--help']),
+    });
   }
 
   // Server mode: stdout carries JSON-RPC frames only, so redirect every

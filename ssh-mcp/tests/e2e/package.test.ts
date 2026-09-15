@@ -12,13 +12,14 @@
 // The stdio plumbing (spawn, line-delimited JSON-RPC framing, child-fate reporting) lives in
 // tests/fixtures/stdioServer.ts, shared with realHost.test.ts.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   MCP_PROTOCOL_VERSION,
+  RESPONSE_TIMEOUT_MS,
   launchStdioServer,
   npxLaunch,
   sendFrame,
@@ -134,17 +135,37 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
 // where the process printed nothing and waited on stdin until it was killed. A regression would
 // look exactly like that again, which is why these assert termination as much as output.
 describe('package e2e — top-level help reaches the terminal, not the server', () => {
-  const launch = (): Launch => resolveEntrypoint();
+  // The regression these tests exist to catch is the child dropping into server mode — which
+  // writes state.json on initialize. The describe above redirects the home for exactly that
+  // reason, but its cleanup has restored process.env by the time this block runs, so it gets a
+  // throwaway home of its own. Without it, the failure mode would be "test fails *and* the
+  // developer's real ~/.ssh-mcp was written to".
+  let helpHome: TmpHome;
 
-  it.each(['--help', '-h', 'help'])('`%s` prints the command list and exits 0', (token) => {
-    const { cmd, args } = launch();
-    const result = spawnSync(cmd, [...args, token], {
+  beforeAll(() => {
+    helpHome = createTmpHome('ssh-mcp-e2e-help-');
+  });
+
+  afterAll(() => {
+    assertNoWritesOutside(helpHome);
+    helpHome.cleanup();
+  });
+
+  function runHelpBinary(extra: string[]): SpawnSyncReturns<string> {
+    const { cmd, args } = resolveEntrypoint();
+    return spawnSync(cmd, [...args, ...extra], {
       encoding: 'utf8',
       // Closed stdin, so a server-mode regression ends instead of hanging the suite. The timeout
-      // is the backstop for a build that ignores EOF.
+      // is the backstop for a build that ignores EOF, and it is the fixture's measured npx budget
+      // rather than a smaller guess — under SSH_MCP_TGZ every one of these goes through npx.
       input: '',
-      timeout: 30_000,
+      timeout: RESPONSE_TIMEOUT_MS,
+      env: { ...process.env, SSH_MCP_HOME: helpHome.dir },
     });
+  }
+
+  it.each(['--help', '-h', 'help'])('`%s` prints the command list and exits 0', (token) => {
+    const result = runHelpBinary([token]);
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
@@ -156,25 +177,33 @@ describe('package e2e — top-level help reaches the terminal, not the server', 
     expect(result.stderr).not.toContain('server ready');
   });
 
-  it('`help doctor` forwards to that command rather than the overview', () => {
-    const { cmd, args } = launch();
-    const result = spawnSync(cmd, [...args, 'help', 'doctor'], {
-      encoding: 'utf8',
-      input: '',
-      timeout: 30_000,
-    });
+  // Every routable topic, on stdout. `install` and `setup` used to write their usage to stderr,
+  // so `ssh-mcp help install > out.txt` produced an empty file with exit 0 while `help doctor`
+  // did not — same verb, opposite behavior. Checking all four is what keeps that from returning.
+  it.each([
+    ['doctor', 'Usage: ssh-mcp doctor'],
+    ['install', 'Usage: ssh-mcp install'],
+    ['host', 'Usage: ssh-mcp host <add|list>'],
+    ['setup', 'Usage: ssh-mcp host add'],
+  ])('`help %s` forwards to that command, on stdout', (topic, heading) => {
+    const result = runHelpBinary(['help', topic]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Usage: ssh-mcp doctor');
+    expect(result.stdout).toContain(heading);
+    // Not `toBe('')`: under npx the wrapper may add its own stderr noise. What must not be
+    // there is the usage itself.
+    expect(result.stderr).not.toContain('Usage:');
+  });
+
+  it('`help host add` reaches `host add`, not the host group', () => {
+    const result = runHelpBinary(['help', 'host', 'add']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: ssh-mcp host add');
   });
 
   it('refuses a command it does not have, on stderr', () => {
-    const { cmd, args } = launch();
-    const result = spawnSync(cmd, [...args, 'help', 'bogus'], {
-      encoding: 'utf8',
-      input: '',
-      timeout: 30_000,
-    });
+    const result = runHelpBinary(['help', 'bogus']);
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe('');

@@ -129,21 +129,25 @@ describe('host group routing', () => {
 });
 
 describe('`setup` is an alias of `host add`', () => {
-  /** Both paths write help to the prompter, so capture it the same way. */
-  async function helpOf(run: (write: (text: string) => void) => Promise<number>): Promise<string> {
+  /**
+   * Both paths write help to stdout (`out`), so capture it the same way. The
+   * prompter is stubbed silent: it is the wizard's stderr, and `--help` must
+   * not touch it.
+   */
+  async function helpOf(run: (out: (text: string) => void) => Promise<number>): Promise<string> {
     const lines: string[] = [];
     const code = await run((text) => lines.push(text));
     expect(code).toBe(EXIT_OK);
     return lines.join('');
   }
 
+  const silentPrompter = { write: (): void => undefined, interactive: false } as never;
+
   it('produces byte-identical help for both spellings', async () => {
-    const viaHost = await helpOf((write) =>
-      runHost(['add', '--help'], { prompter: { write, interactive: false } as never })
+    const viaHost = await helpOf((out) =>
+      runHost(['add', '--help'], { out, prompter: silentPrompter })
     );
-    const viaSetup = await helpOf((write) =>
-      runSetup(['--help'], { prompter: { write, interactive: false } as never })
-    );
+    const viaSetup = await helpOf((out) => runSetup(['--help'], { out, prompter: silentPrompter }));
     expect(viaHost).toBe(viaSetup);
     expect(viaHost).toContain('Usage: ssh-mcp host add');
     expect(viaHost).toContain('`ssh-mcp setup`은 이 명령의 별칭으로 계속 동작합니다.');

@@ -6,12 +6,13 @@
 
 ### Added
 
-- `ssh-mcp help` — 명령어 목록. `--help`, `-h`도 같습니다. 사용할 수 있는 명령(`install`, `host add`, `host list`, `doctor`, `help`)과 인자 없이 실행하면 MCP 서버가 뜬다는 사실, 그리고 빠른 시작 세 줄을 stdout에 내고 종료 코드 0으로 끝납니다.
-- `ssh-mcp help <command>` — 해당 명령의 사용법으로 넘깁니다. `ssh-mcp help doctor`는 `ssh-mcp doctor --help`와 같은 출력입니다. 명령별 플래그는 각자의 usage 한 곳에만 있고 목록이 복사해 두지 않습니다. 없는 명령은 stderr 한 줄 + 목록 + 종료 코드 2.
+- `ssh-mcp help` — 명령어 목록. `--help`, `-h`도 같습니다. 사용할 수 있는 명령(`install`, `host add`, `host list`, `doctor`, `help`)과 인자 없이 실행하면 MCP 서버가 뜬다는 사실, 그리고 빠른 시작을 stdout에 내고 종료 코드 0으로 끝납니다. 빠른 시작은 `npm i -g @get-bot/ssh-mcp`로 시작합니다 — 한 번 설치하면 `npx -y @get-bot/ssh-mcp` 대신 `ssh-mcp`로 칩니다. README 설치 절도 같은 순서로 바꿨습니다(전역 설치 먼저, npx는 설치 없이 쓰는 대안). 클라이언트에 등록되는 서버 기동 명령은 그대로 npx 형태입니다.
+- `ssh-mcp help <command> ...` — 해당 명령의 사용법으로 넘깁니다. `ssh-mcp help doctor`는 `ssh-mcp doctor --help`와 같은 출력이고, 뒤에 붙인 단어도 그대로 넘어가므로 `ssh-mcp help host add`는 `host` 그룹이 아니라 `host add`의 사용법입니다. 명령별 플래그는 각자의 usage 한 곳에만 있고 목록이 복사해 두지 않습니다. `help version`·`help help`는 목록을 냅니다. 없는 명령은 stderr 한 줄 + 목록 + 종료 코드 2.
 
 ### Fixed
 
 - **`ssh-mcp --help`가 도움말 대신 서버를 띄우던 문제.** `help`·`--help`·`-h` 셋 다 라우터를 그냥 통과해 서버 모드로 떨어졌습니다. 터미널에서 치면 아무것도 출력하지 않고 stdin을 기다리며 멈춰 있었습니다 — 프로그램에 무엇을 할 수 있냐고 물었을 때 침묵과 멈춘 터미널이 돌아온 셈입니다. 하위 명령들은 이미 각자 `--help`를 갖고 있었고 최상위에만 없었습니다.
+- `ssh-mcp install --help`와 `ssh-mcp host add --help`(`setup --help`)가 사용법을 stderr에 쓰던 문제. 종료 코드는 0이었지만 `| less`나 `> 파일`로 받으면 비어 있었습니다. `host`·`host list`·`doctor`가 이미 따르는 규약("요청한 출력은 오류가 아니므로 stdout")대로 옮겼습니다. 그 밖의 출력 — 진행 메시지, 오류, 사용법 오류 — 은 그대로 stderr입니다.
 
 ## [0.2.1] - 2026-09-15
 

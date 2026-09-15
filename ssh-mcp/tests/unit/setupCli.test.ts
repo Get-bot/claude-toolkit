@@ -52,6 +52,23 @@ function failingAsker(error: () => Error): Asker {
   };
 }
 
+describe('host add --help', () => {
+  it('goes to stdout, not to the wizard stream', async () => {
+    // Every other line this command prints is a prompt or progress and rides
+    // stderr with the wizard. Help that was asked for is not an error, and on
+    // stderr it vanished from `host add --help | less` — exit 0, empty pipe.
+    const wizardStream: string[] = [];
+    const out: string[] = [];
+    const code = await runSetup(['--help'], {
+      prompter: interactivePrompter(wizardStream),
+      out: (text: string): void => void out.push(text),
+    });
+    expect(code).toBe(0);
+    expect(out.join('\n')).toContain('Usage: ssh-mcp host add');
+    expect(wizardStream.join('')).not.toContain('Usage:');
+  });
+});
+
 describe('host add reports an unaskable question for what it is', () => {
   it('gives the library failure on its own, not nested in a generic sentence', async () => {
     const lines: string[] = [];

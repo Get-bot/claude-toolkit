@@ -95,7 +95,7 @@ function renderTable(rows: readonly CheckRow[]): string {
  * Width in terminal cells. CJK text in the Korean check names occupies two
  * cells, so counting code points would misalign every row.
  */
-function displayWidth(text: string): number {
+export function displayWidth(text: string): number {
   let total = 0;
   for (const char of text) {
     const code = char.codePointAt(0) ?? 0;

@@ -35,19 +35,25 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 
 **Node.js 20.17 이상**이 필요합니다(또는 22.13 이상, 23.5 이상). 서버 자체는 Node 20이면 돌지만 `install`·`host add`의 대화형 질문이 그 버전을 요구합니다.
 
-별도 설치 없이 npx로 바로 씁니다. 세 명령이면 끝납니다.
+전역으로 한 번 설치하면 `ssh-mcp`로 바로 실행됩니다. 세 명령이면 끝납니다.
 
 ```bash
+npm i -g @get-bot/ssh-mcp
+
 # 1. Claude에 등록한다. 어느 클라이언트에, 어느 범위에 등록할지 물어본다.
-npx @get-bot/ssh-mcp install
+ssh-mcp install
 
 # 2. 원격 호스트를 등록한다. 주소·사용자명·포트·alias·승인 모드를 하나씩 물어보고,
 #    그다음 비밀번호를 한 번 입력받아 키를 심는다. 터미널 필수.
-npx @get-bot/ssh-mcp host add
+ssh-mcp host add
 
 # 3. 점검한다
-npx @get-bot/ssh-mcp doctor
+ssh-mcp doctor
 ```
+
+설치하지 않고 쓰려면 `ssh-mcp` 자리에 `npx -y @get-bot/ssh-mcp`를 씁니다. 두 형태는 같은 명령이라 이 문서의 예시는 어느 쪽으로 읽어도 됩니다. 차이는 버전 관리뿐입니다 — 전역 설치는 버전이 고정되어 올릴 때 `npm i -g @get-bot/ssh-mcp@latest`를 직접 치고, npx는 실행할 때마다 최신 배포판을 받습니다.
+
+**전역 설치로 짧아지는 것은 터미널에서 치는 명령뿐입니다.** `install`이 클라이언트에 등록하는 서버 기동 명령은 여전히 `npx -y @get-bot/ssh-mcp`입니다 — Claude가 띄우는 쪽은 바뀌지 않습니다.
 
 인자를 주면 **그 항목은** 묻지 않습니다. 다만 `host add`의 비밀번호 입력, 호스트 키 지문 `yes` 확인, 승인 폴백 선택은 어떤 인자를 줘도 항상 터미널에서 진행합니다. 스크립트나 문서에서는 이렇게 씁니다.
 
@@ -83,7 +89,7 @@ npm test
 `ssh-mcp help`, `ssh-mcp --help`, `ssh-mcp -h` 셋 다 명령어 목록을 stdout에 내고 종료 코드 0으로 끝납니다.
 
 ```
-$ npx -y @get-bot/ssh-mcp --help
+$ ssh-mcp --help
 Usage: ssh-mcp [<command>] [options]
 
 인자 없이 실행하면 stdio MCP 서버로 동작합니다. 이 형태는 보통 직접 치지 않고
@@ -91,14 +97,12 @@ Claude Code 같은 클라이언트가 실행합니다.
 
 Commands:
   install [claude-code|claude-desktop]   이 서버를 클라이언트에 등록합니다.
-  host add [<alias> <user@host[:port]>]  호스트를 등록합니다(키 생성·지문 고정).
-  host list [--json]                     등록된 호스트를 표로 출력합니다.
-  doctor [--json] [--patterns]           설정·키·연결 상태를 진단합니다.
-  help [<command>]                       이 도움말, 또는 해당 명령의 사용법.
-...
+  ...
 ```
 
-`help <command>`는 해당 명령의 사용법으로 넘깁니다 — `ssh-mcp help doctor`와 `ssh-mcp doctor --help`는 같은 출력입니다. 각 명령의 플래그는 그 명령의 usage 한 곳에만 적혀 있고 이 목록이 복사해 두지 않습니다. 없는 명령을 물으면 stderr에 한 줄과 목록을 내고 종료 코드 2입니다.
+명령별 플래그는 각 명령의 usage 한 곳에만 적혀 있고, 이 목록도 이 문서도 복사해 두지 않습니다 — 그래서 위 예시는 첫 줄까지만 보여 줍니다. 실제 목록은 명령을 직접 치면 나옵니다.
+
+`help <command> ...`는 해당 명령의 사용법으로 넘깁니다. `ssh-mcp help doctor`와 `ssh-mcp doctor --help`는 같은 출력이고, 뒤에 붙인 단어도 그대로 넘어가므로 `ssh-mcp help host add`는 `host` 그룹이 아니라 `host add`의 사용법입니다. `help version`과 `help help`는 목록을 냅니다. 없는 명령을 물으면 stderr에 한 줄과 목록을 내고 종료 코드 2입니다.
 
 **인자 없이 실행하면 서버가 뜹니다.** `ssh-mcp`만 치면 도움말이 아니라 stdio MCP 서버가 시작되어 stdin을 기다립니다 — 클라이언트가 이 형태로 실행하기 때문입니다. 터미널에서 뭘 할 수 있는지 보려면 `--help`를 붙이세요.
 
@@ -241,7 +245,7 @@ claude 감지됨: ~/.local/bin/claude
 | `--dry-run`                      | 아무것도 바꾸지 않고 수행할 내용만 출력합니다                                                                    |
 | `-h`, `--help`                   | 도움말                                                                                                           |
 
-종료 코드는 `setup`과 같습니다 — `0` 성공, `1` 실패, `2` 사용법 오류. 모든 출력은 stderr로 나갑니다(`doctor`가 stdout을 쓰는 것과 대비됩니다).
+종료 코드는 `setup`과 같습니다 — `0` 성공, `1` 실패, `2` 사용법 오류. 출력은 stderr로 나갑니다(`doctor`가 stdout을 쓰는 것과 대비됩니다). 예외는 `--help` 하나로, 요청한 사용법은 다른 명령과 같이 stdout에 내고 종료 코드 0입니다 — 그래야 `install --help | less`에 내용이 있습니다.
 
 `--home`과 `--config`의 값은 절대 경로로 변환해 등록합니다. 서버는 MCP 호스트가 정한 작업 디렉터리에서 실행되므로 상대 경로는 사용자가 의도한 곳을 가리키지 않습니다. 값을 받는 플래그(`--name`, `--scope`, `--home`, `--config`) 뒤에 `-`로 시작하는 토큰이 오면 값으로 삼키지 않고 사용법 오류로 끝냅니다 — 그러지 않으면 `--home --dry-run`이 `--dry-run`을 값으로 먹고 실제로 파일을 쓰게 됩니다.
 

@@ -395,6 +395,14 @@ export interface SetupDeps {
    * {@link canPrompt}; injected so tests drive both branches.
    */
   canAsk?: () => boolean;
+  /**
+   * Where `--help` goes; defaults to stdout. Every other line `host add` prints
+   * is a prompt or a progress message and belongs on stderr with the wizard,
+   * but help that was asked for is not an error — on stderr it vanished from
+   * `host add --help | less`. `host`, `host list` and `doctor` make the same
+   * split.
+   */
+  out?: (text: string) => void;
 }
 
 /** Read the `ssh-<algo>` name out of a raw SSH public key blob. */
@@ -459,6 +467,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   const err = (text: string): void => {
     prompter.write(`${text}\n`);
   };
+  const out = deps.out ?? ((text: string): void => void process.stdout.write(`${text}\n`));
 
   const probeTcp = deps.probeTcp ?? defaultProbeTcp;
   // Only the wizard needs this. The password and fingerprint prompts ask for
@@ -470,7 +479,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
 
   let parsed = parseSetupArgs(argv);
   if (parsed.ok && parsed.help) {
-    err(USAGE);
+    out(USAGE);
     return EXIT_OK;
   }
 
@@ -540,7 +549,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     // Not reachable: `--help` returned above and the wizard only appends
     // positionals and value flags. Kept because it is also how the compiler
     // narrows `parsed` to the variant that carries `args`.
-    err(USAGE);
+    out(USAGE);
     return EXIT_OK;
   }
   const args = parsed.args;
