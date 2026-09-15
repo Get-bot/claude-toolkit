@@ -886,4 +886,87 @@ describe('secrets never reach the audit view or the approval prompt', () => {
   });
 });
 
+/**
+ * The dialog has to fit in what the client actually shows.
+ *
+ * Claude Code 2.1.271 renders the first three lines of an elicitation message
+ * and folds the rest behind a "… (+N more lines)" notice that does not open, and
+ * it cuts the checkbox label at around 46 columns. A nine-line message therefore
+ * asked people to approve a command they could not see. These assertions are
+ * what stops a fourth line from being added back later — the fold is invisible
+ * from the server side, so nothing else would notice.
+ */
+describe('the approval dialog fits the three lines the client shows', () => {
+  const VISIBLE_LINES = 3;
+  /** Columns before the label is cut; the measured value is about 46. */
+  const LABEL_BUDGET = 46;
+
+  /** East Asian glyphs occupy two terminal columns; everything here is one. */
+  function columns(text: string): number {
+    let width = 0;
+    for (const ch of text) width += /[ᄀ-ᅟ⺀-꓏가-힣]/.test(ch) ? 2 : 1;
+    return width;
+  }
+
+  async function promptFor(command: string): Promise<ElicitRequest> {
+    const seen: ElicitRequest[] = [];
+    await gate({
+      host: host('prod-web', 'ask-all', 'token'),
+      command,
+      client: {
+        supportsElicitation: true,
+        elicit: (request: ElicitRequest): Promise<ElicitOutcome> => {
+          seen.push(request);
+          return Promise.resolve('accept');
+        },
+      },
+    });
+    const request = seen[0];
+    if (request === undefined) throw new Error('no elicitation was sent');
+    return request;
+  }
+
+  it('never sends more lines than the client will show', async () => {
+    for (const command of [SAFE_COMMAND, PRIVILEGED_COMMAND, DESTRUCTIVE_COMMAND]) {
+      const request = await promptFor(command);
+      expect(request.message.split('\n').length).toBeLessThanOrEqual(VISIBLE_LINES);
+    }
+  });
+
+  it('puts the command being approved on the first line', async () => {
+    // The whole point of the reordering: line one is the thing being decided,
+    // not a header that says a decision is being asked for.
+    const request = await promptFor(DESTRUCTIVE_COMMAND);
+    expect(request.message.split('\n')[0]).toBe(DESTRUCTIVE_COMMAND);
+  });
+
+  it('asks in form mode explicitly', async () => {
+    // The field is optional and form is the default, so a drop would go
+    // unnoticed until a client changed its mind about what the default is.
+    const request = await promptFor(DESTRUCTIVE_COMMAND);
+    expect(request.mode).toBe('form');
+  });
+
+  it('keeps the checkbox label inside the cut', async () => {
+    const request = await promptFor(DESTRUCTIVE_COMMAND);
+    const title = request.requestedSchema.properties.confirm?.title ?? '';
+    expect(columns(title)).toBeLessThanOrEqual(LABEL_BUDGET);
+    // Truncation takes the tail, so the key to press has to come before it.
+    expect(title).toContain('스페이스');
+  });
+
+  it('counts the reasons it cannot fit instead of listing them', async () => {
+    // Four separate destructive matches: listing them all would run past the
+    // pane and wrap the third line back into the fold.
+    const request = await promptFor(
+      'rm -rf /srv/app && git reset --hard && chmod 777 /etc && truncate -s 0 /var/log/app.log'
+    );
+    const reasonLine = request.message.split('\n')[2] ?? '';
+    expect(reasonLine).toMatch(/외 \d+개$/);
+    expect(columns(reasonLine)).toBeLessThanOrEqual(LABEL_BUDGET);
+    // The grade is stated once, not repeated inside every pattern id.
+    expect(reasonLine).not.toContain('destructive:');
+  });
+});
+
 stopSweep();
