@@ -91,16 +91,10 @@ npm test
 ```
 $ ssh-mcp --help
 Usage: ssh-mcp [<command>] [options]
-
-인자 없이 실행하면 stdio MCP 서버로 동작합니다. 이 형태는 보통 직접 치지 않고
-Claude Code 같은 클라이언트가 실행합니다.
-
-Commands:
-  install [claude-code|claude-desktop]   이 서버를 클라이언트에 등록합니다.
-  ...
+...
 ```
 
-명령별 플래그는 각 명령의 usage 한 곳에만 적혀 있고, 이 목록도 이 문서도 복사해 두지 않습니다 — 그래서 위 예시는 첫 줄까지만 보여 줍니다. 실제 목록은 명령을 직접 치면 나옵니다.
+목록에는 사용할 수 있는 명령(`install`, `host add`, `host list`, `doctor`, `help`)과 인자 없이 실행하면 서버가 뜬다는 사실, 빠른 시작이 들어 있습니다. 명령별 플래그는 각 명령의 usage 한 곳에만 적혀 있고, 이 목록도 이 문서도 복사해 두지 않습니다 — 그래서 위 예시는 첫 줄까지만 보여 줍니다. 실제 목록은 명령을 직접 치면 나옵니다.
 
 `help <command> ...`는 해당 명령의 사용법으로 넘깁니다. `ssh-mcp help doctor`와 `ssh-mcp doctor --help`는 같은 출력이고, 뒤에 붙인 단어도 그대로 넘어가므로 `ssh-mcp help host add`는 `host` 그룹이 아니라 `host add`의 사용법입니다. `help version`과 `help help`는 목록을 냅니다. 없는 명령을 물으면 stderr에 한 줄과 목록을 내고 종료 코드 2입니다.
 

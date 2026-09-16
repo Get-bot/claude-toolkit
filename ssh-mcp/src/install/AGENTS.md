@@ -23,7 +23,7 @@
 
 ## Invariants & gotchas for AI agents
 
-- **모든 출력은 stderr입니다.** `setup`과 같은 원칙이고 `doctor`와는 반대입니다 — 이 명령은 파이프로 넘길 데이터가 아니라 진행 상황과 실패를 보고합니다. 출력은 `write` 콜백으로 주입되므로 이 디렉터리에는 ESLint `no-console` 예외가 필요 없습니다. `console`을 직접 쓰지 마세요.
+- **`--help` 외의 모든 출력은 stderr입니다.** `setup`과 같은 원칙이고 `doctor`와는 반대입니다 — 이 명령은 파이프로 넘길 데이터가 아니라 진행 상황과 실패를 보고합니다. 요청한 사용법만은 다른 명령과 같이 stdout(`out` 콜백)으로 냅니다 — 그래야 `install --help | less`에 내용이 있습니다. 나머지 출력은 `write` 콜백으로 주입되므로 이 디렉터리에는 ESLint `no-console` 예외가 필요 없습니다. `console`을 직접 쓰지 마세요.
 - **Windows에서는 두 클라이언트 모두 `cmd /c`로 감쌉니다.** Claude Code 2.1.270은 bare `npx`로도 연결되지만(2026-09-14 실측), 구버전 호환과 Desktop과의 일관성을 위해 자동 경로는 한 형태만 씁니다. 이 판단을 바꾸려면 README의 `install` 절과 `config/registration.ts`의 주석을 함께 고쳐야 합니다.
 - **`spawn`은 반드시 주입 가능해야 합니다.** 유닛 테스트가 개발자의 진짜 `claude`를 실행하면 그 사람의 실제 MCP 레지스트리가 바뀝니다. `Spawner`를 없애거나 `spawnSync`를 직접 부르는 코드를 추가하지 마세요.
 - **Claude Code의 레지스트리 파일을 직접 편집하지 않습니다.** `~/.claude.json`과 그 주변 스코프 파일의 형식은 공개된 계약이 아니므로 `claude mcp add`에 위임합니다. argv만 우리 것입니다.

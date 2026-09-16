@@ -5,8 +5,10 @@
  * The whole command exists so that one password is typed once, in a terminal,
  * by a human - and never again. Two rules are load-bearing:
  *
- * - **All output goes to stderr.** `setup` is not the server, but sharing the
- *   habit keeps stdout free of anything but JSON-RPC frames (Principle 3).
+ * - **Everything but `--help` goes to stderr.** `setup` is not the server, but
+ *   sharing the habit keeps stdout free of anything but JSON-RPC frames
+ *   (Principle 3). Help that was asked for is the one exception: stdout, like
+ *   every other command's, so `host add --help | less` has something to show.
  * - **Nothing is half-written.** Every failure after key generation restores
  *   the previous key pair and leaves `hosts.json` untouched (AC7.5, AC7.7).
  *
@@ -478,10 +480,6 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   let addressVerified = false;
 
   let parsed = parseSetupArgs(argv);
-  if (parsed.ok && parsed.help) {
-    out(USAGE);
-    return EXIT_OK;
-  }
 
   // Read once and reuse. The wizard needs the alias list, and step 1 below needs
   // the same file; loading twice was two chances to disagree, and only one of
@@ -545,10 +543,10 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     err(USAGE);
     return EXIT_NOT_INTERACTIVE;
   }
+  // Help that was asked for is not an error: stdout, exit 0. `--help` parses
+  // as a success, so it skips the wizard (which runs only on a failed parse)
+  // and the usage-error block above, and arrives here untouched.
   if (parsed.help) {
-    // Not reachable: `--help` returned above and the wizard only appends
-    // positionals and value flags. Kept because it is also how the compiler
-    // narrows `parsed` to the variant that carries `args`.
     out(USAGE);
     return EXIT_OK;
   }

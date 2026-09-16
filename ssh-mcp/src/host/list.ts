@@ -16,6 +16,7 @@
 import { DEFAULT_APPROVAL_FALLBACK } from '../config/schema.js';
 import type { HostEntry } from '../config/schema.js';
 import * as store from '../config/store.js';
+import { displayWidth, pad } from '../internal/text.js';
 import { stripControlChars } from '../internal/util.js';
 import { fingerprintPrefix } from '../tools/listHosts.js';
 
@@ -70,30 +71,6 @@ export function toRow(alias: string, entry: HostEntry, normalised: boolean): Hos
     fingerprint: fingerprintPrefix(entry.hostKey.sha256),
     label: printable(entry.label ?? ''),
   };
-}
-
-/** Width in terminal cells; CJK labels occupy two, so counting code points misaligns. */
-function displayWidth(text: string): number {
-  let total = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    const wide =
-      (code >= 0x1100 && code <= 0x115f) ||
-      (code >= 0x2e80 && code <= 0xa4cf) ||
-      (code >= 0xac00 && code <= 0xd7a3) ||
-      (code >= 0xf900 && code <= 0xfaff) ||
-      (code >= 0xfe30 && code <= 0xfe6f) ||
-      (code >= 0xff00 && code <= 0xff60) ||
-      (code >= 0xffe0 && code <= 0xffe6) ||
-      (code >= 0x20000 && code <= 0x3fffd);
-    total += wide ? 2 : 1;
-  }
-  return total;
-}
-
-function pad(text: string, target: number): string {
-  const fill = target - displayWidth(text);
-  return fill > 0 ? text + ' '.repeat(fill) : text;
 }
 
 export function renderTable(rows: readonly HostRow[]): string {

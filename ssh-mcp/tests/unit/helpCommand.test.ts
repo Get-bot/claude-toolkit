@@ -12,72 +12,74 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { displayWidth } from '../../src/doctor/cli.js';
+import { COMMAND_NAMES, HELP_TOKENS, VERSION_TOKENS } from '../../src/commands.js';
+import type { CommandName, CommandRunner, CommandTable } from '../../src/commands.js';
 import {
   EXIT_OK,
   EXIT_USAGE,
-  HELP_TOKENS,
-  HELP_TOPICS,
   USAGE,
   USAGE_DESCRIPTION_COLUMN,
   USAGE_MAX_COLUMNS,
-  VERSION_TOKENS,
-  isHelpTopic,
   runHelp,
   type HelpDeps,
-  type HelpTopic,
 } from '../../src/help.js';
+import { displayWidth } from '../../src/internal/text.js';
 
 /**
- * What the fake delegate returns. Deliberately not `EXIT_OK`: a `runHelp` that
- * awaited the delegate and then returned its own success would otherwise pass
+ * What every fake command returns. Deliberately not `EXIT_OK`: a `runHelp` that
+ * awaited the command and then returned its own success would otherwise pass
  * every test here by coincidence.
  */
-const DELEGATE_EXIT = 7;
+const COMMAND_EXIT = 7;
 
-interface Delegation {
-  topic: HelpTopic;
-  rest: readonly string[];
+interface Forwarded {
+  command: CommandName;
+  argv: readonly string[];
 }
 
 interface Capture {
   out: string[];
   err: string[];
-  delegated: Delegation[];
-  /** Writers only; pass this where the caller has nothing to delegate to. */
-  writers: HelpDeps;
-  /** Writers plus a delegate that records the call and returns DELEGATE_EXIT. */
+  forwarded: Forwarded[];
+  /** Every command records the argv it was handed and returns COMMAND_EXIT. */
+  commands: CommandTable;
   deps: HelpDeps;
 }
 
 function capture(): Capture {
   const out: string[] = [];
   const err: string[] = [];
-  const delegated: Delegation[] = [];
-  const writers: HelpDeps = {
+  const forwarded: Forwarded[] = [];
+  const commands = Object.fromEntries(
+    COMMAND_NAMES.map((command): [CommandName, () => Promise<CommandRunner>] => [
+      command,
+      (): Promise<CommandRunner> =>
+        Promise.resolve((argv: string[]): Promise<number> => {
+          forwarded.push({ command, argv });
+          return Promise.resolve(COMMAND_EXIT);
+        }),
+    ])
+  ) as CommandTable;
+  const deps: HelpDeps = {
     out: (text: string): void => void out.push(text),
     err: (text: string): void => void err.push(text),
+    commands,
   };
-  const deps: HelpDeps = {
-    ...writers,
-    delegate: (topic: HelpTopic, rest: readonly string[]): Promise<number> => {
-      delegated.push({ topic, rest });
-      return Promise.resolve(DELEGATE_EXIT);
-    },
-  };
-  return { out, err, delegated, writers, deps };
+  return { out, err, forwarded, commands, deps };
 }
 
 describe('USAGE names everything a user can actually run', () => {
   // A command missing from the overview is a command nobody finds. The list is
   // asserted rather than eyeballed because it is the only place these strings
   // are collected, so nothing else would notice a new command going unlisted.
+  // `setup` is here because it still works as an alias of `host add`.
   it.each([
     'install',
     'host add',
     'host list',
     'doctor',
     'help',
+    'setup',
     'version',
     '--version',
     '--help',
@@ -90,11 +92,6 @@ describe('USAGE names everything a user can actually run', () => {
     // The most confusing thing about this binary: bare `ssh-mcp` is not a
     // no-op or an error, it is the server the client spawns.
     expect(USAGE).toContain('MCP 서버');
-  });
-
-  it('keeps the setup alias documented', () => {
-    expect(USAGE).toContain('setup');
-    expect(USAGE).toContain('host add');
   });
 
   it('fits the terminal it is read in, measured in display columns', () => {
@@ -132,53 +129,42 @@ describe('runHelp', () => {
     expect(c.err).toEqual([]);
   });
 
-  it.each(HELP_TOPICS)(
-    'forwards `help %s` and returns what that command returned',
-    async (topic) => {
+  it.each([...HELP_TOKENS, ...VERSION_TOKENS])(
+    'answers `help %s` with the overview, not "unknown"',
+    async (token) => {
+      // Neither has a usage string of its own, and `ssh-mcp version` is a
+      // command that works, so `help version` cannot be an error.
       const c = capture();
-      const code = await runHelp([topic], c.deps);
-      expect(code).toBe(DELEGATE_EXIT);
-      expect(c.delegated).toEqual([{ topic, rest: [] }]);
+      const code = await runHelp([token], c.deps);
+      expect(code).toBe(EXIT_OK);
+      expect(c.out).toEqual([USAGE]);
+      expect(c.err).toEqual([]);
+      expect(c.forwarded).toEqual([]);
+    }
+  );
+
+  it.each(COMMAND_NAMES)(
+    'forwards `help %s` to that command as `--help` and returns its exit code',
+    async (command) => {
+      const c = capture();
+      const code = await runHelp([command], c.deps);
+      expect(code).toBe(COMMAND_EXIT);
+      expect(c.forwarded).toEqual([{ command, argv: ['--help'] }]);
       // Nothing printed here: the sub-command owns its own usage string.
       expect(c.out).toEqual([]);
       expect(c.err).toEqual([]);
     }
   );
 
-  it('forwards everything after the topic, so `help host add` reaches `host add`', async () => {
+  it('forwards everything after the command, so `help host add` reaches `host add`', async () => {
     // The group usage with `add` silently dropped is not what anyone typing
-    // this meant. What the topic does with the extra words is its own parser's
-    // decision — it already knows how to refuse an argument it does not take.
+    // this meant. What the command does with the extra words is its own
+    // parser's decision — it already knows how to refuse an argument it does
+    // not take.
     const c = capture();
     const code = await runHelp(['host', 'add', '--force'], c.deps);
-    expect(code).toBe(DELEGATE_EXIT);
-    expect(c.delegated).toEqual([{ topic: 'host', rest: ['add', '--force'] }]);
-  });
-
-  it('falls back to the overview when there is nothing to delegate to', async () => {
-    const c = capture();
-    const code = await runHelp(['doctor'], c.writers);
-    expect(code).toBe(EXIT_OK);
-    expect(c.out).toEqual([USAGE]);
-  });
-
-  it('answers `help help` with the overview rather than an error', async () => {
-    const c = capture();
-    const code = await runHelp(['help'], c.deps);
-    expect(code).toBe(EXIT_OK);
-    expect(c.out).toEqual([USAGE]);
-    expect(c.err).toEqual([]);
-  });
-
-  it.each(VERSION_TOKENS)('answers `help %s` with the overview, not "unknown"', async (token) => {
-    // `ssh-mcp version` is a command that works, so `help version` cannot be
-    // an error; it has no usage of its own, so the overview is what it gets.
-    const c = capture();
-    const code = await runHelp([token], c.deps);
-    expect(code).toBe(EXIT_OK);
-    expect(c.out).toEqual([USAGE]);
-    expect(c.err).toEqual([]);
-    expect(c.delegated).toEqual([]);
+    expect(code).toBe(COMMAND_EXIT);
+    expect(c.forwarded).toEqual([{ command: 'host', argv: ['add', '--force', '--help'] }]);
   });
 
   it('treats an unknown command as a usage error on stderr', async () => {
@@ -188,35 +174,18 @@ describe('runHelp', () => {
     expect(c.out).toEqual([]);
     expect(c.err[0]).toContain('bogus');
     expect(c.err.join('\n')).toContain(USAGE);
-    expect(c.delegated).toEqual([]);
+    expect(c.forwarded).toEqual([]);
   });
 
-  it('lets a failing delegate fail loudly instead of dressing it up as help', async () => {
+  it('lets a command that fails to load fail loudly instead of dressing it up as help', async () => {
     // A rejection here means the sub-command module could not load or threw
     // before parsing. `main()` reports that as `ssh-mcp failed: …`; catching it
     // to print a friendlier usage would hide which command is broken.
     const c = capture();
     const boom = new Error('module failed to load');
-    await expect(
-      runHelp(['doctor'], { ...c.writers, delegate: () => Promise.reject(boom) })
-    ).rejects.toBe(boom);
+    const commands: CommandTable = { ...c.commands, doctor: () => Promise.reject(boom) };
+    await expect(runHelp(['doctor'], { ...c.deps, commands })).rejects.toBe(boom);
     expect(c.out).toEqual([]);
     expect(c.err).toEqual([]);
-  });
-});
-
-describe('token and topic tables', () => {
-  it('accepts the three spellings a user would try', () => {
-    expect([...HELP_TOKENS]).toEqual(['help', '--help', '-h']);
-  });
-
-  it('routes exactly the commands the router can route', () => {
-    // `setup` is here because it still works as an alias; leaving it out would
-    // make `ssh-mcp help setup` an error for a command that runs fine. Adding
-    // a top-level command to index.ts means adding it here too — this is the
-    // test that says so out loud.
-    expect([...HELP_TOPICS]).toEqual(['install', 'host', 'doctor', 'setup']);
-    expect(isHelpTopic('host')).toBe(true);
-    expect(isHelpTopic('bogus')).toBe(false);
   });
 });

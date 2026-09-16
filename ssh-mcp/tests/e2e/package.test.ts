@@ -73,24 +73,33 @@ function resolveEntrypoint(): Launch {
   );
 }
 
+// Every spawn in this file gets the same throwaway home. The server writes state.json on
+// `initialize` (last-client record) and would do so into the real ~/.ssh-mcp if left unpointed —
+// on purpose in the smoke test below, and by regression in the help tests, whose failure mode is
+// exactly "dropped into server mode". createTmpHome() redirects SSH_MCP_HOME (and HOME/USERPROFILE)
+// on process.env *before* any spawn, and each spawn's explicit `env` still pins the child to it
+// even if something upstream changes process.env later in the run.
+let home: TmpHome;
+
+beforeAll(() => {
+  home = createTmpHome('ssh-mcp-e2e-package-');
+});
+
+afterAll(() => {
+  // Must run before home.cleanup() (which restores process.env) — see tmpHome.ts.
+  assertNoWritesOutside(home);
+  home.cleanup();
+});
+
 describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
   let server: StdioServer;
-  let home: TmpHome;
 
   beforeAll(() => {
-    // The spawned server writes state.json on `initialize` (last-client record) and would do so
-    // into the real ~/.ssh-mcp if left unpointed. createTmpHome() redirects SSH_MCP_HOME (and
-    // HOME/USERPROFILE) on process.env *before* the spawn below, and the explicit `env` still
-    // pins the child to it even if something upstream changes process.env later in the run.
-    home = createTmpHome('ssh-mcp-e2e-package-');
     server = launchStdioServer(resolveEntrypoint(), { ...process.env, SSH_MCP_HOME: home.dir });
   });
 
   afterAll(() => {
     server?.child.kill();
-    // Must run before home.cleanup() (which restores process.env) — see tmpHome.ts.
-    assertNoWritesOutside(home);
-    home.cleanup();
   });
 
   it("responds to initialize with serverInfo.name === 'ssh-mcp'", async () => {
@@ -134,23 +143,14 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
 // real entrypoint. It is worth checking: all three tokens used to fall through into server mode,
 // where the process printed nothing and waited on stdin until it was killed. A regression would
 // look exactly like that again, which is why these assert termination as much as output.
+//
+// Under SSH_MCP_TGZ every spawn is an npx round-trip, so the cases are only what a real process
+// can prove: each help spelling is routed; a forwarded command's *default* writer is stdout
+// (`install` and `host add` used to put their usage on stderr, and the unit tests only see
+// injected writers); words after the command are forwarded; a usage error's exit code reaches
+// the process. Which commands are routable is settled by the `COMMANDS` table and the compiler,
+// and `help <command>` forwarding for every entry is covered in tests/unit/helpCommand.test.ts.
 describe('package e2e — top-level help reaches the terminal, not the server', () => {
-  // The regression these tests exist to catch is the child dropping into server mode — which
-  // writes state.json on initialize. The describe above redirects the home for exactly that
-  // reason, but its cleanup has restored process.env by the time this block runs, so it gets a
-  // throwaway home of its own. Without it, the failure mode would be "test fails *and* the
-  // developer's real ~/.ssh-mcp was written to".
-  let helpHome: TmpHome;
-
-  beforeAll(() => {
-    helpHome = createTmpHome('ssh-mcp-e2e-help-');
-  });
-
-  afterAll(() => {
-    assertNoWritesOutside(helpHome);
-    helpHome.cleanup();
-  });
-
   function runHelpBinary(extra: string[]): SpawnSyncReturns<string> {
     const { cmd, args } = resolveEntrypoint();
     return spawnSync(cmd, [...args, ...extra], {
@@ -160,7 +160,7 @@ describe('package e2e — top-level help reaches the terminal, not the server', 
       // rather than a smaller guess — under SSH_MCP_TGZ every one of these goes through npx.
       input: '',
       timeout: RESPONSE_TIMEOUT_MS,
-      env: { ...process.env, SSH_MCP_HOME: helpHome.dir },
+      env: { ...process.env, SSH_MCP_HOME: home.dir },
     });
   }
 
@@ -177,29 +177,26 @@ describe('package e2e — top-level help reaches the terminal, not the server', 
     expect(result.stderr).not.toContain('server ready');
   });
 
-  // Every routable topic, on stdout. `install` and `setup` used to write their usage to stderr,
-  // so `ssh-mcp help install > out.txt` produced an empty file with exit 0 while `help doctor`
-  // did not — same verb, opposite behavior. Checking all four is what keeps that from returning.
-  it.each([
-    ['doctor', 'Usage: ssh-mcp doctor'],
-    ['install', 'Usage: ssh-mcp install'],
-    ['host', 'Usage: ssh-mcp host <add|list>'],
-    ['setup', 'Usage: ssh-mcp host add'],
-  ])('`help %s` forwards to that command, on stdout', (topic, heading) => {
-    const result = runHelpBinary(['help', topic]);
+  // `install --help` used to write its usage to stderr, so `ssh-mcp help install > out.txt`
+  // produced an empty file with exit 0 while `help doctor` did not — same verb, opposite behavior.
+  it('`help install` forwards to that command, on stdout', () => {
+    const result = runHelpBinary(['help', 'install']);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(heading);
+    expect(result.stdout).toContain('Usage: ssh-mcp install');
     // Not `toBe('')`: under npx the wrapper may add its own stderr noise. What must not be
     // there is the usage itself.
     expect(result.stderr).not.toContain('Usage:');
   });
 
-  it('`help host add` reaches `host add`, not the host group', () => {
+  // `host add` is the other command whose usage moved to stdout, and the group usage with `add`
+  // silently dropped is not what anyone typing this meant.
+  it('`help host add` reaches `host add`, not the host group, on stdout', () => {
     const result = runHelpBinary(['help', 'host', 'add']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Usage: ssh-mcp host add');
+    expect(result.stderr).not.toContain('Usage:');
   });
 
   it('refuses a command it does not have, on stderr', () => {

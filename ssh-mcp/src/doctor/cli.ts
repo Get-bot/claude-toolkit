@@ -19,6 +19,7 @@ import {
 } from './checks.js';
 import type { CheckRow, CheckStatus, DoctorOptions, PatternRow } from './checks.js';
 import { INSTALL_HINT } from '../config/registration.js';
+import { displayWidth, pad } from '../internal/text.js';
 import type { ArgvRuleDef } from '../safety/classify.js';
 
 export const EXIT_OK = 0;
@@ -89,33 +90,6 @@ function renderTable(rows: readonly CheckRow[]): string {
 
   const separator = `${'-'.repeat(statusWidth)}  ${'-'.repeat(nameWidth)}  ${'-'.repeat(4)}`;
   return [line(header), separator, ...rows.map(line)].join('\n');
-}
-
-/**
- * Width in terminal cells. CJK text in the Korean check names occupies two
- * cells, so counting code points would misalign every row.
- */
-export function displayWidth(text: string): number {
-  let total = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    const wide =
-      (code >= 0x1100 && code <= 0x115f) ||
-      (code >= 0x2e80 && code <= 0xa4cf) ||
-      (code >= 0xac00 && code <= 0xd7a3) ||
-      (code >= 0xf900 && code <= 0xfaff) ||
-      (code >= 0xfe30 && code <= 0xfe6f) ||
-      (code >= 0xff00 && code <= 0xff60) ||
-      (code >= 0xffe0 && code <= 0xffe6) ||
-      (code >= 0x20000 && code <= 0x3fffd);
-    total += wide ? 2 : 1;
-  }
-  return total;
-}
-
-function pad(text: string, target: number): string {
-  const fill = target - displayWidth(text);
-  return fill > 0 ? text + ' '.repeat(fill) : text;
 }
 
 function renderPatterns(rows: readonly PatternRow[]): string {

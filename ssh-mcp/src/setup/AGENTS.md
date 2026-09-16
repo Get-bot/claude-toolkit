@@ -39,7 +39,7 @@
 
 ## Invariants & gotchas for AI agents
 
-- **모든 출력은 stderr입니다.** `setup`은 서버가 아니지만 같은 습관을 공유해 stdout에 JSON-RPC 프레임 외에는 아무것도 남기지 않습니다(원칙 3). `doctor`가 stdout을 쓰는 것과 대비됩니다 — `setup`은 프롬프트와 보고가 뒤섞이기 때문입니다.
+- **`--help` 외의 모든 출력은 stderr입니다.** `setup`은 서버가 아니지만 같은 습관을 공유해 stdout에 JSON-RPC 프레임 외에는 아무것도 남기지 않습니다(원칙 3). `doctor`가 stdout을 쓰는 것과 대비됩니다 — `setup`은 프롬프트와 보고가 뒤섞이기 때문입니다. 요청한 사용법만은 다른 명령과 같이 stdout(`out` 콜백)으로 냅니다 — 그래야 `host add --help | less`에 내용이 있습니다.
 - **ACL 하드닝은 반드시 키 생성보다 먼저입니다.** 순서를 뒤집으면 두 번의 네트워크 왕복과 사람의 프롬프트가 진행되는 동안 상속된 NTFS ACL 아래에 암호화되지 않은 개인키가 놓입니다.
 - **절반만 쓰인 상태를 남기지 마세요.** 키 생성 이후의 모든 실패 경로는 `finally`에서 `restoreKeyPair(backup)`으로 이전 키 상태를 정확히 되돌리고(원래 없던 파일은 삭제) `hosts.json`을 건드리지 않습니다. `succeeded` 플래그가 서는 시점은 마지막 `store.save()` 직후입니다(AC7.5, AC7.7).
 - **`generateKeyPair()`는 새 쌍을 쓰기 전에 기존 파일을 `fs.rmSync`로 먼저 지웁니다.** `writeFileSync`가 기존 파일의 모드를 유지하기 때문에, 이전 실행에서 world-readable로 남은 파일이 그대로 재사용되는 것을 막기 위함입니다.

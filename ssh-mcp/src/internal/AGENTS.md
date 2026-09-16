@@ -13,6 +13,7 @@
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `util.ts` | `byteLength`(UTF-8 바이트 길이), `isErrnoCode`(Node 시스템 오류의 `code` 판별), `isEnoent`(ENOENT 단축), `errorMessage`(unknown throwable의 메시지 추출), `hasControlChars`/`stripControlChars`(C0+DEL 판별·치환) |
 | `argv.ts` | `optionValue`(값을 받는 옵션의 값 읽기). 값 자리에 `-`로 시작하는 토큰이 오면 삼키지 않고 거부합니다 — `install`과 `setup` 양쪽에서 같은 결함이 났던 자리입니다                                                   |
+| `text.ts` | `displayWidth`(터미널 셀 단위 폭, CJK는 2), `pad`(그 폭 기준 오른쪽 채움). `doctor`·`host list`의 표와 `help` 목록의 폭 테스트가 함께 씁니다 — 이전에는 두 CLI에 같은 사본이 있었습니다                           |
 
 ## For AI Agents
 

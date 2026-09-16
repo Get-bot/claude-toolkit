@@ -2,21 +2,20 @@
  * `ssh-mcp` bin entry point (plan row 0.7).
  *
  * Node version guard, then argv routing:
- *   `host ...`    -> host group     (`add` = the setup CLI, `list`)
- *   `setup ...`   -> setup CLI      (silent alias of `host add`; see `host/cli.ts`)
- *   `doctor ...`  -> doctor CLI     (exit code from `runDoctor`)
- *   `install ...` -> install CLI    (exit code from `runInstall`)
- *   `--version`   -> version to stdout
- *   `help ...`    -> command overview, or one command's own usage
- *   anything else -> stdio MCP server
+ *   `<command> ...` -> that command's CLI, from the `COMMANDS` table in
+ *                      `commands.ts` (`install`, `host`, `doctor`, `setup`;
+ *                      the exit code is the command's own)
+ *   `--version`     -> version to stdout
+ *   `help ...`      -> command overview, or one command's own usage
+ *   anything else   -> stdio MCP server
  *
- * Sub-command modules are imported dynamically so that starting the server
- * never loads the CLI code, and vice versa. `help.ts` is the one static import:
- * it is string literals with no dependencies, and the router has to read
- * `HELP_TOKENS` from it rather than keep a copy — a copy that drifted would
- * send a help spelling into server mode, which is the bug `help` exists to fix.
+ * Sub-command modules are imported dynamically — through the thunks in
+ * `commands.ts` — so that starting the server never loads the CLI code, and
+ * vice versa. `commands.ts` and `help.ts` are the two static imports: string
+ * tables and closures, nothing that runs at load time.
  */
-import { HELP_TOKENS, runHelp } from './help.js';
+import { COMMANDS, HELP_TOKENS, VERSION_TOKENS, isCommandName } from './commands.js';
+import { runHelp } from './help.js';
 import { installStdoutGuard } from './log.js';
 import { readPackageVersion } from './version.js';
 
@@ -53,43 +52,23 @@ export async function run(argv: string[]): Promise<number> {
 
   const command = argv[0];
 
-  if (command === 'host') {
-    const { runHost } = await import('./host/cli.js');
-    return runHost(argv.slice(1));
-  }
+  // Bare `ssh-mcp` is the server: that is the shape the client spawns.
+  if (command !== undefined) {
+    if (isCommandName(command)) {
+      const runCommand = await COMMANDS[command]();
+      return runCommand(argv.slice(1));
+    }
 
-  // `setup` predates the `host` group and keeps working with no warning: an
-  // 0.1.0 user upgrades automatically through `npx -y`, so breaking or nagging
-  // here would break a working setup for no benefit.
-  if (command === 'setup') {
-    const { runSetup } = await import('./setup/cli.js');
-    return runSetup(argv.slice(1));
-  }
+    if ((VERSION_TOKENS as readonly string[]).includes(command)) {
+      process.stdout.write(`${readPackageVersion()}\n`);
+      return 0;
+    }
 
-  if (command === 'doctor') {
-    const { runDoctor } = await import('./doctor/cli.js');
-    return runDoctor(argv.slice(1));
-  }
-
-  if (command === 'install') {
-    const { runInstall } = await import('./install/cli.js');
-    return runInstall(argv.slice(1));
-  }
-
-  if (command === '--version' || command === '-v' || command === 'version') {
-    process.stdout.write(`${readPackageVersion()}\n`);
-    return 0;
-  }
-
-  // Before the fall-through below, because every one of these used to reach it:
-  // asking `ssh-mcp --help` started a server and waited on stdin forever.
-  // `help <command> ...` re-enters this router as `<command> ... --help` rather
-  // than restating a sub-command's flags, so the usage strings stay in one
-  // place each and `help host add` lands on `host add`, not on the group.
-  if (command !== undefined && (HELP_TOKENS as readonly string[]).includes(command)) {
-    return runHelp(argv.slice(1), {
-      delegate: (topic, rest) => run([topic, ...rest, '--help']),
-    });
+    // Before the fall-through below, because every one of these used to reach
+    // it: asking `ssh-mcp --help` started a server and waited on stdin forever.
+    if ((HELP_TOKENS as readonly string[]).includes(command)) {
+      return runHelp(argv.slice(1));
+    }
   }
 
   // Server mode: stdout carries JSON-RPC frames only, so redirect every

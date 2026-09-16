@@ -7,55 +7,29 @@
  * and a hung terminal, which is the worst possible answer to the most basic
  * question. The sub-commands each had `--help` already; the top level did not.
  *
- * `help <command>` delegates rather than repeating anything. The sub-command
+ * `help <command>` forwards rather than repeating anything. The sub-command
  * usage strings are the source of truth for their own flags, so duplicating a
  * summary here would only create two places to update and one of them would go
- * stale. Delegation is injected (`HelpDeps.delegate`) because the router lives
- * in `index.ts`, which cannot be imported from here — importing it would run
- * the CLI again.
+ * stale. The commands come from the table in `commands.ts`, which is also what
+ * the router routes on, so this module cannot know a command the router lacks
+ * or miss one it has.
  *
- * This module has no imports and no top-level side effects on purpose: the
- * router imports it statically so that {@link HELP_TOKENS} is read by the code
- * that routes on it, and a static import of a file that is only string
- * literals costs server-mode startup nothing measurable.
+ * `commands.ts` is the only import, and nothing runs at load time: the router
+ * imports this module statically at no measurable cost to server-mode startup.
  */
+import { COMMANDS, COMMAND_NAMES, HELP_TOKENS, VERSION_TOKENS, isCommandName } from './commands.js';
+import type { CommandTable } from './commands.js';
 
 export const EXIT_OK = 0;
 export const EXIT_USAGE = 2;
 
 /**
- * Tokens the router treats as a request for this help.
- *
- * `index.ts` reads this table, so adding a spelling here is the whole change.
- * A copy in the router would be the bug this file exists to fix, waiting to
- * come back: a spelling added here but not there falls through to server mode.
+ * `help help` and `help version` are not worth special cases: neither has a
+ * usage string of its own, and the overview is the honest answer to both.
+ * Rejecting `help version` as unknown would be wrong, since `ssh-mcp version`
+ * is a command that works; it gets the overview, where `version` is listed.
  */
-export const HELP_TOKENS = ['help', '--help', '-h'] as const;
-
-/**
- * The router's other non-command tokens. `help version` has nothing to forward
- * to — there is no usage string for a flag — but rejecting it as unknown would
- * be wrong too, since `ssh-mcp version` is a command that works. It gets the
- * overview, where `version` is listed.
- */
-export const VERSION_TOKENS = ['version', '--version', '-v'] as const;
-
-/**
- * Topics `help <topic>` will forward to.
- *
- * This mirrors the command branches in `index.ts` and cannot be derived from
- * them: the router is a chain of string compares in a module nothing may
- * import. So a new top-level command is added in both places, and
- * `tests/unit/helpCommand.test.ts` pins this list so the second place is not
- * forgotten silently.
- */
-export const HELP_TOPICS = ['install', 'host', 'doctor', 'setup'] as const;
-
-export type HelpTopic = (typeof HELP_TOPICS)[number];
-
-export function isHelpTopic(value: string): value is HelpTopic {
-  return (HELP_TOPICS as readonly string[]).includes(value);
-}
+const OVERVIEW_TOKENS: readonly string[] = [...HELP_TOKENS, ...VERSION_TOKENS];
 
 /**
  * Descriptions start at this column. Kept as a number rather than eyeballed
@@ -100,18 +74,8 @@ export const USAGE = [
 export interface HelpDeps {
   out?: (text: string) => void;
   err?: (text: string) => void;
-  /**
-   * Runs `<topic> <rest...> --help` through the top-level router. Supplied by
-   * `index.ts`; tests pass a fake so this module can be exercised without
-   * starting anything.
-   *
-   * `rest` is everything after the topic, forwarded as typed: `help host add`
-   * becomes `host add --help`, which is what the person meant, rather than the
-   * `host` group usage with the `add` silently dropped. Whatever the topic
-   * makes of the extra words is its business — its own parser already knows
-   * how to refuse an argument it does not take.
-   */
-  delegate?: (topic: HelpTopic, rest: readonly string[]) => Promise<number>;
+  /** The commands to forward into. Tests substitute fakes for {@link COMMANDS}. */
+  commands?: CommandTable;
 }
 
 /**
@@ -119,11 +83,17 @@ export interface HelpDeps {
  *
  * `argv` is what followed the help token, so `ssh-mcp help doctor` arrives here
  * as `['doctor']`. The overview goes to stdout with exit 0: help that was asked
- * for is not an error. A topic nobody has is a usage error and goes to stderr
- * with exit 2 — the same split `host` already makes. A forwarded topic writes
- * wherever that command writes its own `--help`.
+ * for is not an error. A command nobody has is a usage error and goes to stderr
+ * with exit 2 — the same split `host` already makes. A forwarded command writes
+ * wherever it writes its own `--help`.
  *
- * A delegate that rejects is not caught here. It would mean the sub-command
+ * Everything after the command is forwarded as typed: `help host add` becomes
+ * `host add --help`, which is what the person meant, rather than the `host`
+ * group usage with the `add` silently dropped. Whatever the command makes of
+ * the extra words is its business — its own parser already knows how to refuse
+ * an argument it does not take.
+ *
+ * A loader that rejects is not caught here. It would mean the sub-command
  * module itself failed to load or threw before parsing, and `main()` in
  * `index.ts` already turns that into `ssh-mcp failed: …` with exit 1; wrapping
  * it in a help-shaped message would hide which command is broken.
@@ -131,26 +101,19 @@ export interface HelpDeps {
 export async function runHelp(argv: readonly string[], deps: HelpDeps = {}): Promise<number> {
   const out = deps.out ?? ((text: string): void => void process.stdout.write(`${text}\n`));
   const err = deps.err ?? ((text: string): void => void process.stderr.write(`${text}\n`));
+  const [command, ...rest] = argv;
 
-  const topic = argv[0];
-  if (topic === undefined) {
+  if (command === undefined || OVERVIEW_TOKENS.includes(command)) {
     out(USAGE);
     return EXIT_OK;
   }
 
-  if (isHelpTopic(topic) && deps.delegate !== undefined) {
-    return deps.delegate(topic, argv.slice(1));
+  if (isCommandName(command)) {
+    const runCommand = await (deps.commands ?? COMMANDS)[command]();
+    return runCommand([...rest, '--help']);
   }
 
-  // `help help` and `help version` are not worth special cases: neither has a
-  // usage string of its own, and the overview is the honest answer to both.
-  const overviewTokens: readonly string[] = [...HELP_TOKENS, ...VERSION_TOKENS];
-  if (isHelpTopic(topic) || overviewTokens.includes(topic)) {
-    out(USAGE);
-    return EXIT_OK;
-  }
-
-  err(`ssh-mcp help: unknown command "${topic}": expected ${HELP_TOPICS.join(', ')}`);
+  err(`ssh-mcp help: unknown command "${command}": expected ${COMMAND_NAMES.join(', ')}`);
   err('');
   err(USAGE);
   return EXIT_USAGE;
