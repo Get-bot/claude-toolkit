@@ -4,6 +4,8 @@ Claude Code용 TIL 자동화 스킬.
 
 커밋 로그나 오늘 한 일을 던지면, 4섹션 구조로 잡아서 Notion에 저장하고 GitHub에 Markdown으로 push한다.
 
+기본 대상은 **Notion + TIL 레포**다. 요청하면 [Quartz](https://quartz.jzhao.xyz/) 기반 지식베이스 레포에도 옵션으로 게시한다.
+
 ## 왜 만들었나
 
 TIL은 좋은 습관인데, 매일 하기엔 세팅이 너무 번거롭다.
@@ -88,6 +90,8 @@ Cache-Aside랑 Write-Through 차이를 확실히 이해하게 됨.
 
 "TIL 깃에 올려줘" 하면 Notion에서 가져와서 frontmatter 붙인 Markdown으로 변환, Git push까지 처리한다.
 
+"퀄츠에도 올려줘" 하면 같은 본문을 Quartz 지식베이스 레포에도 게시한다 — 영역 폴더에 배치하고, 태그를 그 레포 규칙(소문자 kebab-case)으로 바꾸고, 영역 `index.md`에 큐레이션 한 줄을 추가한다.
+
 ## 설치
 
 [skills](https://github.com/vercel-labs/skills) CLI로 설치한다.
@@ -123,6 +127,12 @@ cp -r claude-toolkit/til-manager ~/.claude/skills/til-manager
 
 TIL용 레포를 만들고 `posts/` 디렉토리를 준비한다. 여기에 파일이 쌓인다.
 
+### Quartz (옵션)
+
+TIL을 공개 지식베이스에도 올리고 싶을 때만 필요하다. 안 쓰면 이 항목은 통째로 무시해도 된다.
+
+[Quartz](https://quartz.jzhao.xyz/) 레포를 클론해두면, 처음 "퀄츠에도 올려줘" 할 때 Claude가 원격 URL과 로컬 경로를 한 번 물어보고 기억한다. 영역 폴더 목록은 레포에서 직접 읽어오고, 레포에 작성 규칙 문서(예: `content/notes/writing-guide.md`)가 있으면 그 규칙을 이 스킬보다 우선한다.
+
 ## 사용법
 
 Claude Code나 Claude.ai에서 자연어로 요청하면 된다.
@@ -132,6 +142,7 @@ Claude Code나 Claude.ai에서 자연어로 요청하면 된다.
 | TIL 작성 | "오늘 TIL 작성해줘", "커밋 정리해서 TIL 만들어줘" |
 | 특정 주제 TIL | "Redis 공부한 거 TIL로 만들어줘" |
 | Git push | "TIL 깃에 올려줘", "오늘 TIL 푸시해줘" |
+| Quartz에도 게시 (옵션) | "퀄츠에도 올려줘", "블로그에도 올려줘", "지식베이스에도 올려줘" |
 | 하루 회고 | "오늘 뭐했는지 정리해줘" |
 
 입력은 커밋 로그, 자유 텍스트, 둘 다 섞어서 가능하다.
@@ -186,7 +197,8 @@ til-manager/
     ├── human-writing-guide.md  # 자연스러운 문체 가이드
     ├── frontmatter-spec.md     # slug/파일명 규칙, frontmatter 규격, 본문 변환
     ├── notion-setup.md         # Notion DB 연결 설정
-    └── git-repo-setup.md       # TIL Git 레포 설정 (브랜치 감지, 메모리 저장)
+    ├── git-repo-setup.md       # TIL Git 레포 설정 (브랜치 감지, 메모리 저장)
+    └── quartz-publish.md       # Quartz 지식베이스 게시 (옵션)
 ```
 
 ## 커스터마이징
@@ -198,6 +210,7 @@ til-manager/
 | Notion DB 설정 | `references/notion-setup.md` |
 | frontmatter/slug 규칙 | `references/frontmatter-spec.md` |
 | Git 레포 설정 | `references/git-repo-setup.md` |
+| Quartz 영역 매핑/태그 변환 | `references/quartz-publish.md` |
 
 ## Git Push 결과물
 
@@ -217,12 +230,25 @@ description: "Cache-Aside 패턴 적용, TTL 기반 무효화 전략"
 파일명: `posts/TIL-260409-redis-cache.md`
 커밋 메시지: `TIL: 2026-04-09 - Redis 캐시 전략`
 
+### Quartz에도 게시하면
+
+본문은 그대로, frontmatter의 `tags` 한 줄만 그 레포 규칙으로 바뀐다.
+
+```markdown
+tags: ["redis", "cache-aside", "spring-boot"]
+```
+
+파일명: `content/<영역>/TIL-260409-redis-cache.md` (`posts/`가 아니라 `concurrency/`, `database/` 같은 영역 폴더)
+커밋 메시지: `docs(<영역>): [TIL-260409] Redis 캐시 전략` — 레포마다 그 레포의 커밋 컨벤션을 따른다
+
 ## 제한사항
 
 - Notion MCP가 연결되어 있어야 Notion 저장이 가능하다
 - Claude.ai에서는 Git push가 직접 안 된다 (파일 다운로드 후 수동 push)
 - Claude Code (CLI)에서는 Git push까지 자동으로 처리된다
 - 같은 날 같은 주제로 다시 쓰면 업데이트할지 새로 만들지 물어본다
+- Quartz 게시는 **명시적으로 요청할 때만** 실행된다. "TIL 깃에 올려줘"에는 따라붙지 않는다
+- Quartz 영역 폴더와 `index.md` 큐레이션 한 줄은 초안을 보여주고 승인받은 뒤에 커밋한다
 
 ## 라이선스
 
