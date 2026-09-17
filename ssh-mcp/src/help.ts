@@ -55,6 +55,8 @@ export const USAGE = [
   '  host add [<alias> <user@host[:port]>]  호스트 등록(키 생성·지문 고정).',
   '  host list [--json]                     등록된 호스트를 표로 출력합니다.',
   '  doctor [--json] [--patterns]           설정·키·연결 상태를 진단합니다.',
+  '  connect <alias>                        등록된 호스트에 ssh로 접속합니다.',
+  '  exec <alias> -- <command...>           접속 없이 명령 한 줄을 실행합니다.',
   '  help [<command> ...]                   이 도움말, 또는 해당 명령의 사용법.',
   '',
   'Options:',
@@ -68,7 +70,8 @@ export const USAGE = [
   '  ssh-mcp doctor                         확인',
   '',
   '설치 없이 쓰려면 `ssh-mcp` 자리에 `npx -y @get-bot/ssh-mcp`를 씁니다.',
-  '`ssh-mcp setup`은 `ssh-mcp host add`의 별칭으로 계속 동작합니다.',
+  '`ssh-mcp setup`은 `ssh-mcp host add`의 별칭이며 0.4.0에서 제거됩니다.',
+  '`connect`·`exec`만 시스템 ssh를 쓰고 승인·감사를 거치지 않습니다.',
 ].join('\n');
 
 export interface HelpDeps {

@@ -142,6 +142,8 @@ async function handler(
     duration_ms: output.duration_ms,
     background_job: output.background_job,
     coverage: observedCoverage(host.alias),
+    stdout_retained: output.stdout_retained,
+    stderr_retained: output.stderr_retained,
   });
 }
 

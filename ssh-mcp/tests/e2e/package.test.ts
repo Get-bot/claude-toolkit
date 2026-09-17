@@ -17,6 +17,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TOOL_NAMES } from '../../src/audit.js';
 import {
   MCP_PROTOCOL_VERSION,
   RESPONSE_TIMEOUT_MS,
@@ -36,15 +37,19 @@ const PKG_ROOT = resolve(__dirname, '..', '..');
 /** The package's only `bin` entry (package.json → bin). */
 const BIN_NAME = 'ssh-mcp';
 
-const EXPECTED_TOOLS = [
-  'list_hosts',
-  'exec',
-  'upload',
-  'download',
-  'open_session',
-  'run_in_session',
-  'close_session',
-].sort();
+/**
+ * The tool surface, taken from the canonical list in `src/audit.ts` instead of
+ * retyped here.
+ *
+ * The retyped copy was wrong within one release: v1.1 added `history` and
+ * `fetch_output`, and a hardcoded seven names plus `toHaveLength(7)` turns that
+ * into a red package-smoke job that says nothing about packaging. Deriving it
+ * sharpens the claim rather than weakening it — "the packed tarball exposes
+ * exactly the surface the source declares" is what this leg is for, and a
+ * server and a `TOOL_NAMES` that disagree is precisely the bug worth catching.
+ * The count stays visible in the test name, which cannot go stale either.
+ */
+const EXPECTED_TOOLS = [...TOOL_NAMES].sort();
 
 function resolveEntrypoint(): Launch {
   const tgz = process.env.SSH_MCP_TGZ;
@@ -118,7 +123,7 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
     expect(response.result?.serverInfo?.name).toBe('ssh-mcp');
   });
 
-  it('accepts notifications/initialized and then lists exactly the 7 spec tools', async () => {
+  it(`accepts notifications/initialized and then lists exactly the ${String(EXPECTED_TOOLS.length)} spec tools`, async () => {
     // Notifications carry no `id` and expect no response frame.
     sendFrame(server, { jsonrpc: '2.0', method: 'notifications/initialized' } as JsonRpcRequest);
 
@@ -126,7 +131,7 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
     const response = await waitForResponse(server, 2);
 
     const names = (response.result?.tools ?? []).map((t) => t.name).sort();
-    expect(names).toHaveLength(7);
+    expect(names).toHaveLength(EXPECTED_TOOLS.length);
     expect(names).toEqual(EXPECTED_TOOLS);
   });
 

@@ -78,6 +78,8 @@ describe('USAGE names everything a user can actually run', () => {
     'host add',
     'host list',
     'doctor',
+    'connect <alias>',
+    'exec <alias> -- <command...>',
     'help',
     'setup',
     'version',
@@ -86,6 +88,29 @@ describe('USAGE names everything a user can actually run', () => {
     'npm i -g @get-bot/ssh-mcp',
   ])('mentions %s', (needle) => {
     expect(USAGE).toContain(needle);
+  });
+
+  it('lists every command the router can reach', () => {
+    // The `it.each` above pins the wording of each row; this pins the *set*.
+    // A command added to `COMMANDS` without a row here is a command that works
+    // and that nobody can discover, and the compiler has nothing to say about
+    // that — `connect` and `exec` arrived exactly this way.
+    for (const command of COMMAND_NAMES) {
+      expect(USAGE, `${command} is routable but unlisted`).toContain(command);
+    }
+  });
+
+  it('says when the `setup` alias goes away (AC-A2)', () => {
+    // A deprecation nobody is told about is not a deprecation. The overview is
+    // where a user who typed `setup` out of habit will look first.
+    expect(USAGE).toContain('0.4.0');
+  });
+
+  it('warns that connect and exec skip the safety gates', () => {
+    // These two are the one path in the package that spawns the system ssh and
+    // takes no classification, approval or audit (D6, AC-C4). The overview is
+    // read before the README, so the caveat belongs here too.
+    expect(USAGE).toContain('시스템 ssh');
   });
 
   it('says what running with no arguments does', () => {

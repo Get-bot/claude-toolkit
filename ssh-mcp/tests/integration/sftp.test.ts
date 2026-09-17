@@ -16,7 +16,7 @@ import { isCodedError } from '../../src/errors.js';
 import { closeAll, getConnection } from '../../src/ssh/pool.js';
 import { download, upload } from '../../src/ssh/sftp.js';
 import {
-  authorizeKey,
+  authorizeKeyOverSsh,
   hostEntryFor,
   startEndpoint,
   type TestEndpoint,
@@ -57,7 +57,7 @@ function remotePath(name: string): string {
 beforeAll(async () => {
   endpoint = await startEndpoint();
   clientKey = generateClientKey();
-  authorizeKey(endpoint, clientKey.publicKey);
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   conn = await getConnection(hostEntryFor(endpoint), Buffer.from(clientKey.privateKey, 'utf8'));
   localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-mcp-sftp-'));
 });

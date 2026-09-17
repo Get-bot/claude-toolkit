@@ -63,6 +63,31 @@ export const ERROR_CODES = {
   sudo_password_required: 'sudo_password_required',
   /** `setup` ran against an existing alias without `--force` (C17). */
   alias_exists: 'alias_exists',
+  /**
+   * A `history` cursor no longer names a position we can resume from
+   * (ADR-011, AC-H2b).
+   *
+   * Not in the §5.3 table: added in v1.1. No existing code fits. The audit file
+   * rotates underneath a paging reader, so "your cursor is from before a
+   * rotation we cannot follow" is neither a refusal (`command_denied`), nor a
+   * missing object (`session_not_found` is about sessions), nor a bug
+   * (`internal_error`). It is a normal, recoverable outcome whose only correct
+   * remedy is "call `history` again without a cursor", and the caller can only
+   * be told that if it has its own code.
+   */
+  history_cursor_stale: 'history_cursor_stale',
+  /**
+   * `fetch_output` was given a reference the store no longer holds
+   * (ADR-010, AC-O4).
+   *
+   * Not in the §5.3 table: added in v1.1. Retained output lives in memory for
+   * ten minutes under a total-size cap, so a reference can disappear through
+   * expiry, eviction or a server restart. Reusing `session_expired` would say
+   * a session died when none was involved, and `internal_error` would report a
+   * routine lifetime event as a bug. The distinction matters to the caller:
+   * this code means "re-run the command", not "retry the fetch".
+   */
+  output_expired: 'output_expired',
   /** Not in §5.3: unexpected exception inside the audit wrapper. */
   internal_error: 'internal_error',
 } as const;

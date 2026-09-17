@@ -27,7 +27,7 @@ import {
   stopReaper,
 } from '../../src/ssh/session.js';
 import {
-  authorizeKey,
+  authorizeKeyOverSsh,
   currentEndpointKind,
   hostEntryFor,
   shellAvailable,
@@ -69,13 +69,19 @@ interface Connected {
 
 let open: Connected[] = [];
 
-/** Start an endpoint, authorise the test key and connect the pool to it. */
+/**
+ * Start an endpoint, authorise the test key and connect the pool to it.
+ *
+ * Every describe in this file goes through here, so this is the one place that
+ * has to know the sshd tier installs its key over SSH rather than with `fs`
+ * (A8, AC-T3a).
+ */
 async function connect(
   options: StartEndpointOptions = {},
   alias = 'session-host'
 ): Promise<Connected> {
   const endpoint = await startEndpoint(options);
-  authorizeKey(endpoint, clientKey.publicKey);
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   const conn = await getConnection(
     hostEntryFor(endpoint, { alias }),
     Buffer.from(clientKey.privateKey, 'utf8')
@@ -98,6 +104,10 @@ afterEach(async () => {
   });
 });
 
+// FIXTURE-ONLY: `shell` (StartEndpointOptions) picks the bridged shell, and the
+// sshd tier ignores it — the container's login shell is whatever `chsh` set. The
+// leg below also asserts `detected_shell === 'bash'` for the bash run, which the
+// real-sshd shell matrix would contradict on its dash and zsh steps.
 describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}`, () => {
   it('reports the detected shell when opening (AC14.3)', async () => {
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
@@ -318,6 +328,8 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
   });
 });
 
+// FIXTURE-ONLY: `shellArgs` starts the login shell with `-e -u`, and only the
+// in-process fixture can choose the argv of the remote shell.
 describe.skipIf(!onFixture || !shellAvailable('bash'))('inherited shell options (F5)', () => {
   it('neutralises set -e and set -u from the login shell', async () => {
     const { endpoint, conn, alias } = await connect({ shell: 'bash', shellArgs: ['-e', '-u'] });
@@ -345,6 +357,10 @@ describe.skipIf(!onFixture || !shellAvailable('bash'))('inherited shell options 
  * later (the build shipped with Git for Windows included) happen to support
  * that option, so the test drives the same fatal path with an option no dash
  * knows. The point being fixed is the mechanism, not one option name.
+ *
+ * FIXTURE-ONLY: `shell` pins dash for this describe alone, which the sshd tier
+ * cannot do per-test — its login shell is set for the whole container by the
+ * shell-matrix step that `chsh`-ed it.
  */
 describe.skipIf(!onFixture || !shellAvailable('dash'))('dash preamble (AC14.4)', () => {
   it('opens a session on dash and runs commands', async () => {
@@ -370,6 +386,9 @@ describe.skipIf(!onFixture || !shellAvailable('dash'))('dash preamble (AC14.4)',
   });
 });
 
+// FIXTURE-ONLY: `shellEmulation` fakes fish/cmd/powershell/silent logins. A real
+// sshd can only offer shells that are installed, and installing a broken one to
+// watch us refuse it would be staging the answer.
 describe.skipIf(!onFixture)('unsupported shells (AC14.5, AC14.6, AC15.3, PM-2)', () => {
   it.each([
     ['fish', 'fish'],
@@ -411,7 +430,11 @@ describe.skipIf(!onFixture)('unsupported shells (AC14.5, AC14.6, AC15.3, PM-2)',
   });
 });
 
-describe.skipIf(!onFixture || !shellAvailable(SHELL))('lifecycle (AC15)', () => {
+// Runs on both tiers (A9, AC-T3): nothing here needs the fixture's own shell,
+// only a real one. `shellAvailable` asks about THIS machine's PATH, which is the
+// right question for the bridged fixture and the wrong one for a container whose
+// login shell the CI step already set, so it only gates the fixture tier.
+describe.skipIf(onFixture && !shellAvailable(SHELL))('lifecycle (AC15)', () => {
   it('refuses the sixth session on one host (AC15.2)', async () => {
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const host = hostEntryFor(endpoint, { alias });
@@ -543,7 +566,10 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))('lifecycle (AC15)', () => 
   });
 });
 
-describe.skipIf(!onFixture || !shellAvailable(SHELL))('command timeout (AC11.4)', () => {
+// Runs on both tiers (A9, AC-T3). This is where the sshd tier earns its keep:
+// the surviving-session branch needs a real `pkill` reaping a real child, which
+// is why the image installs `procps`.
+describe.skipIf(onFixture && !shellAvailable(SHELL))('command timeout (AC11.4)', () => {
   it('ends with a precise error and never leaves the session half-alive', async () => {
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);

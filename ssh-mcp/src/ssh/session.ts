@@ -40,6 +40,7 @@ import type { Client, ClientChannel } from 'ssh2';
 import { ERROR_CODES, isCodedError } from '../errors.js';
 import { logger } from '../log.js';
 import { recordObservedShell } from '../config/state.js';
+import { retainCapFor } from '../output/limits.js';
 import { SshOperationError, errorMessage } from './error.js';
 import { createExcerptAccumulator, type ExcerptEncoding, type ExcerptMeta } from './excerpt.js';
 import { execOnce, hasTrailingBackground } from './exec.js';
@@ -838,6 +839,14 @@ export interface SessionRunResult {
   encoding: ExcerptEncoding;
   duration_ms: number;
   background_job: boolean;
+  /**
+   * The whole stream before excerpting, or `null` when it outgrew
+   * `retainCapFor()` (ADR-010, AC-O7). Registered by `commandResultBody()`,
+   * never here — which is what keeps the timeout path above from minting a
+   * reference (AC-O1b).
+   */
+  stdout_retained: Buffer | null;
+  stderr_retained: Buffer | null;
 }
 
 /**
@@ -872,8 +881,10 @@ async function runCommand(
   options: RunInSessionOptions
 ): Promise<SessionRunResult> {
   const started = Date.now();
-  const stdout = createExcerptAccumulator({ cap: options.maxOutputBytes });
-  const stderr = createExcerptAccumulator({ cap: options.maxOutputBytes });
+  // One opt-in per accumulator, at the only place they are created (ADR-010).
+  const retain = { cap: retainCapFor(options.maxOutputBytes) };
+  const stdout = createExcerptAccumulator({ cap: options.maxOutputBytes, retain });
+  const stderr = createExcerptAccumulator({ cap: options.maxOutputBytes, retain });
   const marker = nextMarker(record);
   const frame = buildCommandFrame(command, {
     marker,
@@ -956,6 +967,8 @@ async function runCommand(
       out.meta.encoding === 'base64' || errOut.meta.encoding === 'base64' ? 'base64' : 'utf8',
     duration_ms: Date.now() - started,
     background_job: hasTrailingBackground(command),
+    stdout_retained: out.retained,
+    stderr_retained: errOut.retained,
   };
 }
 

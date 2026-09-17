@@ -24,7 +24,7 @@ import { ERROR_CODES } from '../../src/errors.js';
 import { clearTokens } from '../../src/safety/tokens.js';
 import { closeAll } from '../../src/ssh/pool.js';
 import { resetSessions } from '../../src/ssh/session.js';
-import { authorizeKey, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
+import { authorizeKeyOverSsh, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
 import type { TestEndpoint } from '../fixtures/endpoints.js';
 import { generateClientKey } from '../fixtures/hostKeys.js';
 import { startMcpTestClient, writeRegistry, type McpTestClient } from '../fixtures/mcpClient.js';
@@ -52,7 +52,7 @@ beforeAll(async () => {
   home = createTmpHome('ssh-mcp-transfer-');
   endpoint = await startEndpoint();
   const clientKey = generateClientKey();
-  authorizeKey(endpoint, clientKey.publicKey);
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   keyPath = path.join(ensureKeysDir(), 'fixture');
   fs.writeFileSync(keyPath, clientKey.privateKey, { encoding: 'utf8', mode: 0o600 });
   workDir = fs.mkdtempSync(path.join(endpoint.localSandboxDir, 'work-'));

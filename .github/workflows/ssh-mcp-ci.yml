@@ -1,9 +1,13 @@
 name: ssh-mcp CI
 
-# Phase 7 (plan .omc/plans/ssh-mcp-plan.md §Phase 7). Five jobs:
-#   build-test        — matrix build/typecheck/test + false-positive gate (7.1, 7.6)
-#   shell-matrix      — session.test.ts on bash/dash/zsh against the fixture tier (7.2b); the real
-#                       OpenSSH container tier (7.2) is deferred to v1.1
+# Phase 7 (plan .omc/plans/ssh-mcp-plan.md §Phase 7) plus the v1.1 sshd tier
+# (.omc/plans/ssh-mcp-v11-plan.md §5 A4-A11, ADR-015). Six jobs:
+#   build-test        — matrix build/typecheck/test + false-positive gate (7.1, 7.6), and the guard
+#                       that keeps the real-sshd gate from being softened (PM-5)
+#   shell-matrix      — session.test.ts on bash/dash/zsh against the fixture tier (7.2b)
+#   real-sshd         — the same integration suite against a real OpenSSH server built from
+#                       ssh-mcp/tests/sshd/, then the shell matrix again inside that container
+#                       (AC-T1..AC-T6)
 #   no-build-tools    — Windows consumer install of the packed tarball with optional native deps
 #                       skipped (7.3)
 #   package-smoke     — npm pack + npx smoke test, both OS (7.4)
@@ -54,6 +58,26 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: ssh-mcp/package-lock.json
+
+      # PM-5 / D9. The real-sshd job is a required gate, and the cheapest way to
+      # neuter a gate is a one-line failure-swallowing flag on it. This guard
+      # deliberately lives in a DIFFERENT job from the one it protects: put it
+      # inside real-sshd and the same flag would swallow the guard's own exit 1.
+      #
+      # The needle is spliced from two halves so this step never matches itself.
+      # `working-directory: .` overrides the workflow-level ssh-mcp default.
+      # Residual risk (R39, accepted): softening build-test itself would hide
+      # this, one step further away. Disabling the main test job is loud.
+      - name: guard — the real-sshd gate cannot be softened (PM-5)
+        shell: bash
+        working-directory: .
+        run: |
+          needle="continue-on""-error"
+          if grep -nF "$needle" .github/workflows/ssh-mcp-ci.yml; then
+            echo "::error file=.github/workflows/ssh-mcp-ci.yml::the lines above disable a required check (D9, PM-5); real-sshd must fail the PR when it fails"
+            exit 1
+          fi
+          echo "no failure-swallowing flag in this workflow"
 
       - name: npm ci
         run: npm ci
@@ -108,20 +132,21 @@ jobs:
       - name: npm ci
         run: npm ci
 
-      # A real-OpenSSH container tier (StrictModes / authorized_keys / sftp subsystem — the spec's
-      # "local sshd container") is a v1.1 item. For v1 the gating evidence for AC7-AC9/AC11.3/AC13/
-      # AC14 is the in-process ssh2 Server fixture bridged to a real bash process, exercised by the
-      # build-test job. This job adds the AC14.3/AC14.4 shell coverage on bash/dash/zsh.
+      # 7.2b — shell matrix on the FIXTURE tier: bash / dash / zsh. This job does not talk to any
+      # sshd container; it bridges to a real bash/dash/zsh process spawned on the runner itself,
+      # which is what exercises AC14.3/AC14.4 per shell. The `real-sshd` job now covers the other
+      # half — the same file against a container whose *login* shell is each of the three (AC-T5).
       #
-      # 7.2b — shell matrix: bash / dash / zsh. This step does NOT talk to any sshd container — it
-      # runs against the in-process `fixture` tier, which bridges to a real bash/dash/zsh process
-      # spawned on the runner itself, so it genuinely exercises AC14.3/AC14.4 on each shell (CR-1:
-      # running this with ENDPOINT=sshd was a no-op, since every describe in session.test.ts is
-      # gated with `describe.skipIf(!onFixture || ...)` and skips entirely off the fixture tier).
-      # `busybox` is installed for ash-dependent assertions; `zsh` for the zsh leg; `dash`/`bash`
-      # ship on ubuntu-latest already.
-      - name: install zsh + busybox for shell matrix
-        run: sudo apt-get update && sudo apt-get install -y zsh busybox
+      # CR-1 history: running this job with ENDPOINT=sshd used to be a no-op, because every
+      # describe in session.test.ts was gated `describe.skipIf(!onFixture || ...)`. Two of them are
+      # no longer fixture-gated (A9), which is what makes the real-sshd legs mean something.
+      #
+      # `zsh` for the zsh leg; `dash`/`bash` ship on ubuntu-latest already. `busybox` used to be
+      # installed here "for ash-dependent assertions" — there are none: the loop below is
+      # bash/dash/zsh, and session.test.ts only mentions ash in a comment and in a list of
+      # acceptable `detected_shell` values. Dropped rather than carried.
+      - name: install zsh for shell matrix
+        run: sudo apt-get update && sudo apt-get install -y zsh
 
       - name: shell matrix — session.test.ts (AC14.3, AC14.4)
         shell: bash
@@ -131,6 +156,130 @@ jobs:
             echo "=== SHELL_UNDER_TEST=$shell ==="
             SHELL_UNDER_TEST="$shell" ENDPOINT=fixture npx vitest run tests/integration/session.test.ts
           done
+
+  # ADR-015 / AC-T1..AC-T6. The in-process ssh2 fixture speaks the protocol but is not an sshd:
+  # four claims can only be settled here (AC-T4) — authorized_keys installed with modes that
+  # `StrictModes yes` accepts, a pinned fingerprint enforced against a real host key, no process
+  # left behind after a timeout, and SFTP round trips through the real subsystem.
+  #
+  # NO failure-swallowing flag on this job, ever (D9, PM-5, and the reason bd8f53b's deferral cost
+  # a release). The guard that enforces that lives in build-test, one job away, on purpose.
+  #
+  # Time budget (AC-T6): image build ~1 min, readiness under 5 s in practice, the full integration
+  # suite once (~3-4 min), then session.test.ts three times (~1 min each) = ~9-10 min against the
+  # 20 min cap. If it ever crowds the cap, narrow the three shell steps to the two describes A9
+  # un-gated rather than raising the limit.
+  #
+  # The job name is pinned rather than generated, because it is the string that goes into branch
+  # protection once the tier has been green five times running (plan §8.4-1). A matrix here would
+  # have produced three names instead of one.
+  real-sshd:
+    name: real-sshd (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SSHD_IMAGE: ssh-mcp-sshd
+      SSHD_CONTAINER: ssh-mcp-sshd-run
+      # The container's throwaway credential, matching the Dockerfile's ARG defaults. Not a secret:
+      # it authenticates a container that only ever listens on this runner's loopback, and the
+      # whole point of the account is that password auth is what `setup` starts from.
+      SSH_MCP_SSHD_HOST: 127.0.0.1
+      SSH_MCP_SSHD_PORT: "2222"
+      SSH_MCP_SSHD_USER: sshmcp
+      SSH_MCP_SSHD_PASSWORD: sshd-tier-password-v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ssh-mcp/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: build the sshd image
+        run: docker build -t "$SSHD_IMAGE" ./tests/sshd
+
+      - name: start the sshd container
+        run: docker run -d --name "$SSHD_CONTAINER" -p "$SSH_MCP_SSHD_PORT":22 "$SSHD_IMAGE"
+
+      # A fixed sleep is either too short (flake) or too long (waste), and the flake is what makes
+      # people reach for the flag this job forbids. 0.5 s x 60 caps the wait at 30 s (AC-T6).
+      - name: wait for sshd to accept connections
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            if (echo > "/dev/tcp/$SSH_MCP_SSHD_HOST/$SSH_MCP_SSHD_PORT") 2>/dev/null; then
+              echo "sshd accepted a connection after $attempt attempt(s)"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::sshd did not accept a connection within 30s"
+          docker logs "$SSHD_CONTAINER" || true
+          exit 1
+
+      - name: integration suite against the real sshd (AC-T3, AC-T4)
+        run: npm run test:integration
+        env:
+          ENDPOINT: sshd
+
+      # AC-T5: the same file once per login shell, set with `chsh` inside the container. sshd reads
+      # the passwd entry per session, so no restart is needed. SHELL_UNDER_TEST is set to the same
+      # shell — the two describes that run here no longer depend on it (A9), but a run labelled
+      # `zsh` that had `bash` in its environment would be a trap for whoever reads the log next.
+      - name: shell matrix in the container — bash (AC-T5)
+        run: docker exec "$SSHD_CONTAINER" chsh -s /bin/bash "$SSH_MCP_SSHD_USER"
+
+      - name: session.test.ts on bash
+        run: npx vitest run tests/integration/session.test.ts
+        env:
+          ENDPOINT: sshd
+          SHELL_UNDER_TEST: bash
+
+      # /usr/bin/dash rather than /bin/dash: same binary after usrmerge, but only the former is
+      # listed in the image's /etc/shells, so nothing downstream can object to it.
+      - name: shell matrix in the container — dash (AC-T5)
+        run: docker exec "$SSHD_CONTAINER" chsh -s /usr/bin/dash "$SSH_MCP_SSHD_USER"
+
+      - name: session.test.ts on dash
+        run: npx vitest run tests/integration/session.test.ts
+        env:
+          ENDPOINT: sshd
+          SHELL_UNDER_TEST: dash
+
+      - name: shell matrix in the container — zsh (AC-T5)
+        run: docker exec "$SSHD_CONTAINER" chsh -s /bin/zsh "$SSH_MCP_SSHD_USER"
+
+      - name: session.test.ts on zsh
+        run: npx vitest run tests/integration/session.test.ts
+        env:
+          ENDPOINT: sshd
+          SHELL_UNDER_TEST: zsh
+
+      # PM-5 observability: a red run here has to explain itself without a rerun, and sshd's own
+      # LogLevel VERBOSE view of the refused auth or the rejected key is the half our test output
+      # cannot show. `-e` in the image's CMD puts it on stderr, so `docker logs` has it.
+      # `|| true` because this step runs after something already went wrong, and a container that
+      # never started is one of the ways it can go wrong. A second red step there would say nothing
+      # the first one did not.
+      - name: capture sshd logs
+        if: failure()
+        run: docker logs "$SSHD_CONTAINER" > "${{ runner.temp }}/sshd.log" 2>&1 || true
+
+      - name: upload sshd logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-sshd-logs
+          path: ${{ runner.temp }}/sshd.log
+          if-no-files-found: warn
+
+      - name: stop the sshd container
+        if: always()
+        run: docker rm -f "$SSHD_CONTAINER" || true
 
   no-build-tools:
     name: no-build-tools (windows-latest)

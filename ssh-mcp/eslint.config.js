@@ -42,6 +42,37 @@ export default tseslint.config(
     ],
     rules: { 'no-console': 'off' },
   },
+  // --------------------------------------------------------------------------
+  // Layer guards. One block per guard, each naming the guard id from the plan so
+  // a reader can find the reasoning; append new ones here rather than merging
+  // them, because a merged block hides which rule is protecting what.
+  // --------------------------------------------------------------------------
+  {
+    // G-1 (plan §2.3 OP-5, 부록 B-1). `src/connect/` is the only place that
+    // looks for or spawns the system `ssh`, and it is a CLI-only exception to
+    // this package's "pure JS, no OpenSSH needed" promise. The promise holds
+    // only while the server path cannot reach that code, so the import is
+    // refused here instead of being left to a convention a future edit would
+    // not see. `src/doctor/` is deliberately absent from this list: it reports
+    // `ssh` presence as INFO (G-4) and is not on the server path.
+    files: ['src/server.ts', 'src/tools/**/*.ts', 'src/ssh/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/connect/*', '**/connect/**', './connect/*', '../connect/*'],
+              message:
+                'src/connect/ spawns the system ssh and is CLI-only (guard G-1). The server, its ' +
+                'tools and the ssh2 transport must keep working on a machine with no OpenSSH, so ' +
+                'they may not import it. Entry is the dynamic-import thunk in src/commands.ts.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   {
     files: ['*.config.ts', '*.config.js', 'eslint.config.js'],
     rules: { '@typescript-eslint/no-require-imports': 'off' },

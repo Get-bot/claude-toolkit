@@ -1,11 +1,12 @@
 /**
- * The stdio MCP server and the seven tools (plan rows 4.1, 4.10, 4.12, 4.13).
+ * The stdio MCP server and its registered tools (plan rows 4.1, 4.10, 4.12,
+ * 4.13; v1.1 rows C8, D8).
  *
  * Three things live here and nowhere else:
  *
- * - **Registration.** Exactly seven tools, asserted at startup (AC2.2). A
- *   build that registers six or eight fails to start rather than presenting a
- *   surface nobody agreed to.
+ * - **Registration.** Exactly the `TOOL_NAMES` set, asserted at startup
+ *   (AC2.2, AC-H6). A build that registers one fewer or one more fails to start
+ *   rather than presenting a surface nobody agreed to.
  * - **The audit wrapper.** Every handler is invoked through `runTool`, so one
  *   call is one audit line on every path, including refusals and throws
  *   (AC20.1).
@@ -27,6 +28,7 @@ import {
   type ElicitOutcome,
   type ElicitRequest,
 } from './safety/approval.js';
+import { resetOutputStore } from './output/store.js';
 import { stopSweep } from './safety/tokens.js';
 import { closeAll } from './ssh/pool.js';
 import { resetSessions } from './ssh/session.js';
@@ -41,6 +43,8 @@ import { createToolContext, type ClientInfo, type ToolContext } from './tools/co
 import type { ToolDefinition } from './tools/define.js';
 import { downloadTool } from './tools/download.js';
 import { execTool } from './tools/exec.js';
+import { fetchOutputTool } from './tools/fetchOutput.js';
+import { historyTool } from './tools/history.js';
 import { listHostsTool } from './tools/listHosts.js';
 import { openSessionTool } from './tools/openSession.js';
 import { runInSessionTool } from './tools/runInSession.js';
@@ -65,7 +69,7 @@ export interface CreateServerOptions {
 
 export interface ServerHandle {
   mcp: McpServer;
-  /** Registration order; length is asserted to be seven. */
+  /** Registration order; the set is asserted to equal `TOOL_NAMES`. */
   toolNames: readonly ToolName[];
   /** Client identity after `initialize`, `null` before it. */
   clientInfo(): ClientInfo | null;
@@ -150,7 +154,7 @@ function warnTokenFallbackHosts(client: ClientInfo): void {
   );
 }
 
-/** Build the server and register the seven tools. Does not connect a transport. */
+/** Build the server and register every tool. Does not connect a transport. */
 export function createServer(options: CreateServerOptions = {}): ServerHandle {
   const mcp = new McpServer({ name: SERVER_NAME, version: readPackageVersion() });
 
@@ -209,8 +213,10 @@ export function createServer(options: CreateServerOptions = {}): ServerHandle {
   register(openSessionTool);
   register(runInSessionTool);
   register(closeSessionTool);
+  register(historyTool);
+  register(fetchOutputTool);
 
-  assertSevenTools(registered);
+  assertRegisteredTools(registered);
 
   mcp.server.oninitialized = (): void => {
     const version = mcp.server.getClientVersion();
@@ -242,12 +248,15 @@ export function createServer(options: CreateServerOptions = {}): ServerHandle {
 }
 
 /**
- * Startup assertion (AC2.2): exactly the seven names, each once.
+ * Startup assertion (AC2.2, AC-H6): exactly the {@link TOOL_NAMES} set, each
+ * once.
  *
  * Cheap, and it turns "the tool surface changed" into a failure at start rather
- * than into a surprise in someone's client.
+ * than into a surprise in someone's client. The expected count is derived from
+ * `TOOL_NAMES` rather than written out, so adding a tool to the canonical list
+ * and forgetting to register it is the failure, not a number two files apart.
  */
-export function assertSevenTools(names: readonly string[]): void {
+export function assertRegisteredTools(names: readonly string[]): void {
   const expected = [...TOOL_NAMES].sort();
   const actual = [...names].sort();
   if (actual.length !== expected.length || actual.some((name, i) => name !== expected[i])) {
@@ -268,6 +277,10 @@ function shutdown(): void {
     });
   }
   closeAll();
+  // Retained output is worthless once the transport is gone — nothing can ask
+  // for it again — and it is the largest thing this process holds, up to the
+  // store's 64 MiB cap (ADR-010).
+  resetOutputStore();
   // The token sweep interval is unref'd, so it cannot hold the process open,
   // but leaving it running after the transport closes keeps a timer alive for
   // no reason (CR-12).

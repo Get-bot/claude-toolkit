@@ -1,13 +1,14 @@
 /**
- * The 15 `ssh-mcp doctor` checks (plan rows 5b.1, 5b.4, 5b.6, §5.11).
+ * The 16 `ssh-mcp doctor` checks (plan rows 5b.1, 5b.4, 5b.6, §5.11; item 16
+ * from v1.1 F14).
  *
  * Each check is an independent `{ id, name, run() }` triple, so the renderer
  * never has to know what a check does and `--json` can serialise the list
- * directly (AC21.8). Six of the 15 kinds are per host: `buildChecks()`
+ * directly (AC21.8). Six of the 16 kinds are per host: `buildChecks()`
  * instantiates one check per registered alias for those, which is what gives
  * AC21.3, AC21.4 and AC21.11 their per-host rows. With an empty registry each
  * per-host kind still contributes one informational row, so the table always
- * shows all 15 kinds (AC21.1).
+ * shows all 16 kinds (AC21.1).
  *
  * Two hard rules:
  * - **No remote command is ever run.** Host probing stops at authentication and
@@ -36,6 +37,11 @@ import {
   buildServerCommand,
   formatServerCommand,
 } from '../config/registration.js';
+// The only import of the CLI-only `ssh` lookup outside `src/connect/` itself.
+// Guard G-1 forbids it from `src/server.ts`, `src/tools/` and `src/ssh/` — the
+// server path — and `doctor` is none of those: it is a command, loaded through
+// the same dynamic thunk `connect` is, and it only reports (G-4).
+import { resolveSshBinary } from '../connect/ssh.js';
 import { DEFAULT_APPROVAL_FALLBACK } from '../config/schema.js';
 import type { HostEntry } from '../config/schema.js';
 import { loadState } from '../config/state.js';
@@ -73,7 +79,7 @@ export interface Check {
   run(): Promise<CheckOutcome>;
 }
 
-/** The 15 check kinds of §5.11, in table order. */
+/** The 16 check kinds of §5.11 (plus F14's item 16), in table order. */
 export const CHECK_KINDS = [
   'node-version',
   'ssh2-load',
@@ -90,6 +96,11 @@ export const CHECK_KINDS = [
   'host-shell',
   'patterns',
   'snippets',
+  // Item 16, appended rather than inserted: every comment and README row in
+  // this package numbers the checks above, and renaming fifteen items to make
+  // room for one would be a large diff that says nothing. See `sshBinaryCheck`
+  // for why this one can never FAIL.
+  'ssh-binary',
 ] as const;
 
 export type CheckKind = (typeof CHECK_KINDS)[number];
@@ -821,6 +832,33 @@ function patternsCheck(): Check {
   });
 }
 
+/**
+ * Item 16: is there a system `ssh` for `connect`/`exec` to delegate to (F14)?
+ *
+ * **Always INFO, never FAIL — that is guard G-4, not a formatting choice.** A
+ * FAIL here would say "this installation is broken", and it is not: the MCP
+ * server and all its tools speak pure-JS ssh2 and never look at `ssh`. Only the
+ * two commands a person types by hand need it. The precedent is item 2, which
+ * treats a missing `cpu-features` as information for the same reason.
+ *
+ * It is also load-bearing for the exit code. `doctor` exits 1 when any check
+ * FAILs, and a clean CI runner without OpenSSH must still exit 0 (AC21.10) —
+ * the `no-build-tools` job asserts exactly that.
+ */
+function sshBinaryCheck(): Check {
+  return sync('ssh-binary', 'ssh 실행 파일 (connect·exec 전용)', () => {
+    const binary = resolveSshBinary();
+    return {
+      status: 'INFO',
+      detail:
+        binary === null
+          ? 'PATH에 없습니다 — connect·exec만 사용할 수 없고, MCP 서버와 도구는 ' +
+            '순수 JS ssh2로 그대로 동작합니다'
+          : `${binary} — connect·exec가 이 실행 파일에 위임합니다`,
+    };
+  });
+}
+
 function snippetsCheck(): Check {
   return sync('snippets', '호스트 설정 스니펫', () => ({
     status: 'PASS',
@@ -867,6 +905,7 @@ export function buildChecks(options: DoctorOptions = {}): Check[] {
     ...hostShellChecks(ctx),
     patternsCheck(),
     snippetsCheck(),
+    sshBinaryCheck(),
   ];
 }
 

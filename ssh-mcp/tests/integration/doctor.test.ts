@@ -165,7 +165,7 @@ describe('a clean machine with no hosts', () => {
     }
   );
 
-  it('shows every one of the 15 check kinds (AC21.1)', async () => {
+  it('shows every one of the 16 check kinds (AC21.1)', async () => {
     const code = await runDoctor(['--json']);
     expect(code).toBe(0);
     const kinds = new Set(parseJson().checks.map((check) => check.id.split(':')[0]));
@@ -556,6 +556,74 @@ describe('--patterns (AC21.9)', () => {
     // `reason` is the string that shows up in a denial, so it must survive.
     for (const rule of payload.argvRules) {
       expect(rule.reason).toBe(`${rule.grade}:${rule.id}`);
+    }
+  });
+});
+
+/**
+ * Item 16, `ssh-binary` (F14, guard G-4).
+ *
+ * The whole point of this check is that it cannot fail. `connect`/`exec`
+ * delegate to the system `ssh`, but the MCP server and its tools do not, so a
+ * machine without OpenSSH is a perfectly healthy installation. If this row ever
+ * became a FAIL, `doctor` would exit 1 on a clean runner and the `no-build-tools`
+ * job — whose entire premise is a stock Windows box — would go red while
+ * nothing was actually wrong.
+ */
+describe('the ssh binary row (F14, G-4)', () => {
+  /**
+   * Run `body` with `PATH` set to `value`, then put `PATH` back.
+   *
+   * `await body()` inside the `try`, not `return body()`: the checks read
+   * `PATH` asynchronously, so a synchronous `finally` would restore the real
+   * `PATH` before `doctor` ever looked at it and every assertion here would
+   * quietly measure the developer's machine instead.
+   *
+   * On Windows `process.env` is case-insensitive, so writing `PATH` also
+   * rewrites `Path` and there is only one value to save and restore.
+   */
+  async function withPath<T>(value: string, body: () => Promise<T>): Promise<T> {
+    const original = process.env.PATH;
+    process.env.PATH = value;
+    try {
+      return await body();
+    } finally {
+      if (original === undefined) delete process.env.PATH;
+      else process.env.PATH = original;
+    }
+  }
+
+  it('is INFO and keeps the exit code at 0 when PATH has no ssh', async () => {
+    const code = await withPath('', () => runDoctor(['--json'], { icacls: stubIcacls() }));
+
+    expect(code).toBe(0);
+    const entry = row(parseJson().checks, 'ssh-binary');
+    expect(entry.status).toBe('INFO');
+    expect(entry.detail).toContain('PATH에 없습니다');
+    // The row has to say so, because "ssh: not found" printed by a program
+    // called ssh-mcp reads as "nothing here works".
+    expect(entry.detail).toContain('MCP 서버와 도구');
+  });
+
+  it('reports the resolved path, still as INFO, when one is on PATH', async () => {
+    const dir = fs.mkdtempSync(path.join(home.dir, 'fakebin-'));
+    const binary = path.join(dir, process.platform === 'win32' ? 'ssh.exe' : 'ssh');
+    fs.writeFileSync(binary, '');
+    if (process.platform !== 'win32') fs.chmodSync(binary, 0o755);
+
+    const code = await withPath(dir, () => runDoctor(['--json'], { icacls: stubIcacls() }));
+
+    expect(code).toBe(0);
+    const entry = row(parseJson().checks, 'ssh-binary');
+    expect(entry.status).toBe('INFO');
+    expect(entry.detail).toContain(dir);
+  });
+
+  it('never reports FAIL, whichever way PATH goes', async () => {
+    for (const value of ['', path.dirname(process.execPath)]) {
+      captured = '';
+      await withPath(value, () => runDoctor(['--json'], { icacls: stubIcacls() }));
+      expect(row(parseJson().checks, 'ssh-binary').status).not.toBe('FAIL');
     }
   });
 });

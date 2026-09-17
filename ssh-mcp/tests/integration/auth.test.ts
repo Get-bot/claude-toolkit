@@ -114,6 +114,15 @@ function authorizedKeysPath(endpoint: TestEndpoint): string {
   return path.join(endpoint.remoteHomeDir, '.ssh', 'authorized_keys');
 }
 
+/**
+ * How many times `line` appears in the remote `authorized_keys` — FIXTURE-ONLY.
+ *
+ * It reads the file with local `fs`, which is only the remote file on the tier
+ * whose server runs in this process. On the sshd tier the same path names a
+ * directory inside the container, so callers gate this on `endpoint.fixture`.
+ * Idempotence is still proved there, by `installAuthorizedKey` reporting
+ * `alreadyPresent` — a fact the remote script computed, not one we read.
+ */
 function countKeyLine(endpoint: TestEndpoint, line: string): number {
   const file = authorizedKeysPath(endpoint);
   if (!fs.existsSync(file)) return 0;
@@ -202,7 +211,7 @@ describe('setup against a live endpoint', () => {
     const publicKeyLine = fs.readFileSync(publicKeyPath('prod'), 'utf8').trim();
 
     // AC7.3: exactly one copy of our key on the remote side.
-    expect(countKeyLine(endpoint, publicKeyLine)).toBe(1);
+    if (endpoint.fixture !== undefined) expect(countKeyLine(endpoint, publicKeyLine)).toBe(1);
 
     // AC7.4 and AC7.6: pinned fingerprint and a recorded approval fallback.
     const entry = loadEntry('prod');
@@ -358,7 +367,7 @@ describe('setup against a live endpoint', () => {
     expect(code).toBe(0);
     const secondKeyLine = fs.readFileSync(publicKeyPath('rolled'), 'utf8').trim();
     expect(secondKeyLine).not.toBe(firstKeyLine);
-    expect(countKeyLine(endpoint, secondKeyLine)).toBe(1);
+    if (endpoint.fixture !== undefined) expect(countKeyLine(endpoint, secondKeyLine)).toBe(1);
     expect(loadEntry('rolled')?.approvalFallback).toBe('token');
     // Both fingerprints are shown side by side before the confirmation.
     expect(forced.output()).toContain('기존 지문');
@@ -377,10 +386,13 @@ describe('setup against a live endpoint', () => {
       },
     });
     try {
+      // `alreadyPresent` is the remote script's own verdict, so this half of
+      // the idempotence claim holds on both tiers; the line count is the
+      // fixture-only confirmation of it.
       const result = await installAuthorizedKey(client, secondKeyLine);
       expect(result.alreadyPresent).toBe(true);
       expect(result.added).toBe(false);
-      expect(countKeyLine(endpoint, secondKeyLine)).toBe(1);
+      if (endpoint.fixture !== undefined) expect(countKeyLine(endpoint, secondKeyLine)).toBe(1);
     } finally {
       client.end();
     }

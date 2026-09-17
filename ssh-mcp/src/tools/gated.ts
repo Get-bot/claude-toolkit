@@ -9,6 +9,7 @@
 import { ERROR_CODES, CodedError } from '../errors.js';
 import type { ToolTextResult } from '../errors.js';
 import { redact } from '../log.js';
+import { putOutput } from '../output/store.js';
 import type { CommandGrade } from '../config/schema.js';
 import { gateCommand, gateFileOperation } from '../safety/approval.js';
 import type { FileToolName, GateClient, GateResult, GatedToolName } from '../safety/approval.js';
@@ -153,6 +154,9 @@ export interface CommandResultInput {
   duration_ms: number;
   background_job: boolean;
   coverage: ClassificationCoverage | null;
+  /** Whole streams before excerpting, for {@link withOutputRef} (ADR-010). */
+  stdout_retained: Buffer | null;
+  stderr_retained: Buffer | null;
 }
 
 /**
@@ -160,6 +164,25 @@ export interface CommandResultInput {
  * (finding F17).
  */
 const STREAM_FIELDS: readonly string[] = ['stdout', 'stderr'];
+
+/**
+ * Register a truncated stream and put its handle on the metadata (ADR-010,
+ * AC-O1, AC-O1a, AC-O1b).
+ *
+ * `meta.truncated` is the predicate, and it has to be: `omitted_lines > 0`
+ * misses a non-UTF-8 stream, whose line counts are all `null`, and misses a
+ * stream that only lost bytes to the per-line 8 KiB cut. Both of those are
+ * truncation the caller would want to fetch (AC-O1a).
+ *
+ * Doing this here rather than in the excerpter is what makes AC-O1b structural:
+ * a timed-out command rejects before it ever reaches this function, so its
+ * `output_ref` cannot be anything but `null`.
+ */
+function withOutputRef(meta: ExcerptMeta, retained: Buffer | null): ExcerptMeta {
+  if (!meta.truncated || retained === null) return meta;
+  const ref = putOutput(retained, meta.encoding);
+  return ref === null ? meta : { ...meta, output_ref: ref };
+}
 
 /**
  * The success body for both command tools, in one shape.
@@ -170,6 +193,10 @@ const STREAM_FIELDS: readonly string[] = ['stdout', 'stderr'];
  * AC12). The two stream fields are redacted with no length limit — the
  * excerpter already bounds them, at `cap + 320 KiB` in the worst case — while
  * PEM masking and the default ceiling still apply to everything else.
+ *
+ * This is also where a truncated stream gets its `output_ref`
+ * ({@link withOutputRef}): the only function that knows both whether the
+ * excerpter cut anything and what the response looks like (ADR-010).
  */
 export function commandResultBody(input: CommandResultInput): ToolTextResult {
   const body: Record<string, unknown> = {
@@ -177,8 +204,8 @@ export function commandResultBody(input: CommandResultInput): ToolTextResult {
     ...(input.sessionId === null ? {} : { session_id: input.sessionId }),
     stdout: input.stdout,
     stderr: input.stderr,
-    stdout_meta: input.stdout_meta,
-    stderr_meta: input.stderr_meta,
+    stdout_meta: withOutputRef(input.stdout_meta, input.stdout_retained),
+    stderr_meta: withOutputRef(input.stderr_meta, input.stderr_retained),
     exit_code: input.exit_code,
     signal: input.signal,
     encoding: input.encoding,

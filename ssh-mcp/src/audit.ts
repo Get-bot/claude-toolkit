@@ -36,7 +36,11 @@ import { TRUNCATION_SUFFIX, logger, redactRecord, truncateUtf8 } from './log.js'
 /** Written on every line so a mixed-version file stays readable (§5.10). */
 export const AUDIT_SCHEMA_VERSION = 1;
 
-/** The seven v1 tools (AC2.2). Canonical list; import it rather than retyping. */
+/**
+ * Every registered tool (AC2.2, AC-H5, AC-O6). Canonical list; import it rather
+ * than retyping. `history` and `fetch_output` joined in v1.1 — they are audited
+ * like any other call, with `command: null`, because `runTool()` wraps them too.
+ */
 export const TOOL_NAMES = [
   'list_hosts',
   'exec',
@@ -45,6 +49,8 @@ export const TOOL_NAMES = [
   'open_session',
   'run_in_session',
   'close_session',
+  'history',
+  'fetch_output',
 ] as const;
 
 /** Exactly eight outcomes (AC20.4). */

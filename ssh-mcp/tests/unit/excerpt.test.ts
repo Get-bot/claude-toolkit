@@ -376,3 +376,69 @@ describe('stdout and stderr are independent', () => {
     expect(smallResult.meta.omitted_lines).toBe(0);
   });
 });
+
+describe('opt-in retention (ADR-010, AC-O4a, AC-O7)', () => {
+  it('retains nothing unless asked, which is what keeps the old callers honest', () => {
+    const result = excerpt(Buffer.from('a\nb\n'), { cap: CAP });
+    expect(result.retained).toBeNull();
+    expect(result.meta.output_ref).toBeNull();
+  });
+
+  it('returns the whole stream byte for byte when it fits the retain cap', () => {
+    const { data } = generateLines(200, 100);
+    const accumulator = createExcerptAccumulator({
+      cap: 4096,
+      retain: { cap: 64 * 1024 },
+    });
+    for (let offset = 0; offset < data.length; offset += 999) {
+      accumulator.push(data.subarray(offset, Math.min(offset + 999, data.length)));
+    }
+    const result = accumulator.finish();
+
+    // The excerpt lost the middle; the retained buffer did not.
+    expect(result.meta.truncated).toBe(true);
+    expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThan(data.length);
+    expect(result.retained).not.toBeNull();
+    expect((result.retained as Buffer).equals(data)).toBe(true);
+  });
+
+  it('gives up entirely rather than retaining a prefix (AC-O4a)', () => {
+    const { data } = generateLines(200, 100);
+    const accumulator = createExcerptAccumulator({ cap: 4096, retain: { cap: 1024 } });
+    accumulator.push(data);
+    const result = accumulator.finish();
+
+    expect(result.meta.truncated).toBe(true);
+    // Truncated and yet nothing to fetch: the caller reads this as a null
+    // `output_ref`, which is exactly what AC-O4a describes.
+    expect(result.retained).toBeNull();
+  });
+
+  it('retains an untruncated stream too, because nothing knows in advance', () => {
+    const data = Buffer.from('short output\n', 'utf8');
+    const accumulator = createExcerptAccumulator({ cap: CAP, retain: { cap: 64 * 1024 } });
+    accumulator.push(data);
+    const result = accumulator.finish();
+    expect(result.meta.truncated).toBe(false);
+    expect((result.retained as Buffer).equals(data)).toBe(true);
+  });
+
+  it('retains a non-UTF-8 stream unchanged (AC-O1a)', () => {
+    const data = Buffer.alloc(9000);
+    for (let i = 0; i < data.length; i += 1) data[i] = (i * 7) % 256;
+    const accumulator = createExcerptAccumulator({ cap: 1024, retain: { cap: 64 * 1024 } });
+    accumulator.push(data);
+    const result = accumulator.finish();
+
+    expect(result.meta.encoding).toBe('base64');
+    expect(result.meta.truncated).toBe(true);
+    expect(result.meta.omitted_lines).toBeNull();
+    expect((result.retained as Buffer).equals(data)).toBe(true);
+  });
+
+  it('returns the same retained buffer on a repeated finish', () => {
+    const accumulator = createExcerptAccumulator({ cap: CAP, retain: { cap: 1024 } });
+    accumulator.push(Buffer.from('a\nb\n'));
+    expect(accumulator.finish()).toEqual(accumulator.finish());
+  });
+});

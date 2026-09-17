@@ -19,6 +19,7 @@
  *
  * Not in the plan (`.omc/plans/ssh-mcp-plan.md`); added 2026-09-14.
  */
+import { isReservedAlias } from '../commands.js';
 import {
   AliasSchema,
   APPROVAL_MODES,
@@ -68,6 +69,25 @@ export function isUsableHostname(value: string): boolean {
   return DNS_NAME.test(value);
 }
 
+/**
+ * Answers to pre-fill, from `--from-ssh-config` and from `--alias`/`--port`.
+ *
+ * A default is not an answer. Everything here is still asked, and what the
+ * person confirms is what the command runs with — which is why the ssh_config
+ * import goes through this field and not through {@link WizardIo.given}
+ * (AC-S5, ADR-013).
+ */
+export interface WizardDefaults {
+  hostname?: string;
+  user?: string;
+  alias?: string;
+  port?: number;
+  /** `IdentityFile`/`IdentityAgent` were in the block and are ignored (AC-S4). */
+  identityIgnored?: boolean;
+  /** The `Host` name the values came from; its presence turns on the summary. */
+  source?: string;
+}
+
 export interface WizardIo {
   prompter: Prompter;
   /** The interactive questions. Injected so tests answer without a terminal. */
@@ -85,6 +105,8 @@ export interface WizardIo {
   given: GivenFlags;
   /** TCP reachability check; injected so tests need no network. */
   probeTcp: TcpProbe;
+  /** Pre-filled answers. See {@link WizardDefaults}. */
+  defaults?: WizardDefaults;
 }
 
 /**
@@ -127,9 +149,17 @@ export function suggestAlias(
   if (hostname.includes(':')) return null;
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/u.test(hostname)) return null;
   const first = hostname.split('.')[0] ?? '';
-  if (!AliasSchema.safeParse(first).success) return null;
-  if (!force && taken.has(first)) return null;
-  return first;
+  return acceptableAlias(first, taken, force) ? first : null;
+}
+
+/**
+ * Would the alias question accept this value? The same predicate its
+ * `validate` uses, so no default is offered that the next keystroke refuses.
+ */
+function acceptableAlias(value: string, taken: ReadonlySet<string>, force: boolean): boolean {
+  if (!AliasSchema.safeParse(value).success) return false;
+  if (isReservedAlias(value)) return false;
+  return force || !taken.has(value);
 }
 
 /** Join the answers back into the `user@host[:port]` argument. */
@@ -150,10 +180,33 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
   const p = io.prompter;
   p.writeLine('');
   p.writeLine('원격 호스트를 등록합니다. 몇 가지만 물어보겠습니다.');
+  const source = io.defaults?.source;
+  if (source !== undefined) {
+    p.writeLine(`ssh_config의 "${source}" 항목에서 읽은 값을 미리 채웠습니다. 고칠 수 있습니다.`);
+    // AC-S4: the two keywords we read and drop. Said here rather than in the
+    // parser because this is where the person is looking at the values, and
+    // "your existing key is not being reused" is the thing they would
+    // otherwise have to infer from a new key appearing later.
+    if (io.defaults?.identityIgnored === true) {
+      p.writeLine(
+        'IdentityFile·IdentityAgent는 무시합니다. 기존 키는 재사용하지 않고 ' +
+          '이 호스트 전용 키를 새로 만듭니다.'
+      );
+    }
+  }
   p.writeLine('');
 
-  const askHost = (): Promise<string> =>
-    askText(io, '호스트 주소 (예: web01.example.com)', null, (answer) => {
+  /**
+   * The address default is spent on the first question only: a re-ask means
+   * that value did not answer, and offering it again makes Enter the obvious
+   * move and then fails the same way.
+   */
+  let hostDefault = io.defaults?.hostname ?? null;
+
+  const askHost = (): Promise<string> => {
+    const offered = hostDefault;
+    hostDefault = null;
+    return askText(io, '호스트 주소 (예: web01.example.com)', offered, (answer) => {
       if (answer === '') return '호스트 주소는 비워 둘 수 없습니다.';
       // Checked before the shape, because an escape sequence would otherwise
       // scramble the screen while the message explaining it is printed.
@@ -165,19 +218,25 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
       }
       return null;
     });
+  };
 
   const askPort = async (): Promise<number> => {
-    const text = await askText(io, 'SSH 포트', String(DEFAULT_PORT), (answer) => {
-      if (!/^\d+$/u.test(answer)) return '숫자만 입력하세요.';
-      const value = Number.parseInt(answer, 10);
-      return value >= 1 && value <= 65535 ? null : '1에서 65535 사이여야 합니다.';
-    });
+    const text = await askText(
+      io,
+      'SSH 포트',
+      String(io.defaults?.port ?? DEFAULT_PORT),
+      (answer) => {
+        if (!/^\d+$/u.test(answer)) return '숫자만 입력하세요.';
+        const value = Number.parseInt(answer, 10);
+        return value >= 1 && value <= 65535 ? null : '1에서 65535 사이여야 합니다.';
+      }
+    );
     return Number.parseInt(text, 10);
   };
 
   let hostname = await askHost();
 
-  const user = await askText(io, '사용자명', null, (answer) => {
+  const user = await askText(io, '사용자명', io.defaults?.user ?? null, (answer) => {
     if (answer === '') return '사용자명은 비워 둘 수 없습니다.';
     if (hasControlChars(answer)) return '사용자명에 쓸 수 없는 문자가 있습니다.';
     // `HostEntrySchema` enforces this too, but only at `store.save()` — after
@@ -215,24 +274,33 @@ export async function runSetupWizard(io: WizardIo): Promise<string[]> {
     port = await askPort();
   }
 
-  const alias = await askText(
-    io,
-    'alias (이 호스트를 부를 이름)',
-    suggestAlias(hostname, io.takenAliases, io.given.force),
-    (answer) => {
-      if (!AliasSchema.safeParse(answer).success) {
-        return '영숫자로 시작하고 영숫자·점·밑줄·하이픈만 쓸 수 있습니다 (최대 64자).';
-      }
-      // Re-pinning a host key must be asked for explicitly, so the wizard never
-      // quietly turns a collision into a --force run. With --force already on
-      // the command line it *was* asked for, and refusing here would demand a
-      // flag the user has typed.
-      if (!io.given.force && io.takenAliases.has(answer)) {
-        return `"${answer}"는 이미 있습니다. 다시 설정하려면 --force로 실행하세요.`;
-      }
-      return null;
+  // An alias from `--alias` or from ssh_config is offered only if the question
+  // below would take it; otherwise fall back to the hostname's first label.
+  const aliasSeed = io.defaults?.alias;
+  const aliasDefault =
+    aliasSeed !== undefined && acceptableAlias(aliasSeed, io.takenAliases, io.given.force)
+      ? aliasSeed
+      : suggestAlias(hostname, io.takenAliases, io.given.force);
+
+  const alias = await askText(io, 'alias (이 호스트를 부를 이름)', aliasDefault, (answer) => {
+    if (!AliasSchema.safeParse(answer).success) {
+      return '영숫자로 시작하고 영숫자·점·밑줄·하이픈만 쓸 수 있습니다 (최대 64자).';
     }
-  );
+    // `parseSetupArgs` refuses these too, and it runs *after* the wizard — so
+    // without this check the whole finished interview dies as a usage error
+    // (AC-C6).
+    if (isReservedAlias(answer)) {
+      return `"${answer}"는 ssh-mcp 명령 이름이라 alias로 쓸 수 없습니다.`;
+    }
+    // Re-pinning a host key must be asked for explicitly, so the wizard never
+    // quietly turns a collision into a --force run. With --force already on
+    // the command line it *was* asked for, and refusing here would demand a
+    // flag the user has typed.
+    if (!io.given.force && io.takenAliases.has(answer)) {
+      return `"${answer}"는 이미 있습니다. 다시 설정하려면 --force로 실행하세요.`;
+    }
+    return null;
+  });
 
   // Say what --force is about to do, once the alias is known. It is the one
   // answer here that overwrites something the user already has.

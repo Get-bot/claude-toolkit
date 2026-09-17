@@ -122,6 +122,13 @@ beforeAll(async () => {
     approvalFallback: 'token',
     privateKeyPath: keyPath,
   });
+  // Small enough that a few kilobytes of output is excerpted, which is what
+  // gives a stream an `output_ref` to keep out of the audit file (D9, AC-O5).
+  const tight = hostEntryFor(endpoint, {
+    alias: 'tight',
+    privateKeyPath: keyPath,
+    maxOutputBytes: 1024,
+  });
   const metadataOnly: HostEntry & { alias?: string } = {
     ...hostEntryFor(endpoint, {
       alias: 'meta-only',
@@ -137,6 +144,7 @@ beforeAll(async () => {
     'ask-token': askToken,
     'ask-closed': askClosed,
     deny: denyHost,
+    tight,
     'meta-only': metadataOnly,
   });
 });
@@ -158,7 +166,7 @@ afterEach(() => {
 });
 
 describe('one line per call (AC20.1, AC20.2)', () => {
-  it('writes exactly seven lines for the seven tools', async () => {
+  it('writes exactly one line per tool, for every tool', async () => {
     const uploadSource = path.join(localDir, 'upload-src.txt');
     fs.writeFileSync(uploadSource, 'audit-payload\n', 'utf8');
     const remote = remotePath('audit-upload.txt');
@@ -199,10 +207,15 @@ describe('one line per call (AC20.1, AC20.2)', () => {
       expect((await harness.callTool('close_session', { session_id: sessionId })).isError).toBe(
         false
       );
+      // The two v1.1 readers are audited like everything else (AC-H5, AC-O6).
+      expect((await harness.callTool('history', { limit: 1 })).isError).toBe(false);
+      // An unknown reference is the one `fetch_output` call that needs no prior
+      // truncated command; a failed call still leaves its line (AC20.3).
+      expect((await harness.callTool('fetch_output', { output_ref: 'absent' })).isError).toBe(true);
     });
 
     const lines = readAudit();
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(TOOL_NAMES.length);
     expect(lines.map((line) => line.tool)).toEqual([
       'list_hosts',
       'exec',
@@ -211,8 +224,32 @@ describe('one line per call (AC20.1, AC20.2)', () => {
       'open_session',
       'run_in_session',
       'close_session',
+      'history',
+      'fetch_output',
     ]);
     expect(new Set(lines.map((line) => line.tool))).toEqual(new Set(TOOL_NAMES));
+  });
+
+  it('records the two readers with no command attached (AC-H5, AC-O6)', async () => {
+    await withClient({ elicitation: 'none' }, async (harness) => {
+      expect((await harness.callTool('history', { limit: 5 })).isError).toBe(false);
+      await harness.callTool('fetch_output', { output_ref: 'no-such-reference' });
+    });
+
+    const lines = readAudit();
+    expect(lines).toHaveLength(2);
+    expect(lines.map((line) => line.tool)).toEqual(['history', 'fetch_output']);
+    expect(lines[1]?.error_code).toBe(ERROR_CODES.output_expired);
+    for (const line of lines) {
+      expect(line.command).toBeNull();
+      expect(line.normalized_command).toBeNull();
+      expect(line.segments).toBeNull();
+      expect(line.command_grade).toBeNull();
+      expect(line.host).toBeNull();
+      // No approval was asked for and none was skipped.
+      expect(line.approval_outcome).toBe('not-required');
+      expect(line.server_cannot_verify_human_approval).toBe(false);
+    }
   });
 
   it('carries every required field on every line', async () => {
@@ -524,6 +561,33 @@ describe('what the file must not contain (AC20.5)', () => {
     expect(line?.command).toBe(command);
     expect(line?.stdout_bytes).toBe(sentinel.length + 1);
     expect(line?.stderr_bytes).toBe(0);
+  });
+
+  it('keeps output_ref out of the audit line (D9, AC-O5)', async () => {
+    // 60 lines of 35 bytes: over the host's 1 KiB cap so the stream is
+    // excerpted, and under `retainCapFor(1024)` = 4 KiB so it is also retained.
+    // The response therefore carries a reference, which is the thing that must
+    // appear in the response and nowhere else.
+    const command = 'awk \'BEGIN{for(i=0;i<60;i++) print "ssh-mcp-output-ref-audit-line-0000"}\'';
+
+    const ref = await withClient({ elicitation: 'none' }, async (harness) => {
+      const result = await harness.callTool('exec', { host: 'tight', command });
+      expect(result.isError, result.text).toBe(false);
+      const meta = result.body.stdout_meta as Record<string, unknown>;
+      expect(meta.truncated).toBe(true);
+      expect(typeof meta.output_ref).toBe('string');
+      return meta.output_ref as string;
+    });
+
+    // The audit schema is `.strict()` (`src/audit.ts`), so a record carrying
+    // `output_ref` would be rejected outright and no line would be written.
+    // Both halves are asserted: the field is absent, and the value never
+    // appears anywhere in the file.
+    const lines = readAudit();
+    expect(lines).toHaveLength(1);
+    expect(Object.prototype.hasOwnProperty.call(lines[0] ?? {}, 'output_ref')).toBe(false);
+    expect(lines[0]?.truncated).toBe(true);
+    expect(fs.readFileSync(auditFilePath(), 'utf8')).not.toContain(ref);
   });
 });
 

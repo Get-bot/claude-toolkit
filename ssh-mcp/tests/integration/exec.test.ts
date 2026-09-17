@@ -20,7 +20,7 @@ import {
   hasConnection,
 } from '../../src/ssh/pool.js';
 import {
-  authorizeKey,
+  authorizeKeyOverSsh,
   currentEndpointKind,
   hostEntryFor,
   startEndpoint,
@@ -41,7 +41,7 @@ const budget = { timeoutMs: 20000, maxOutputBytes: 1048576 };
 beforeAll(async () => {
   endpoint = await startEndpoint();
   clientKey = generateClientKey();
-  authorizeKey(endpoint, clientKey.publicKey);
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   conn = await getConnection(hostEntryFor(endpoint), Buffer.from(clientKey.privateKey, 'utf8'));
 });
 
@@ -167,7 +167,12 @@ describe('timeout (AC11)', () => {
       code: 'command_timeout',
     });
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const check = await execOnce(conn, "pgrep -f 'sleep 37' || true", budget);
+    // `[s]leep` rather than `sleep`: sshd runs this check as `$SHELL -c "pgrep
+    // -f 'sleep 37' || true"`, so the plain pattern matches that shell's own
+    // command line and the check returns a PID even when nothing is sleeping
+    // (measured against the tests/sshd container). The bracket matches the
+    // running `sleep 37` and not the literal text of the check itself.
+    const check = await execOnce(conn, "pgrep -f '[s]leep 37' || true", budget);
     expect(check.stdout.trim()).toBe('');
   });
 });
