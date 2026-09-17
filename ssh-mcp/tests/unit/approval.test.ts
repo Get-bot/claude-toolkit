@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalFallback, ApprovalMode, HostEntry } from '../../src/config/schema.js';
 import { ERROR_CODES, toToolNotice } from '../../src/errors.js';
 import {
+  ELICIT_CONFIRM_DEFAULT,
   auditView,
   gateCommand,
   gateFileOperation,
@@ -966,6 +967,85 @@ describe('the approval dialog fits the three lines the client shows', () => {
     expect(columns(reasonLine)).toBeLessThanOrEqual(LABEL_BUDGET);
     // The grade is stated once, not repeated inside every pattern id.
     expect(reasonLine).not.toContain('destructive:');
+  });
+});
+
+describe('the checkbox never starts ticked (fail-open guard)', () => {
+  /**
+   * `default: false` is the measured difference between a gate and a
+   * formality. With it the box is drawn empty, so an untouched Accept submits
+   * `confirm: false` and the command is refused; with `default: true` the box
+   * is drawn **ticked**, so the same untouched Accept submits `confirm: true`
+   * and approves — observed in the first probe round, 2026-09-17, Claude Code
+   * 2.1.274 (`.omc/artifacts/elicit-probe-result.md`).
+   *
+   * That is one word of schema between the two behaviours, in a field whose
+   * purpose is not obvious from its name, on a path where getting it wrong
+   * fails open and silently. Nothing else in the suite would notice the flip:
+   * every other test drives `elicit` directly and never reads what the client
+   * would have drawn. So the value is pinned here, by identity, with the reason
+   * attached.
+   */
+  async function schemaFor(command: string): Promise<ElicitRequest['requestedSchema']> {
+    const seen: ElicitRequest[] = [];
+    await gate({
+      host: host('prod-web', 'ask-all', 'token'),
+      command,
+      client: {
+        supportsElicitation: true,
+        elicit: (request: ElicitRequest): Promise<ElicitOutcome> => {
+          seen.push(request);
+          return Promise.resolve('accept');
+        },
+      },
+    });
+    const request = seen[0];
+    if (request === undefined) throw new Error('no elicitation was sent');
+    return request.requestedSchema;
+  }
+
+  it('sends default: false, so an untouched Accept is a refusal', async () => {
+    for (const command of [SAFE_COMMAND, PRIVILEGED_COMMAND, DESTRUCTIVE_COMMAND]) {
+      const schema = await schemaFor(command);
+      expect(schema.properties.confirm?.default).toBe(false);
+    }
+  });
+
+  it('never sends default: true, which would approve untouched', async () => {
+    // Stated separately from the line above: if someone loosens that assertion
+    // to "is defined", this one still fails on the value that matters.
+    const schema = await schemaFor(DESTRUCTIVE_COMMAND);
+    expect(schema.properties.confirm?.default).not.toBe(true);
+  });
+
+  it('keeps the exported constant false', () => {
+    // The request builder reads the constant, so a flip there reaches every
+    // caller — including any future one that builds its own request.
+    expect(ELICIT_CONFIRM_DEFAULT).toBe(false);
+  });
+
+  it('still requires the field, so the default is not the whole answer', async () => {
+    // `default` decides what an untouched form submits; `required` is what
+    // keeps `confirm` present in the payload at all. AC17.1b needs both.
+    const schema = await schemaFor(DESTRUCTIVE_COMMAND);
+    expect(schema.required).toContain('confirm');
+  });
+
+  it('refuses the command when the person accepts without ticking', async () => {
+    // The end-to-end shape of the same fact: this is the exact payload the
+    // client sends for an untouched Accept, and it must not open the gate.
+    const result = await gate({
+      host: host('prod-web', 'ask-all', 'token'),
+      command: DESTRUCTIVE_COMMAND,
+      client: {
+        supportsElicitation: true,
+        elicit: (): Promise<ElicitOutcome> =>
+          Promise.resolve(interpretElicitResult('accept', { confirm: false })),
+      },
+    });
+    expect(result.kind).toBe('deny');
+    expect(result.approvalOutcome).toBe('declined');
+    expect(result.errorCode).toBe(ERROR_CODES.command_denied);
   });
 });
 

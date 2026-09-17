@@ -447,7 +447,8 @@ ssh -i <privateKeyPath> -p <port> -o IdentitiesOnly=yes <user>@<hostname> [명�
       "confirm": {
         "type": "boolean",
         "title": "스페이스로 체크 후 Accept",
-        "description": "체크하지 않은 채 Accept를 눌러도 제출되지 않습니다."
+        "description": "체크하지 않고 Accept를 누르면 실행하지 않습니다.",
+        "default": false
       }
     },
     "required": ["confirm"]
@@ -467,7 +468,9 @@ lionpay-stg (root@10.0.0.9:22) · exec
 
 세 줄인 이유는 Claude Code(2.1.271 실측)가 elicitation 메시지의 **첫 세 줄만 보여주고 나머지를 `… (+N more lines)`로 접으며, 그 접힌 부분은 펼칠 수 없기 때문**입니다. 사유가 길면 셋째 줄이 접히지 않도록 개수만 세어 `외 N개`로 줄입니다 — 전체 목록은 감사 로그의 `reasons`에 그대로 남습니다.
 
-**승인 창에서는 체크박스를 먼저 체크해야 합니다.** Claude Code(2.1.270, Windows 11 실측)는 이 필수 불리언 필드를 체크되지 않은 체크박스 `☐`로 그리고, 체크하지 않은 채 Accept를 누르면 "This field is required"로 제출을 막습니다. 그래서 체크 없이 Accept만 누르면 창이 그대로 남아 "승인이 안 된다"처럼 보이지만 Decline은 즉시 먹힙니다. 방향키나 Tab으로 체크박스에 포커스를 옮겨 스페이스로 `☑`로 바꾼 뒤 Accept를 누르세요. 같은 안내가 체크박스 제목(`스페이스로 체크 후 Accept`)과 그 `description`에도 들어 있습니다 — 제목은 좁은 창에서 잘리므로 눌러야 할 키를 앞에 두었고, 클라이언트가 `description`을 그리지 않을 수 있어 제목만으로도 뜻이 통하게 했습니다.
+**승인 창에서는 체크박스를 먼저 체크해야 합니다.** Claude Code(2.1.274, Windows 11 실측)는 이 필드를 체크되지 않은 체크박스 `☐`로 그립니다. 방향키나 Tab으로 체크박스에 포커스를 옮겨 스페이스로 `☑`로 바꾼 뒤 Accept를 누르세요. 체크하지 않고 그냥 Accept를 누르면 창은 닫히지만 `confirm: false`가 와서 **실행되지 않습니다** — 즉 손대지 않는 것 자체가 "실행하지 않겠다"는 답입니다. 같은 안내가 체크박스 제목(`스페이스로 체크 후 Accept`)과 그 `description`에도 들어 있습니다 — 제목은 좁은 창에서 잘리므로 눌러야 할 키를 앞에 두었고, 클라이언트가 `description`을 그리지 않을 수 있어 제목만으로도 뜻이 통하게 했습니다.
+
+**`default: false`는 장식이 아닙니다.** 같은 스키마를 세 가지로 바꿔가며 실측했습니다(2026-09-17, Claude Code 2.1.274). `default`를 빼면 체크 전에는 제출 자체가 "This field is required"로 막혀 Accept가 먹통 키처럼 보이고, `default: true`로 두면 체크박스가 **이미 체크된 채로** 떠서 손대지 않은 Accept가 곧바로 승인이 됩니다(fail-open). `default: false`만이 빈 체크박스로 떠서 양쪽 답이 모두 도달 가능하고, 위험한 쪽에 키 입력 하나를 요구합니다. 값이 `true`로 바뀌면 깨지는 테스트를 `tests/unit/approval.test.ts`에 두었습니다.
 
 `confirm: true` 요구 자체는 "Accept 버튼이 눌렸다"와 "실행하겠다는 값이 왔다"를 분리해 두려는 의도(AC17.1b)라 유지합니다. 이 형태는 MCP TypeScript SDK가 파괴적 작업 확인에 쓰는 공식 예제와 같습니다 — 필수 불리언 하나를 요구하고, `accept`로 돌아왔더라도 값이 `true`가 아니면 실행하지 않습니다.
 
