@@ -157,9 +157,11 @@ export interface ExcerptOptions {
    * per direction — is unchanged for every caller that does not ask. A caller
    * that does ask raises its own bound to `cap + 320 KiB + retain.cap`, still
    * independent of stream length. A stream that exceeds `retain.cap` is given
-   * up on the moment it does, and `retained` comes back `null`: partially
-   * retained bytes would be indistinguishable from the whole stream at the
-   * other end (AC-O4a).
+   * up on the moment it does, and `retention` comes back `{ kind: 'dropped' }`:
+   * partially retained bytes would be indistinguishable from the whole stream
+   * at the other end (AC-O4a). Not asking at all is the separate
+   * `{ kind: 'not_requested' }` — the two are distinct so a caller cannot
+   * report a stream nobody kept as one that was too large.
    *
    * The decision lives here rather than in a second buffer bolted onto the same
    * `data` handler because this is the only place that knows whether the stream
