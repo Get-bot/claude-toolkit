@@ -386,9 +386,9 @@ iteration 2의 "명시 CLI > ssh_config > 위저드"는 토큰 순서와 뒤집�
 | # | 작업 | 파일 | AC |
 |---|------|------|-----|
 | E1 | **브랜드 타입 + 재작성 헬퍼**: `ResolvedCommand`, `resolveCommand(raw, format)`, `internalCommand(raw)`(주석에 "모델 입력에는 쓰지 말 것"과 이유). 이 파일은 **브랜드 타입 전용**이고 리댁션은 두지 않는다 | 신규 `src/output/resolve.ts` | AC-J5a |
-| E1b | **ESLint 잠금**: `no-restricted-imports`에 **`importNames: ['internalCommand']`를 반드시 명시**한다 — 모듈 경로 단위로 막으면 같은 파일의 `resolveCommand`까지 막혀 `src/tools/exec.ts`·`src/tools/runInSession.ts`가 컴파일되지 않는다(두 도구가 반드시 import해야 하는 함수다). 형태는 `paths: [{ name: '…/output/resolve.js', importNames: ['internalCommand'], message: '…' }]`. **G-1과는 별도 블록 2개**다 — G-1의 범위는 `src/server.ts`·`src/tools/`·`src/ssh/`이고 E1b의 범위는 "`src/ssh/session.ts`와 `tests/**`를 제외한 전부"라 `files:`/`ignores:`가 다르다. 기존 블록 구조(`eslint.config.js:36-43`, `:46-47`, `:53-55`)를 따른다 | `eslint.config.js` | AC-J5a |
+| E1b | **ESLint 잠금**: 막는 대상은 `internalCommand`라는 **이름**이지 모듈 경로가 아니다 — 경로로 막으면 같은 파일의 `resolveCommand`까지 막혀 `src/tools/exec.ts`·`src/tools/runInSession.ts`가 컴파일되지 않는다(두 도구가 반드시 import해야 하는 함수다). **규칙은 `no-restricted-syntax`를 쓴다.** ~~`no-restricted-imports`의 `paths`/`importNames`~~ — 구현 중 실측으로 뒤집혔다(§15-1): E1b의 범위("`src/ssh/session.ts`와 `tests/**`를 제외한 전부")는 G-1의 범위(`src/server.ts`·`src/tools/`·`src/ssh/`)와 **필연적으로 겹치는데**, flat config는 같은 rule id의 옵션을 병합하지 않고 **교체**한다. 따라서 두 번째 `no-restricted-imports` 블록은 겹치는 경로에서 **G-1을 조용히 끈다**. `no-restricted-syntax`는 rule id가 달라 공존하고, 별칭(`as`)·네임스페이스 import 형태도 같이 잡는다. 셀렉터는 `ImportSpecifier[imported.name='internalCommand']`. 기존 블록 구조(`eslint.config.js`)를 따르고, G-1이 다시 꺼지지 않도록 회귀 테스트를 건다 | `eslint.config.js` | AC-J5a |
 | E2 | 시그니처 교체 3곳: `ApproveCommandInput.command`(`src/tools/gated.ts:53`), `execOnce`(`src/ssh/exec.ts:76`), **`runInSession` 공개 시그니처(`src/ssh/session.ts:970`)와 비공개 `runCommand`(`:871`) 둘 다**. `GateInput.command`(`src/safety/approval.ts:160`)는 `string`으로 둔다. **프로덕션 `execOnce` 호출부는 3곳** — `src/ssh/session.ts:853`·`:862`는 `internalCommand()`로 감싼다 | 위 파일들 | AC-J5a |
-| E2b | **테스트 일괄 치환.** 실측 파급: `execOnce` 22곳(전부 `tests/integration/exec.test.ts`) + `runInSession` 35곳 = **57곳 이상**. 매 호출부에서 판단하지 않도록 `tests/fixtures/`에 브랜드 생성기 `resolved(cmd)` **하나**를 두고 기계적으로 감싼다. 이 계획에서 가장 큰 단일 단계이므로 별도 실행자에게 준다 | 신규 `tests/fixtures/resolved.ts`, `tests/integration/exec.test.ts`, `tests/integration/session.test.ts` | AC-J5a |
+| E2b | **테스트 일괄 치환.** 파급: `tests/integration/session.test.ts` 35곳 + `tests/integration/exec.test.ts` 22곳 + **`tests/integration/execTimeout.test.ts` 14곳 = 71곳, 세 파일**. 세 번째 파일은 계획 확정 이후 A12로 새로 생겼으므로 계획 시점 실측(57곳/두 파일)에 없었다 — 착수 전 `tsc --noEmit`으로 현재 목록을 다시 뜬다. 매 호출부에서 판단하지 않도록 `tests/fixtures/`에 브랜드 생성기 `resolved(cmd)` **하나**를 두고 기계적으로 감싼다. 이 계획에서 가장 큰 단일 단계이므로 별도 실행자에게 준다 | 신규 `tests/fixtures/resolved.ts`, `tests/integration/exec.test.ts`, `tests/integration/session.test.ts`, `tests/integration/execTimeout.test.ts` | AC-J5a |
 | E3 | 화이트리스트 표 + 재작성 판정(AC-J3a 술어). `normalize()`(`src/safety/normalize.ts:1099`)만 사용 | 신규 `src/output/jsonCommands.ts` | AC-J2, J3, J3a |
 | E4 | `parseDf`·`parsePs` 고정 컬럼 파서 | 신규 `src/output/tables.ts` | AC-J4 |
 | E5 | 코퍼스 고정: ubuntu·alpine(busybox)·macOS의 `df -P`·`ps -eo ...` 각 1벌 | 신규 `tests/fixtures/output/{df,ps}-{ubuntu,alpine,macos}.txt` | AC-J4 |
@@ -787,4 +787,17 @@ iteration 3 리뷰: Architect 조건부 승인([blocking] 1 / [improvement] 5), 
 | 1 | Critic iter4 improvement | PM-6 완화 (a)의 상한 값 두 개가 낡음(보관 절대 상한 누락, 응답 탑재가 `maxOutputBytes`) | PM-6 완화 (a)를 D4·부록 B-2 표와 일치시킴 |
 | 2 | 정리 | 제목의 "iteration 2" 표기, 머리말의 리뷰 요약이 1회차 기준 | 제목을 합의본으로, 머리말에 합의 이력과 승인 시 확인 항목 4개 추가 |
 
-**Status: pending approval.** 실행 승인은 별도 단계에서 받는다. 승인 후 실행 경로(team 또는 ralph)는 Phase A부터 순서대로 진행하되, Phase A의 세 선행 작업(probe · R24 테스트 · real-sshd 티어)은 서로 독립이므로 병렬 가능하다.
+**Status: approved, 실행 중.** Phase A·C·D·F와 A12는 구현돼 커밋됐고(`d2d63fe`), Phase E가 진행 중이다. Phase B는 A2 probe 실측 대기, Phase G는 그 뒤다.
+
+---
+
+## 15. 변경 이력 — 구현 중 실측으로 뒤집힌 것
+
+계획이 틀렸음이 코드에서 드러난 항목만 적는다. 판단 근거가 계획 시점에는 없었던 것들이라, 같은 실수를 다시 하지 않도록 원문을 고치고 여기에 이유를 남긴다.
+
+| # | 항목 | 계획이 말한 것 | 실측 | 조치 |
+|---|------|----------------|------|------|
+| 1 | **E1b (보안 영향)** | G-2를 두 번째 `no-restricted-imports` 블록으로 두고 `paths`/`importNames`로 좁힌다 | flat config는 같은 rule id의 옵션을 **병합하지 않고 교체**한다. E1b의 범위("두 경로 제외 전부")는 G-1의 범위와 필연적으로 겹치므로, 그 형태는 `src/tools/**`·`src/ssh/**`·`src/server.ts`에서 **G-1을 조용히 끈다** — 실제로 `src/tools/exec.ts`에서 `src/connect/`를 import해도 오류 0건이었다 | G-2를 `no-restricted-syntax`(다른 rule id)로 바꿔 두 가드가 공존하게 하고, E1b 행의 `paths`/`importNames` 서술을 정정. G-1이 다시 꺼지면 실패하는 회귀 테스트 추가 |
+| 2 | **E2b 규모** | `execOnce` 22곳 + `runInSession` 35곳 = 57곳, 두 파일 | 71곳, **세 파일** — `tests/integration/execTimeout.test.ts` 14곳이 빠져 있었다. 계획 확정 뒤 A12로 생긴 파일이라 계획 시점 실측에 있을 수 없었다 | E2b 행에 세 번째 파일과 "착수 전 `tsc`로 목록을 다시 뜬다"를 추가 |
+
+**교훈.** 1번은 "탈출구를 ESLint로 잠근다"는 결정 자체는 옳았지만 **잠금 수단이 기존 잠금을 푸는** 경우였다. 계획 단계의 리뷰 4회가 규칙의 *의미*는 검증했어도 도구의 *병합 의미론*까지는 못 봤다 — 같은 파일에 같은 rule id를 두 번 쓰는 설정 변경은 앞으로도 실측으로 확인한다. 2번은 계획이 스스로 "실측"이라고 적은 숫자도 코드가 움직이면 낡는다는 평범한 사례다.
