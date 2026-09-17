@@ -44,8 +44,13 @@ export const DEFAULT_CHUNK_BYTES = 64 * 1024;
  * (`enforceLineCap`, `src/audit.ts`). This bound is therefore generous, and its
  * job is only to stop a corrupted file with no newline in it from being read
  * into memory whole.
+ *
+ * Named for its domain because `src/ssh/excerpt.ts` has a `MAX_LINE_BYTES` too,
+ * at 8 KiB — a different quantity for a different thing (how much of one line
+ * of *remote output* an excerpt keeps). Nothing connects the two values, and
+ * the shared name invited a reader who had seen one to assume the other's.
  */
-export const MAX_LINE_BYTES = 1024 * 1024;
+export const MAX_AUDIT_LINE_BYTES = 1024 * 1024;
 
 /** One raw line and where it begins in its file. */
 export interface AuditFileLine {
@@ -77,7 +82,7 @@ export function auditFileSize(fileIndex: number): number | null {
  * The end offset is what {@link readNewestFirst} needs to include that same
  * line in a page, and the text is what the cursor's line hash is taken over
  * (ADR-011). Returns `null` when `offset` is past the end of the file, or when
- * no newline appears within {@link MAX_LINE_BYTES} — both are "this cursor
+ * no newline appears within {@link MAX_AUDIT_LINE_BYTES} — both are "this cursor
  * cannot be resumed", which the caller reports as `history_cursor_stale`.
  */
 export function readLineAt(
@@ -102,8 +107,8 @@ export function readLineAt(
     let scanned = 0;
     let position = offset;
 
-    while (position < size && scanned < MAX_LINE_BYTES) {
-      const want = Math.min(DEFAULT_CHUNK_BYTES, size - position, MAX_LINE_BYTES - scanned);
+    while (position < size && scanned < MAX_AUDIT_LINE_BYTES) {
+      const want = Math.min(DEFAULT_CHUNK_BYTES, size - position, MAX_AUDIT_LINE_BYTES - scanned);
       const buf = Buffer.alloc(want);
       const read = fs.readSync(fd, buf, 0, want, position);
       if (read === 0) break;
@@ -195,7 +200,7 @@ export function* readNewestFirst(
       // A file with no newline in it would otherwise make `carry` grow to the
       // whole file, which is exactly the heap behaviour this reader exists to
       // avoid (AC-H2c). Treat it as corruption and stop.
-      if (carry.length > MAX_LINE_BYTES) return;
+      if (carry.length > MAX_AUDIT_LINE_BYTES) return;
       position = start;
     }
 

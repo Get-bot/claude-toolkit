@@ -15,7 +15,7 @@ import {
   readLineAt,
   readNewestFirst,
   walkAuditLines,
-  MAX_LINE_BYTES,
+  MAX_AUDIT_LINE_BYTES,
 } from '../../src/audit/reader.js';
 import { auditRotatedFilePath, ensureHome } from '../../src/config/paths.js';
 import { assertNoWritesOutside, createTmpHome } from '../fixtures/tmpHome.js';
@@ -98,7 +98,7 @@ describe('readNewestFirst', () => {
   it('stops instead of growing the carry past one line (AC-H2c)', () => {
     // No newline anywhere, longer than the per-line ceiling: the reader must
     // give up rather than accumulate the file in memory.
-    const size = write(0, 'x'.repeat(MAX_LINE_BYTES + 4096));
+    const size = write(0, 'x'.repeat(MAX_AUDIT_LINE_BYTES + 4096));
     expect([...readNewestFirst(0, size, 64 * 1024)]).toEqual([]);
   });
 });

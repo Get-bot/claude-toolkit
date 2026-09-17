@@ -121,13 +121,28 @@ interface BuiltExcerpt {
   meta: ExcerptMeta;
 }
 
+/**
+ * What became of the whole-stream copy (ADR-010).
+ *
+ * Three states and not `Buffer | null`, because the two ways of getting
+ * `null` mean opposite things to a caller that wants to parse the stream:
+ *
+ * - `dropped` — retention was asked for and the stream outgrew its cap, so the
+ *   output is genuinely too big. A parser should report that.
+ * - `not_requested` — nobody asked to keep it. The stream may have been three
+ *   bytes long. A parser that reads this as "too big" gives a confident wrong
+ *   answer, which is exactly the bug a single `null` invites.
+ *
+ * Collapsing them was safe only while every caller on the parsing path happened
+ * to pass `retain`; that is a property of two call sites, held by nothing. Here
+ * it is a value the compiler makes each consumer account for.
+ */
+export type Retention =
+  { kind: 'kept'; bytes: Buffer } | { kind: 'dropped' } | { kind: 'not_requested' };
+
 export interface ExcerptResult extends BuiltExcerpt {
-  /**
-   * The whole stream, byte for byte, when `retain` was asked for and the stream
-   * stayed within its cap. `null` otherwise — including when retention was not
-   * requested at all, which is the default (ADR-010).
-   */
-  retained: Buffer | null;
+  /** What became of the whole-stream copy — see {@link Retention}. */
+  retention: Retention;
 }
 
 export interface ExcerptOptions {
@@ -610,13 +625,21 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
     const tail =
       tailAll.length > tailWindow ? tailAll.subarray(tailAll.length - tailWindow) : tailAll;
     const isUtf8 = utf8.done();
-    const retained = retainChunks === null ? null : Buffer.concat(retainChunks);
+    // `retainChunks` is null both when retention was never requested and when
+    // the cap was passed; `retainCap` is what tells the two apart (see
+    // {@link Retention}).
+    const retention: Retention =
+      retainCap === undefined
+        ? { kind: 'not_requested' }
+        : retainChunks === null
+          ? { kind: 'dropped' }
+          : { kind: 'kept', bytes: Buffer.concat(retainChunks) };
 
     let built: BuiltExcerpt | null = null;
     if (totalBytes <= cap) built = buildFull(head, tail, isUtf8);
     built ??= isUtf8 ? buildTextExcerpt(head, tail) : buildBinaryExcerpt(head, tail);
 
-    finished = { ...built, retained };
+    finished = { ...built, retention };
     return finished;
   }
 

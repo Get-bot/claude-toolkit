@@ -37,6 +37,17 @@ export const MAX_LOG_FIELD_BYTES = 2048;
 /** Guard against pathological nesting while redacting. */
 const MAX_REDACT_DEPTH = 8;
 
+/**
+ * Nesting ceiling for a parsed `format: "json"` payload (AC-J6a).
+ *
+ * Eight is right for a log record, whose job is to be readable. It is wrong for
+ * `docker inspect`, whose output is genuinely deep and is the *content* the
+ * caller asked for, so the parsed path gets its own, much higher, ceiling —
+ * still bounded, because the guard exists to stop pathological nesting, not to
+ * shape the value.
+ */
+export const MAX_PARSED_DEPTH = 64;
+
 const RESERVED_RECORD_KEYS = new Set(['ts', 'level', 'msg']);
 
 let levelOverride: LogLevel | null = null;
@@ -122,7 +133,8 @@ function redactValue(
   value: unknown,
   maxStringBytes: number | null,
   depth: number,
-  seen: WeakSet<object>
+  seen: WeakSet<object>,
+  maxDepth: number
 ): unknown {
   if (value === null || value === undefined) return value;
 
@@ -142,7 +154,7 @@ function redactValue(
       break;
   }
 
-  if (depth >= MAX_REDACT_DEPTH) return '[depth-exceeded]';
+  if (depth >= maxDepth) return '[depth-exceeded]';
 
   const obj = value as object;
   if (seen.has(obj)) return '[circular]';
@@ -169,7 +181,7 @@ function redactValue(
       return obj.toISOString();
     }
     if (Array.isArray(obj)) {
-      return obj.map((item) => redactValue(item, maxStringBytes, depth + 1, seen));
+      return obj.map((item) => redactValue(item, maxStringBytes, depth + 1, seen, maxDepth));
     }
     if (obj instanceof Map) {
       const out: Record<string, unknown> = {};
@@ -177,13 +189,13 @@ function redactValue(
         const name = String(key);
         out[name] = SENSITIVE_KEY_PATTERN.test(name)
           ? REDACTED
-          : redactValue(val, maxStringBytes, depth + 1, seen);
+          : redactValue(val, maxStringBytes, depth + 1, seen, maxDepth);
       }
       return out;
     }
     if (obj instanceof Set) {
       return Array.from(obj.values()).map((item) =>
-        redactValue(item, maxStringBytes, depth + 1, seen)
+        redactValue(item, maxStringBytes, depth + 1, seen, maxDepth)
       );
     }
 
@@ -191,7 +203,7 @@ function redactValue(
     for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
       out[key] = SENSITIVE_KEY_PATTERN.test(key)
         ? REDACTED
-        : redactValue(val, maxStringBytes, depth + 1, seen);
+        : redactValue(val, maxStringBytes, depth + 1, seen, maxDepth);
     }
     return out;
   } finally {
@@ -211,7 +223,30 @@ function redactValue(
 export function redact(value: unknown, options?: RedactOptions): unknown {
   const maxStringBytes =
     options?.maxStringBytes === undefined ? MAX_LOG_FIELD_BYTES : options.maxStringBytes;
-  return redactValue(value, maxStringBytes, 0, new WeakSet<object>());
+  return redactValue(value, maxStringBytes, 0, new WeakSet<object>(), MAX_REDACT_DEPTH);
+}
+
+/**
+ * Redact a parsed `format: "json"` payload (AC-J6, AC-J6a).
+ *
+ * The same pass as {@link redact} with two settings changed, because the value
+ * is *content* rather than a diagnostic:
+ *
+ * - **No string truncation.** {@link redact} cuts every string to 2 KiB, which
+ *   would silently corrupt a `docker inspect` field into invalid data wearing a
+ *   `[truncated]` marker. The response's size is bounded instead by
+ *   `emitCapFor()` at the call site (AC-J6b), which drops the whole field
+ *   rather than mangling part of it.
+ * - **Depth 64, not 8.** See {@link MAX_PARSED_DEPTH}.
+ *
+ * Everything that makes redaction a security control is unchanged and shared
+ * with {@link redact}: keys matching {@link SENSITIVE_KEY_PATTERN} still become
+ * `[redacted]`, and PEM private key blocks inside any string are still masked.
+ * That sharing is the point of putting this here — a second redaction path in
+ * another file is how one of the two quietly stops matching the other.
+ */
+export function redactParsed(value: unknown): unknown {
+  return redactValue(value, null, 0, new WeakSet<object>(), MAX_PARSED_DEPTH);
 }
 
 /**

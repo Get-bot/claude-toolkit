@@ -40,7 +40,20 @@ import { logger } from '../log.js';
 import { runControlCommand } from './control.js';
 import { errorMessage } from './error.js';
 
-/** Gap between TERM and KILL. Must match `session.ts` DEFAULT_KILL_GRACE_MS. */
+/**
+ * Gap between TERM and KILL, for both paths that send that pair.
+ *
+ * Defined here because this is the module named after the operation and it
+ * already owns the sibling budget below; `session.ts` imports it. It used to be
+ * declared in both files, each carrying a comment telling the reader to keep
+ * the two in step — an invariant held by prose, which is the shape the plan's
+ * principle 1 rejects and the shape that had already let the `format:"json"`
+ * column list drift between two files.
+ *
+ * Sharing the default does **not** merge the two runtime knobs:
+ * {@link configureReaper} and `configureSessions` still set `killGraceMs`
+ * independently, which is what lets a test shorten one path without the other.
+ */
 export const DEFAULT_KILL_GRACE_MS = 2000;
 /** Budget for one reaping command. Three fixed tokens do not need longer. */
 export const DEFAULT_REAP_STEP_MS = 3000;

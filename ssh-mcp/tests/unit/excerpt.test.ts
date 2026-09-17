@@ -18,6 +18,7 @@ import {
   groupDigits,
   omissionMarkerLine,
 } from '../../src/ssh/excerpt.js';
+import type { ExcerptResult } from '../../src/ssh/excerpt.js';
 
 const CAP = 1048576;
 
@@ -377,10 +378,20 @@ describe('stdout and stderr are independent', () => {
   });
 });
 
+/** The retained bytes, failing the test rather than the type check if absent. */
+function retainedBytes(result: ExcerptResult): Buffer {
+  if (result.retention.kind !== 'kept') {
+    throw new Error(`expected retained bytes, got ${result.retention.kind}`);
+  }
+  return result.retention.bytes;
+}
+
 describe('opt-in retention (ADR-010, AC-O4a, AC-O7)', () => {
   it('retains nothing unless asked, which is what keeps the old callers honest', () => {
     const result = excerpt(Buffer.from('a\nb\n'), { cap: CAP });
-    expect(result.retained).toBeNull();
+    // `not_requested`, not `dropped`: a consumer that parses the stream must
+    // be able to tell "nobody kept it" from "it was too big to keep".
+    expect(result.retention).toEqual({ kind: 'not_requested' });
     expect(result.meta.output_ref).toBeNull();
   });
 
@@ -398,8 +409,8 @@ describe('opt-in retention (ADR-010, AC-O4a, AC-O7)', () => {
     // The excerpt lost the middle; the retained buffer did not.
     expect(result.meta.truncated).toBe(true);
     expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThan(data.length);
-    expect(result.retained).not.toBeNull();
-    expect((result.retained as Buffer).equals(data)).toBe(true);
+    expect(result.retention.kind).toBe('kept');
+    expect(retainedBytes(result).equals(data)).toBe(true);
   });
 
   it('gives up entirely rather than retaining a prefix (AC-O4a)', () => {
@@ -410,8 +421,9 @@ describe('opt-in retention (ADR-010, AC-O4a, AC-O7)', () => {
 
     expect(result.meta.truncated).toBe(true);
     // Truncated and yet nothing to fetch: the caller reads this as a null
-    // `output_ref`, which is exactly what AC-O4a describes.
-    expect(result.retained).toBeNull();
+    // `output_ref`, which is exactly what AC-O4a describes. `dropped` and not
+    // `not_requested` - retention was asked for, the stream was simply too big.
+    expect(result.retention).toEqual({ kind: 'dropped' });
   });
 
   it('retains an untruncated stream too, because nothing knows in advance', () => {
@@ -420,7 +432,7 @@ describe('opt-in retention (ADR-010, AC-O4a, AC-O7)', () => {
     accumulator.push(data);
     const result = accumulator.finish();
     expect(result.meta.truncated).toBe(false);
-    expect((result.retained as Buffer).equals(data)).toBe(true);
+    expect(retainedBytes(result).equals(data)).toBe(true);
   });
 
   it('retains a non-UTF-8 stream unchanged (AC-O1a)', () => {
@@ -433,7 +445,7 @@ describe('opt-in retention (ADR-010, AC-O4a, AC-O7)', () => {
     expect(result.meta.encoding).toBe('base64');
     expect(result.meta.truncated).toBe(true);
     expect(result.meta.omitted_lines).toBeNull();
-    expect((result.retained as Buffer).equals(data)).toBe(true);
+    expect(retainedBytes(result).equals(data)).toBe(true);
   });
 
   it('returns the same retained buffer on a repeated finish', () => {

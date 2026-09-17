@@ -27,6 +27,7 @@ import {
   type TestEndpoint,
 } from '../fixtures/endpoints.js';
 import { generateClientKey, type FixtureKeyPair } from '../fixtures/hostKeys.js';
+import { resolved } from '../fixtures/resolved.js';
 
 /** 10 000 lines of 200 bytes: the §5.8 worked example, produced remotely. */
 const TWO_MIB_COMMAND =
@@ -57,7 +58,7 @@ const onSshd = currentEndpointKind() === 'sshd';
 
 describe('stream separation (AC10.1)', () => {
   it('returns stdout, stderr and the exit code separately', async () => {
-    const result = await execOnce(conn, "sh -c 'echo O; echo E >&2; exit 3'", budget);
+    const result = await execOnce(conn, resolved("sh -c 'echo O; echo E >&2; exit 3'"), budget);
     expect(result.stdout).toBe('O\n');
     expect(result.stderr).toBe('E\n');
     expect(result.exit_code).toBe(3);
@@ -67,7 +68,7 @@ describe('stream separation (AC10.1)', () => {
   });
 
   it('reports a zero exit code for a successful command', async () => {
-    const result = await execOnce(conn, 'echo hi', budget);
+    const result = await execOnce(conn, resolved('echo hi'), budget);
     expect(result.stdout).toBe('hi\n');
     expect(result.stderr).toBe('');
     expect(result.exit_code).toBe(0);
@@ -76,14 +77,14 @@ describe('stream separation (AC10.1)', () => {
   });
 
   it('keeps a non-zero exit code from a failing command', async () => {
-    const result = await execOnce(conn, 'exit 42', budget);
+    const result = await execOnce(conn, resolved('exit 42'), budget);
     expect(result.exit_code).toBe(42);
   });
 });
 
 describe('binary output (AC10.2)', () => {
   it('returns base64 when the stream is not valid UTF-8', async () => {
-    const result = await execOnce(conn, "printf 'A\\x00\\xff\\xfeB'", budget);
+    const result = await execOnce(conn, resolved("printf 'A\\x00\\xff\\xfeB'"), budget);
     expect(result.stdout_meta.encoding).toBe('base64');
     expect(result.encoding).toBe('base64');
     const decoded = Buffer.from(result.stdout, 'base64');
@@ -91,7 +92,7 @@ describe('binary output (AC10.2)', () => {
   });
 
   it('stays utf8 for multi-byte text', async () => {
-    const result = await execOnce(conn, "printf '한국어\\n'", budget);
+    const result = await execOnce(conn, resolved("printf '한국어\\n'"), budget);
     expect(result.stdout_meta.encoding).toBe('utf8');
     expect(result.stdout).toBe('한국어\n');
   });
@@ -100,14 +101,14 @@ describe('binary output (AC10.2)', () => {
 describe('stdin is always closed (AC10.3)', () => {
   it('returns immediately from cat with no arguments', async () => {
     const started = Date.now();
-    const result = await execOnce(conn, 'cat', { ...budget, timeoutMs: 5000 });
+    const result = await execOnce(conn, resolved('cat'), { ...budget, timeoutMs: 5000 });
     expect(Date.now() - started).toBeLessThan(5000);
     expect(result.exit_code).toBe(0);
     expect(result.stdout).toBe('');
   });
 
   it('returns immediately from a pipeline that reads stdin', async () => {
-    const result = await execOnce(conn, 'cat | wc -c', { ...budget, timeoutMs: 5000 });
+    const result = await execOnce(conn, resolved('cat | wc -c'), { ...budget, timeoutMs: 5000 });
     expect(result.exit_code).toBe(0);
     expect(result.stdout.trim()).toBe('0');
   });
@@ -115,12 +116,12 @@ describe('stdin is always closed (AC10.3)', () => {
 
 describe('background jobs (AC10.4)', () => {
   it('flags a trailing ampersand on the result', async () => {
-    const result = await execOnce(conn, 'sleep 0 &', budget);
+    const result = await execOnce(conn, resolved('sleep 0 &'), budget);
     expect(result.background_job).toBe(true);
   });
 
   it('does not flag a plain command or a logical and', async () => {
-    const plain = await execOnce(conn, 'echo one', budget);
+    const plain = await execOnce(conn, resolved('echo one'), budget);
     expect(plain.background_job).toBe(false);
     expect(hasTrailingBackground('a && b')).toBe(false);
     expect(hasTrailingBackground('a &')).toBe(true);
@@ -130,7 +131,9 @@ describe('background jobs (AC10.4)', () => {
 describe('timeout (AC11)', () => {
   it('fails with command_timeout well before the command would finish', async () => {
     const started = Date.now();
-    await expect(execOnce(conn, 'sleep 30', { ...budget, timeoutMs: 1500 })).rejects.toMatchObject({
+    await expect(
+      execOnce(conn, resolved('sleep 30'), { ...budget, timeoutMs: 1500 })
+    ).rejects.toMatchObject({
       code: 'command_timeout',
     });
     expect(Date.now() - started).toBeLessThan(6000);
@@ -138,7 +141,7 @@ describe('timeout (AC11)', () => {
 
   it('attaches the partial output to the error', async () => {
     try {
-      await execOnce(conn, 'echo early; sleep 30', { ...budget, timeoutMs: 1500 });
+      await execOnce(conn, resolved('echo early; sleep 30'), { ...budget, timeoutMs: 1500 });
       expect.unreachable('the command should have timed out');
     } catch (err) {
       expect(isCodedError(err)).toBe(true);
@@ -152,7 +155,9 @@ describe('timeout (AC11)', () => {
 
   it.runIf(onFixture)('closes the channel on the server side (AC11.2)', async () => {
     const before = endpoint.fixture?.eventsOfType('channel-close').length ?? 0;
-    await expect(execOnce(conn, 'sleep 30', { ...budget, timeoutMs: 1000 })).rejects.toMatchObject({
+    await expect(
+      execOnce(conn, resolved('sleep 30'), { ...budget, timeoutMs: 1000 })
+    ).rejects.toMatchObject({
       code: 'command_timeout',
     });
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -163,7 +168,9 @@ describe('timeout (AC11)', () => {
   // WINDOWS-GAP: proving the remote process really died needs a real sshd;
   // the in-process fixture can only show the channel was closed (Critic C19).
   it.runIf(onSshd)('leaves no process behind (AC11.3)', async () => {
-    await expect(execOnce(conn, 'sleep 37', { ...budget, timeoutMs: 1500 })).rejects.toMatchObject({
+    await expect(
+      execOnce(conn, resolved('sleep 37'), { ...budget, timeoutMs: 1500 })
+    ).rejects.toMatchObject({
       code: 'command_timeout',
     });
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -172,14 +179,14 @@ describe('timeout (AC11)', () => {
     // command line and the check returns a PID even when nothing is sleeping
     // (measured against the tests/sshd container). The bracket matches the
     // running `sleep 37` and not the literal text of the check itself.
-    const check = await execOnce(conn, "pgrep -f '[s]leep 37' || true", budget);
+    const check = await execOnce(conn, resolved("pgrep -f '[s]leep 37' || true"), budget);
     expect(check.stdout.trim()).toBe('');
   });
 });
 
 describe('output excerpting through the exec path (AC12)', () => {
   it('reproduces the §5.8 worked example over the wire', async () => {
-    const result = await execOnce(conn, TWO_MIB_COMMAND, budget);
+    const result = await execOnce(conn, resolved(TWO_MIB_COMMAND), budget);
     expect(result.exit_code).toBe(0);
     expect(result.stdout_meta.total_bytes).toBe(2000000);
     expect(result.stdout_meta.total_lines).toBe(10000);
@@ -195,7 +202,7 @@ describe('output excerpting through the exec path (AC12)', () => {
   });
 
   it('excerpts stderr independently of stdout (AC12.6)', async () => {
-    const result = await execOnce(conn, `${TWO_MIB_COMMAND} 1>&2; echo short`, budget);
+    const result = await execOnce(conn, resolved(`${TWO_MIB_COMMAND} 1>&2; echo short`), budget);
     expect(result.stdout).toBe('short\n');
     expect(result.stdout_meta.truncated).toBe(false);
     expect(result.stdout_meta.omitted_lines).toBe(0);
@@ -204,7 +211,7 @@ describe('output excerpting through the exec path (AC12)', () => {
   });
 
   it('leaves output under the cap untouched (AC12.5)', async () => {
-    const result = await execOnce(conn, 'printf "a\\nb\\nc\\n"', budget);
+    const result = await execOnce(conn, resolved('printf "a\\nb\\nc\\n"'), budget);
     expect(result.stdout).toBe('a\nb\nc\n');
     expect(result.stdout_meta.truncated).toBe(false);
     expect(result.stdout_meta.total_lines).toBe(3);
@@ -213,7 +220,7 @@ describe('output excerpting through the exec path (AC12)', () => {
   });
 
   it('honours a smaller per-host cap', async () => {
-    const result = await execOnce(conn, TWO_MIB_COMMAND, {
+    const result = await execOnce(conn, resolved(TWO_MIB_COMMAND), {
       ...budget,
       maxOutputBytes: 65536,
     });
@@ -225,8 +232,8 @@ describe('output excerpting through the exec path (AC12)', () => {
 
 describe('connection pool', () => {
   it('runs several commands over one pooled connection', async () => {
-    const first = await execOnce(conn, 'echo one', budget);
-    const second = await execOnce(conn, 'echo two', budget);
+    const first = await execOnce(conn, resolved('echo one'), budget);
+    const second = await execOnce(conn, resolved('echo two'), budget);
     expect(first.stdout).toBe('one\n');
     expect(second.stdout).toBe('two\n');
   });
@@ -245,7 +252,9 @@ describe('connection pool', () => {
     try {
       const idle = await getConnection(host, key);
       expect(hasConnection(alias)).toBe(true);
-      expect((await execOnce(idle, 'echo before-idle', budget)).stdout).toBe('before-idle\n');
+      expect((await execOnce(idle, resolved('echo before-idle'), budget)).stdout).toBe(
+        'before-idle\n'
+      );
 
       await new Promise((resolve) => setTimeout(resolve, 1200));
       expect(hasConnection(alias)).toBe(false);
@@ -253,7 +262,9 @@ describe('connection pool', () => {
       // A later call reconnects rather than handing back the dead client.
       const fresh = await getConnection(host, key);
       expect(fresh).not.toBe(idle);
-      expect((await execOnce(fresh, 'echo after-idle', budget)).stdout).toBe('after-idle\n');
+      expect((await execOnce(fresh, resolved('echo after-idle'), budget)).stdout).toBe(
+        'after-idle\n'
+      );
     } finally {
       configurePool({ idleMs: 10 * 60 * 1000 });
       closeConnection(alias);

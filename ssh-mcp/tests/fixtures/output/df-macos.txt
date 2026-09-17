@@ -1,0 +1,8 @@
+Filesystem     512-blocks       Used  Available Capacity  Mounted on
+/dev/disk3s1s1 1942700360   39112384  169372752    19%  /
+devfs                 394        394          0   100%  /dev
+/dev/disk3s6   1942700360         40  169372752     1%  /System/Volumes/VM
+/dev/disk3s2   1942700360 1728944712  169372752    92%  /System/Volumes/Data
+map auto_home           0          0          0   100%  /System/Volumes/Data/home
+/dev/disk5s2   3906963456 2812004312 1094959144    72%  /Volumes/Time Machine Backups
+/dev/disk4s1    976723712  843211264  133512448    87%  /Volumes/Samsung PSSD T7 Shield

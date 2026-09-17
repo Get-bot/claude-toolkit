@@ -34,6 +34,7 @@ import {
   type TestEndpoint,
 } from '../fixtures/endpoints.js';
 import { generateClientKey, type FixtureKeyPair } from '../fixtures/hostKeys.js';
+import { resolved } from '../fixtures/resolved.js';
 
 let endpoint: TestEndpoint;
 let clientKey: FixtureKeyPair;
@@ -51,7 +52,7 @@ beforeAll(async () => {
   conn = await getConnection(hostEntryFor(endpoint), Buffer.from(clientKey.privateKey, 'utf8'));
   // The shell probe runs once per connection and would otherwise land in the
   // middle of whichever assertion happened to come first.
-  await execOnce(conn, 'echo warm', budget);
+  await execOnce(conn, resolved('echo warm'), budget);
 });
 
 afterAll(async () => {
@@ -70,7 +71,7 @@ const canReadProcessTable = onSshd || (onFixture && process.platform !== 'win32'
 describe('framing is what goes over the wire', () => {
   it.runIf(onFixture)('wraps the command and strips the pid line back off', async () => {
     const before = endpoint.fixture?.eventsOfType('exec').length ?? 0;
-    const result = await execOnce(conn, 'echo hi', budget);
+    const result = await execOnce(conn, resolved('echo hi'), budget);
 
     expect(result.stdout).toBe('hi\n');
     const sent = (endpoint.fixture?.eventsOfType('exec') ?? []).slice(before).map((e) => e.command);
@@ -81,7 +82,7 @@ describe('framing is what goes over the wire', () => {
     configureExecFraming({ mode: 'off' });
     try {
       const before = endpoint.fixture?.eventsOfType('exec').length ?? 0;
-      const result = await execOnce(conn, 'echo hi', budget);
+      const result = await execOnce(conn, resolved('echo hi'), budget);
 
       expect(result.stdout).toBe('hi\n');
       const sent = (endpoint.fixture?.eventsOfType('exec') ?? [])
@@ -108,7 +109,7 @@ describe('framing is what goes over the wire', () => {
         hostEntryFor(cmdEndpoint, { alias }),
         Buffer.from(clientKey.privateKey, 'utf8')
       );
-      const result = await execOnce(cmdConn, 'echo hi', budget);
+      const result = await execOnce(cmdConn, resolved('echo hi'), budget);
 
       expect(result.stdout).toBe('hi\n');
       const sent = (cmdEndpoint.fixture?.eventsOfType('exec') ?? []).map((e) => e.command);
@@ -122,7 +123,7 @@ describe('framing is what goes over the wire', () => {
 
 describe('the frame changes nothing a caller can see', () => {
   it('keeps the streams, the exit code and the signal apart (AC10.1)', async () => {
-    const result = await execOnce(conn, "sh -c 'echo O; echo E >&2; exit 3'", budget);
+    const result = await execOnce(conn, resolved("sh -c 'echo O; echo E >&2; exit 3'"), budget);
     expect(result.stdout).toBe('O\n');
     expect(result.stderr).toBe('E\n');
     expect(result.exit_code).toBe(3);
@@ -130,7 +131,7 @@ describe('the frame changes nothing a caller can see', () => {
   });
 
   it('keeps binary stdout byte-exact, pid line and all (AC10.2)', async () => {
-    const result = await execOnce(conn, "printf 'A\\x00\\xff\\xfeB'", budget);
+    const result = await execOnce(conn, resolved("printf 'A\\x00\\xff\\xfeB'"), budget);
     expect(result.encoding).toBe('base64');
     expect(Array.from(Buffer.from(result.stdout, 'base64'))).toEqual([
       0x41, 0x00, 0xff, 0xfe, 0x42,
@@ -139,7 +140,7 @@ describe('the frame changes nothing a caller can see', () => {
   });
 
   it('counts only the command’s own output (AC12)', async () => {
-    const result = await execOnce(conn, 'printf "a\\nb\\nc\\n"', budget);
+    const result = await execOnce(conn, resolved('printf "a\\nb\\nc\\n"'), budget);
     expect(result.stdout).toBe('a\nb\nc\n');
     expect(result.stdout_meta.total_lines).toBe(3);
     expect(result.stdout_meta.total_bytes).toBe(6);
@@ -147,13 +148,13 @@ describe('the frame changes nothing a caller can see', () => {
   });
 
   it('still returns at once when the command reads stdin (AC10.3)', async () => {
-    const result = await execOnce(conn, 'cat', { ...budget, timeoutMs: 5000 });
+    const result = await execOnce(conn, resolved('cat'), { ...budget, timeoutMs: 5000 });
     expect(result.exit_code).toBe(0);
     expect(result.stdout).toBe('');
   });
 
   it('still flags a backgrounded command (AC10.4)', async () => {
-    const result = await execOnce(conn, 'sleep 0 &', budget);
+    const result = await execOnce(conn, resolved('sleep 0 &'), budget);
     expect(result.background_job).toBe(true);
   });
 });
@@ -161,7 +162,10 @@ describe('the frame changes nothing a caller can see', () => {
 describe('timeout cleanup (AC11, AC-T4)', () => {
   it('reports the timeout and what it did about the remote process', async () => {
     try {
-      await execOnce(conn, `${MARKER_SLEEP} && echo never`, { ...budget, timeoutMs: 1000 });
+      await execOnce(conn, resolved(`${MARKER_SLEEP} && echo never`), {
+        ...budget,
+        timeoutMs: 1000,
+      });
       expect.unreachable('the command should have timed out');
     } catch (err) {
       expect(isCodedError(err)).toBe(true);
@@ -179,7 +183,7 @@ describe('timeout cleanup (AC11, AC-T4)', () => {
 
   it('keeps the partial output the command had already produced', async () => {
     try {
-      await execOnce(conn, `echo early; ${MARKER_SLEEP}`, { ...budget, timeoutMs: 1000 });
+      await execOnce(conn, resolved(`echo early; ${MARKER_SLEEP}`), { ...budget, timeoutMs: 1000 });
       expect.unreachable('the command should have timed out');
     } catch (err) {
       expect(isCodedError(err)).toBe(true);
@@ -197,7 +201,7 @@ describe('timeout cleanup (AC11, AC-T4)', () => {
   it.runIf(onFixture)('has nothing to reap when framing is off', async () => {
     configureExecFraming({ mode: 'off' });
     try {
-      await execOnce(conn, 'sleep 3', { ...budget, timeoutMs: 500 });
+      await execOnce(conn, resolved('sleep 3'), { ...budget, timeoutMs: 500 });
       expect.unreachable('the command should have timed out');
     } catch (err) {
       expect(isCodedError(err)).toBe(true);
@@ -219,14 +223,14 @@ describe('timeout cleanup (AC11, AC-T4)', () => {
   // channel does not kill the child.
   it.runIf(canReadProcessTable)('leaves no process behind (AC-T4)', async () => {
     const survivors = async (): Promise<string> => {
-      const found = await execOnce(conn, `pgrep -f '[s]leep 41' || true`, budget);
+      const found = await execOnce(conn, resolved(`pgrep -f '[s]leep 41' || true`), budget);
       return found.stdout.trim();
     };
 
     expect(await survivors()).toBe('');
 
     await expect(
-      execOnce(conn, MARKER_SLEEP, { ...budget, timeoutMs: 1500 })
+      execOnce(conn, resolved(MARKER_SLEEP), { ...budget, timeoutMs: 1500 })
     ).rejects.toMatchObject({ code: 'command_timeout' });
 
     // SIGKILL is delivered, not awaited; a moment is enough for the process

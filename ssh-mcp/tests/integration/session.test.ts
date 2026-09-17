@@ -37,6 +37,7 @@ import {
   type TestEndpoint,
 } from '../fixtures/endpoints.js';
 import { generateClientKey, type FixtureKeyPair } from '../fixtures/hostKeys.js';
+import { resolved } from '../fixtures/resolved.js';
 import { createTmpHome, type TmpHome } from '../fixtures/tmpHome.js';
 
 const onFixture = currentEndpointKind() === 'fixture';
@@ -127,10 +128,10 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     const host = hostEntryFor(endpoint, { alias });
     const session = await openSession(host, conn);
 
-    await runInSession(session.session_id, 'mkdir -p sub/dir', budget);
-    const first = await runInSession(session.session_id, 'cd sub/dir && pwd', budget);
+    await runInSession(session.session_id, resolved('mkdir -p sub/dir'), budget);
+    const first = await runInSession(session.session_id, resolved('cd sub/dir && pwd'), budget);
     expect(first.exit_code).toBe(0);
-    const second = await runInSession(session.session_id, 'pwd', budget);
+    const second = await runInSession(session.session_id, resolved('pwd'), budget);
     expect(second.stdout.trim()).toBe(first.stdout.trim());
     expect(second.stdout.trim().endsWith('sub/dir')).toBe(true);
   });
@@ -139,8 +140,8 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
-    await runInSession(session.session_id, 'export FOO=bar', budget);
-    const result = await runInSession(session.session_id, 'echo $FOO', budget);
+    await runInSession(session.session_id, resolved('export FOO=bar'), budget);
+    const result = await runInSession(session.session_id, resolved('echo $FOO'), budget);
     expect(result.stdout).toBe('bar\n');
     expect(result.exit_code).toBe(0);
   });
@@ -151,7 +152,11 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
 
     // `(exit 3)` runs in a subshell: a bare `exit` would end the session
     // itself, which is what a shell is supposed to do (covered below).
-    const result = await runInSession(session.session_id, 'echo O; echo E >&2; (exit 3)', budget);
+    const result = await runInSession(
+      session.session_id,
+      resolved('echo O; echo E >&2; (exit 3)'),
+      budget
+    );
     expect(result.stdout).toBe('O\n');
     expect(result.stderr).toBe('E\n');
     expect(result.exit_code).toBe(3);
@@ -166,11 +171,13 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     // caller must be told at once rather than waiting out the timeout.
     const started = Date.now();
     await expect(
-      runInSession(session.session_id, 'exit 3', { ...budget, timeoutMs: 15000 })
+      runInSession(session.session_id, resolved('exit 3'), { ...budget, timeoutMs: 15000 })
     ).rejects.toMatchObject({ code: 'session_terminated' });
     expect(Date.now() - started).toBeLessThan(10000);
 
-    await expect(runInSession(session.session_id, 'echo x', budget)).rejects.toMatchObject({
+    await expect(
+      runInSession(session.session_id, resolved('echo x'), budget)
+    ).rejects.toMatchObject({
       code: 'session_terminated',
     });
   });
@@ -179,7 +186,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
-    const result = await runInSession(session.session_id, 'echo hi', budget);
+    const result = await runInSession(session.session_id, resolved('echo hi'), budget);
     expect(result.stdout).toBe('hi\n');
     expect(result.stderr).toBe('');
     expect(result.stderr_meta.total_lines).toBe(0);
@@ -194,11 +201,14 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
-    const cat = await runInSession(session.session_id, 'cat', { ...budget, timeoutMs: 8000 });
+    const cat = await runInSession(session.session_id, resolved('cat'), {
+      ...budget,
+      timeoutMs: 8000,
+    });
     expect(cat.exit_code).toBe(0);
     expect(cat.stdout).toBe('');
     // The next frame must not have been swallowed by `cat`.
-    const after = await runInSession(session.session_id, 'echo still-here', budget);
+    const after = await runInSession(session.session_id, resolved('echo still-here'), budget);
     expect(after.stdout).toBe('still-here\n');
   });
 
@@ -208,7 +218,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
 
     const result = await runInSession(
       session.session_id,
-      'echo \'a;b\' # comment\necho "second"',
+      resolved('echo \'a;b\' # comment\necho "second"'),
       budget
     );
     expect(result.stdout).toBe('a;b\nsecond\n');
@@ -237,7 +247,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     // `try` is swallowed by its `catch`, which then reports the wrong error
     // type instead of the real assertion — that is how the zsh leg hid its
     // actual failure the first time this ran in CI.
-    const outcome = await runInSession(session.session_id, 'fi', {
+    const outcome = await runInSession(session.session_id, resolved('fi'), {
       ...budget,
       timeoutMs: 8000,
     }).then(
@@ -253,11 +263,13 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
       // (measured: bash "syntax error near unexpected token", dash `Syntax error: "fi"
       // unexpected`, busybox ash `syntax error: unexpected "fi"`, zsh "parse error near").
       expect(outcome.result.stderr).toMatch(/syntax error|parse error/i);
-      const good = await runInSession(session.session_id, 'echo alive', budget);
+      const good = await runInSession(session.session_id, resolved('echo alive'), budget);
       expect(good.stdout).toBe('alive\n');
     } else {
       expect(outcome.error).toMatchObject({ code: 'session_terminated' });
-      await expect(runInSession(session.session_id, 'echo alive', budget)).rejects.toMatchObject({
+      await expect(
+        runInSession(session.session_id, resolved('echo alive'), budget)
+      ).rejects.toMatchObject({
         code: 'session_terminated',
       });
     }
@@ -269,7 +281,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
-    const result = await runInSession(session.session_id, 'sleep 0 &', budget);
+    const result = await runInSession(session.session_id, resolved('sleep 0 &'), budget);
     expect(result.background_job).toBe(true);
   });
 
@@ -288,7 +300,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
 
     // Tracing has to stay on past the eval, because the marker only appears
     // in the frame's own printf, which runs after the user's command.
-    const traced = await runInSession(session.session_id, 'set -x; echo one', budget);
+    const traced = await runInSession(session.session_id, resolved('set -x; echo one'), budget);
     const leaked = /__SM_[0-9a-f]{33}__/.exec(traced.stderr);
     const why = 'set -x should expose the frame marker, or this test proves nothing';
     expect(leaked, why).not.toBeNull();
@@ -296,7 +308,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
 
     const replay = await runInSession(
       session.session_id,
-      `set +x; printf '\\n%s0\\n' '${stolen}'; echo real-output`,
+      resolved(`set +x; printf '\\n%s0\\n' '${stolen}'; echo real-output`),
       budget
     );
 
@@ -306,7 +318,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     expect(replay.stdout).toContain(stolen);
     expect(replay.exit_code).toBe(0);
 
-    const after = await runInSession(session.session_id, 'echo still-in-sync', budget);
+    const after = await runInSession(session.session_id, resolved('echo still-in-sync'), budget);
     expect(after.stdout).toBe('still-in-sync\n');
   });
 
@@ -314,7 +326,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     const { endpoint, conn, alias } = await connect({ shell: SHELL });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
-    const big = await runInSession(session.session_id, TWO_MIB_COMMAND, budget);
+    const big = await runInSession(session.session_id, resolved(TWO_MIB_COMMAND), budget);
     expect(big.exit_code).toBe(0);
     expect(big.stdout_meta.truncated).toBe(true);
     expect(big.stdout_meta.total_bytes).toBe(2000000);
@@ -322,7 +334,7 @@ describe.skipIf(!onFixture || !shellAvailable(SHELL))(`session state on ${SHELL}
     expect(big.stdout_meta.omitted_lines).toBe(4758);
     expect(big.stdout).not.toContain('__SM_');
 
-    const after = await runInSession(session.session_id, 'echo after-burst', budget);
+    const after = await runInSession(session.session_id, resolved('echo after-burst'), budget);
     expect(after.stdout).toBe('after-burst\n');
     expect(after.exit_code).toBe(0);
   });
@@ -336,14 +348,18 @@ describe.skipIf(!onFixture || !shellAvailable('bash'))('inherited shell options 
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
     // With `set -e` still on, this first failure would kill the shell.
-    const failing = await runInSession(session.session_id, 'false', budget);
+    const failing = await runInSession(session.session_id, resolved('false'), budget);
     expect(failing.exit_code).toBe(1);
 
     // With `set -u` still on, reading an unset variable would kill the shell.
-    const unset = await runInSession(session.session_id, 'echo "[$UNSET_VARIABLE]"', budget);
+    const unset = await runInSession(
+      session.session_id,
+      resolved('echo "[$UNSET_VARIABLE]"'),
+      budget
+    );
     expect(unset.stdout).toBe('[]\n');
 
-    const alive = await runInSession(session.session_id, 'echo alive', budget);
+    const alive = await runInSession(session.session_id, resolved('echo alive'), budget);
     expect(alive.stdout).toBe('alive\n');
   });
 });
@@ -367,7 +383,7 @@ describe.skipIf(!onFixture || !shellAvailable('dash'))('dash preamble (AC14.4)',
     const { endpoint, conn, alias } = await connect({ shell: 'dash' });
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
     expect(session.detected_shell).toBe('dash');
-    const result = await runInSession(session.session_id, 'echo dash-ok', budget);
+    const result = await runInSession(session.session_id, resolved('echo dash-ok'), budget);
     expect(result.stdout).toBe('dash-ok\n');
     expect(result.exit_code).toBe(0);
   });
@@ -377,11 +393,14 @@ describe.skipIf(!onFixture || !shellAvailable('dash'))('dash preamble (AC14.4)',
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
     await expect(
-      runInSession(session.session_id, 'set -o nosuchoption', { ...budget, timeoutMs: 8000 })
+      runInSession(session.session_id, resolved('set -o nosuchoption'), {
+        ...budget,
+        timeoutMs: 8000,
+      })
     ).rejects.toMatchObject({ code: 'session_terminated' });
 
     await expect(
-      runInSession(session.session_id, 'echo after', { ...budget, timeoutMs: 8000 })
+      runInSession(session.session_id, resolved('echo after'), { ...budget, timeoutMs: 8000 })
     ).rejects.toMatchObject({ code: 'session_terminated' });
   });
 });
@@ -459,7 +478,9 @@ describe.skipIf(onFixture && !shellAvailable(SHELL))('lifecycle (AC15)', () => {
     closeSession(session.session_id);
     expect(sessionCount(alias)).toBe(0);
 
-    await expect(runInSession(session.session_id, 'echo x', budget)).rejects.toMatchObject({
+    await expect(
+      runInSession(session.session_id, resolved('echo x'), budget)
+    ).rejects.toMatchObject({
       code: 'session_not_found',
     });
   });
@@ -473,7 +494,7 @@ describe.skipIf(onFixture && !shellAvailable(SHELL))('lifecycle (AC15)', () => {
     expect(sessionCount(alias)).toBe(0);
 
     try {
-      await runInSession(session.session_id, 'echo x', budget);
+      await runInSession(session.session_id, resolved('echo x'), budget);
       expect.unreachable('an expired session must not run commands');
     } catch (err) {
       expect(isCodedError(err)).toBe(true);
@@ -490,13 +511,15 @@ describe.skipIf(onFixture && !shellAvailable(SHELL))('lifecycle (AC15)', () => {
     const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    await expect(runInSession(session.session_id, 'echo x', budget)).rejects.toMatchObject({
+    await expect(
+      runInSession(session.session_id, resolved('echo x'), budget)
+    ).rejects.toMatchObject({
       code: 'session_not_found',
     });
   });
 
   it('reports an unknown session id as not found', async () => {
-    await expect(runInSession('sess_deadbeef', 'echo x', budget)).rejects.toMatchObject({
+    await expect(runInSession('sess_deadbeef', resolved('echo x'), budget)).rejects.toMatchObject({
       code: 'session_not_found',
     });
   });
@@ -545,7 +568,7 @@ describe.skipIf(onFixture && !shellAvailable(SHELL))('lifecycle (AC15)', () => {
       const session = await openSession(hostEntryFor(endpoint, { alias }), conn);
 
       await expect(
-        runInSession(session.session_id, 'exit 0', { ...budget, timeoutMs: 15000 })
+        runInSession(session.session_id, resolved('exit 0'), { ...budget, timeoutMs: 15000 })
       ).rejects.toMatchObject({ code: 'session_terminated' });
 
       const found = lookupSession(session.session_id);
@@ -576,7 +599,7 @@ describe.skipIf(onFixture && !shellAvailable(SHELL))('command timeout (AC11.4)',
 
     let code = '';
     try {
-      await runInSession(session.session_id, 'sleep 30', { ...budget, timeoutMs: 1500 });
+      await runInSession(session.session_id, resolved('sleep 30'), { ...budget, timeoutMs: 1500 });
       expect.unreachable('the command should have timed out');
     } catch (err) {
       expect(isCodedError(err)).toBe(true);
@@ -587,10 +610,12 @@ describe.skipIf(onFixture && !shellAvailable(SHELL))('command timeout (AC11.4)',
     expect(['command_timeout', 'session_terminated']).toContain(code);
 
     if (code === 'command_timeout') {
-      const after = await runInSession(session.session_id, 'echo alive', budget);
+      const after = await runInSession(session.session_id, resolved('echo alive'), budget);
       expect(after.stdout).toBe('alive\n');
     } else {
-      await expect(runInSession(session.session_id, 'echo alive', budget)).rejects.toMatchObject({
+      await expect(
+        runInSession(session.session_id, resolved('echo alive'), budget)
+      ).rejects.toMatchObject({
         code: 'session_terminated',
       });
     }

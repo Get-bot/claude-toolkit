@@ -41,9 +41,20 @@ import { ERROR_CODES, isCodedError } from '../errors.js';
 import { logger } from '../log.js';
 import { recordObservedShell } from '../config/state.js';
 import { retainCapFor } from '../output/limits.js';
+import { internalCommand } from '../output/resolve.js';
+import type { ResolvedCommand } from '../output/resolve.js';
 import { SshOperationError, errorMessage } from './error.js';
-import { createExcerptAccumulator, type ExcerptEncoding, type ExcerptMeta } from './excerpt.js';
+import {
+  createExcerptAccumulator,
+  type ExcerptEncoding,
+  type ExcerptMeta,
+  type Retention,
+} from './excerpt.js';
 import { execOnce, hasTrailingBackground } from './exec.js';
+// The TERM→KILL gap is one decision shared with the timeout reaper, so it has
+// one definition (OPT-2 step 8). `configureSessions` still overrides it here
+// independently of `configureReaper`.
+import { DEFAULT_KILL_GRACE_MS } from './reaper.js';
 import type { PoolHost } from './pool.js';
 import { touchConnection } from './pool.js';
 import {
@@ -72,8 +83,6 @@ export const DEFAULT_SHELL_PROBE_MS = 3000;
 export const DEFAULT_HANDSHAKE_MS = 10000;
 /** Budget for the post-timeout liveness ping (OPT-2 step 8). */
 export const DEFAULT_PING_MS = 2000;
-/** Gap between `pkill -TERM` and `pkill -KILL` (OPT-2 step 8). */
-export const DEFAULT_KILL_GRACE_MS = 2000;
 
 interface SessionConfig {
   idleMs: number;
@@ -845,13 +854,18 @@ export interface SessionRunResult {
    * never here — which is what keeps the timeout path above from minting a
    * reference (AC-O1b).
    */
-  stdout_retained: Buffer | null;
-  stderr_retained: Buffer | null;
+  stdout_retention: Retention;
+  stderr_retention: Retention;
 }
 
 /**
  * Kill the children of the session shell after a timeout (OPT-2 step 8).
  * Returns false when `pkill` is missing, which makes the caller fail closed.
+ *
+ * The two `pkill` strings are composed here from a pid the server already
+ * holds, so nothing a model wrote reaches them and there is nothing to
+ * classify or approve. That is what makes this the one production caller of
+ * `internalCommand()` that ESLint guard G-2 allows (AC-J5a).
  */
 async function reapChildren(record: SessionRecord): Promise<boolean> {
   if (record.shellPid === null) return false;
@@ -859,7 +873,7 @@ async function reapChildren(record: SessionRecord): Promise<boolean> {
   const budget = { timeoutMs: 5000, maxOutputBytes: 4096 };
 
   try {
-    const term = await execOnce(record.conn, `pkill -TERM -P ${pid}`, budget);
+    const term = await execOnce(record.conn, internalCommand(`pkill -TERM -P ${pid}`), budget);
     if (term.exit_code === 127) return false;
   } catch (err) {
     logger.debug('pkill -TERM failed', { session_id: record.id, error: errorMessage(err) });
@@ -868,7 +882,7 @@ async function reapChildren(record: SessionRecord): Promise<boolean> {
 
   await delay(config.killGraceMs);
   try {
-    await execOnce(record.conn, `pkill -KILL -P ${pid}`, budget);
+    await execOnce(record.conn, internalCommand(`pkill -KILL -P ${pid}`), budget);
   } catch (err) {
     logger.debug('pkill -KILL failed', { session_id: record.id, error: errorMessage(err) });
   }
@@ -877,7 +891,7 @@ async function reapChildren(record: SessionRecord): Promise<boolean> {
 
 async function runCommand(
   record: SessionRecord,
-  command: string,
+  command: ResolvedCommand,
   options: RunInSessionOptions
 ): Promise<SessionRunResult> {
   const started = Date.now();
@@ -967,8 +981,8 @@ async function runCommand(
       out.meta.encoding === 'base64' || errOut.meta.encoding === 'base64' ? 'base64' : 'utf8',
     duration_ms: Date.now() - started,
     background_job: hasTrailingBackground(command),
-    stdout_retained: out.retained,
-    stderr_retained: errOut.retained,
+    stdout_retention: out.retention,
+    stderr_retention: errOut.retention,
   };
 }
 
@@ -977,10 +991,15 @@ async function runCommand(
  *
  * Calls on the same session are serialised: the channel carries one command at
  * a time, so a second caller waits rather than interleaving frames.
+ *
+ * Both this signature and the private {@link runCommand} take the branded
+ * command: the public one is the tool boundary AC-J5a names, and the private
+ * one is where the string is actually framed, so leaving either as `string`
+ * would leave a door open (`src/output/resolve.ts`).
  */
 export async function runInSession(
   sessionId: string,
-  command: string,
+  command: ResolvedCommand,
   options: RunInSessionOptions
 ): Promise<SessionRunResult> {
   // `async` matters: a caller awaiting this must get a rejected promise for an

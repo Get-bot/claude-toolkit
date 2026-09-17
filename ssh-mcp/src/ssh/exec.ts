@@ -30,7 +30,13 @@ import type { Client } from 'ssh2';
 
 import { ERROR_CODES } from '../errors.js';
 import { retainCapFor } from '../output/limits.js';
-import { createExcerptAccumulator, type ExcerptEncoding, type ExcerptMeta } from './excerpt.js';
+import type { ResolvedCommand } from '../output/resolve.js';
+import {
+  createExcerptAccumulator,
+  type ExcerptEncoding,
+  type ExcerptMeta,
+  type Retention,
+} from './excerpt.js';
 import { SshOperationError, errorMessage } from './error.js';
 import { buildExecFrame, createPidLineSplitter, execFramingAllowed } from './execWrapper.js';
 import { reapRemoteProcess, type ReapOutcome } from './reaper.js';
@@ -67,8 +73,8 @@ export interface CommandOutput {
    * `output_ref` is `commandResultBody()`'s job, which is also why the timeout
    * path below can hold them and simply not pass them on (AC-O1b).
    */
-  stdout_retained: Buffer | null;
-  stderr_retained: Buffer | null;
+  stdout_retention: Retention;
+  stderr_retention: Retention;
 }
 
 /**
@@ -92,10 +98,15 @@ function combinedEncoding(stdout: ExcerptMeta, stderr: ExcerptMeta): ExcerptEnco
  * Rejects with {@link SshOperationError}: `command_timeout` when the budget
  * expires (partial output is attached to `details`), otherwise the pool's
  * connection error code when the channel could not be opened.
+ *
+ * `command` is branded (AC-J5a): what runs here is by construction what the
+ * approval gate saw. A string that never went through `resolveCommand()` does
+ * not compile, which is why the `format: "json"` rewrite cannot be applied to
+ * one of the two and forgotten at the other (`src/output/resolve.ts`).
  */
 export async function execOnce(
   conn: Client,
-  command: string,
+  command: ResolvedCommand,
   options: ExecOptions
 ): Promise<CommandOutput> {
   // Decided before the clock starts: the probe behind this is per connection,
@@ -144,8 +155,8 @@ export async function execOnce(
         encoding: combinedEncoding(out.meta, err.meta),
         duration_ms: Date.now() - started,
         background_job: background,
-        stdout_retained: out.retained,
-        stderr_retained: err.retained,
+        stdout_retention: out.retention,
+        stderr_retention: err.retention,
       };
     };
 
