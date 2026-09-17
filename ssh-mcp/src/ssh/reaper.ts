@@ -31,8 +31,10 @@
  * TODO(dedup): `session.ts` `reapChildren` predates this module and still has
  * its own copy of the sequence, minus the `kill <pid>` half. Folding it in here
  * was deliberately left out of A12 because `session.ts` was being edited
- * concurrently; the two constants below are the ones that must not drift in the
- * meantime.
+ * concurrently. The timing constants are no longer part of that duplication —
+ * {@link DEFAULT_KILL_GRACE_MS} is defined here and imported there — so what is
+ * still duplicated is the TERM/grace/KILL sequence itself, and that is what
+ * folding the two together would remove.
  */
 import type { Client } from 'ssh2';
 

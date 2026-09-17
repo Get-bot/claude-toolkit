@@ -14,25 +14,28 @@ ssh-mcp 서버 구현 전체가 있는 디렉터리입니다. 최상위 파일�
 | `index.ts`    | bin 진입점. Node 20 이상 가드 후 argv 라우팅(`commands.ts`의 `COMMANDS` 표에 있는 명령 / `--version`·`-v`·`version` / `help`·`--help`·`-h` / 그 외는 서버). `run(argv)`, `MIN_NODE_MAJOR` export. 정적 import는 `commands.ts`·`help.ts` 둘뿐이고 둘 다 로드 시 실행되는 것이 없습니다.                                                                                     |
 | `commands.ts` | 최상위 명령 표 `COMMANDS`(이름 → 서브커맨드 모듈을 **동적 import**하는 thunk), `CommandName`·`COMMAND_NAMES`·`isCommandName`, 라우터 토큰 `HELP_TOKENS`·`VERSION_TOKENS`. 라우터와 `help`가 같은 표를 읽으므로 새 최상위 명령은 **여기 한 곳**에만 추가하고, 이름과 로더의 짝은 컴파일러가 확인합니다. `setup`은 `host add`의 **무경고 별칭**으로 이 표에 있습니다.        |
 | `help.ts`     | 최상위 `help`/`--help`/`-h`. `USAGE`(명령어 목록)와 그 폭 상수 `USAGE_MAX_COLUMNS`·`USAGE_DESCRIPTION_COLUMN`, `runHelp(argv, deps)`, `EXIT_OK`/`EXIT_USAGE`. `help <command> ...`는 `COMMANDS`에서 그 명령을 로드해 `<command> ... --help`로 **넘기므로** 플래그를 복사해 두지 않고, `help host add`는 `host add`에 닿습니다. `help help`·`help version`은 목록을 냅니다. |
-| `server.ts`   | `createServer()`가 정확히 7개 도구를 등록하고 `assertSevenTools()`로 기동 시 검증합니다. `startServer()`는 stdio 전송을 연결하고, `supportsFormElicitation()`이 클라이언트의 elicitation 지원 여부(Branch A/B)를 판정합니다.                                                                                                                                               |
-| `audit.ts`    | `~/.ssh-mcp/audit.jsonl`에 도구 호출당 정확히 한 줄. `TOOL_NAMES`(7개 도구의 정식 목록), `APPROVAL_OUTCOMES`(8가지), `AUDIT_SCHEMA_VERSION`의 출처.                                                                                                                                                                                                                        |
+| `server.ts`   | `createServer()`가 `TOOL_NAMES`에 등재된 도구를 전부 등록하고 `assertRegisteredTools()`로 그 집합과 정확히 일치하는지 기동 시 검증합니다. `startServer()`는 stdio 전송을 연결하고, `supportsFormElicitation()`이 클라이언트의 elicitation 지원 여부(Branch A/B)를 판정합니다.                                                                                              |
+| `audit.ts`    | `~/.ssh-mcp/audit.jsonl`에 도구 호출당 정확히 한 줄. `TOOL_NAMES`(등록된 도구의 정식 목록), `APPROVAL_OUTCOMES`(8가지), `AUDIT_SCHEMA_VERSION`의 출처.                                                                                                                                                                                                                     |
 | `log.ts`      | stderr 전용 구조화 로거 + 공유 redaction. `logger`, `redact`/`redactRecord`, `truncateUtf8`, `installStdoutGuard`/`captureProcessStdout`/`protocolStdoutStream`.                                                                                                                                                                                                           |
 | `errors.ts`   | `ERROR_CODES` 상수와 도구 응답 봉투. 계획서 §5.3 표를 그대로 옮긴 것이며, 같은 상황에 새 코드를 만들어 쓰면 안 됩니다.                                                                                                                                                                                                                                                     |
 | `version.ts`  | `readPackageVersion()` — `dist/index.js`와 `src/*.ts` 양쪽 위치에서 `package.json`을 찾습니다. 실패 시 `UNKNOWN_VERSION`을 반환하고 절대 throw 하지 않습니다.                                                                                                                                                                                                              |
 
 ## Subdirectories
 
-| Directory   | Purpose                                                                                   |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `config/`   | `hosts.json`·`state.json` 스키마와 영속화, 호스트 등록 명령 형태 (see `config/AGENTS.md`) |
-| `doctor/`   | `ssh-mcp doctor` 진단 CLI (see `doctor/AGENTS.md`)                                        |
-| `host/`     | `ssh-mcp host add`/`host list` 명령 그룹 (see `host/AGENTS.md`)                           |
-| `install/`  | `ssh-mcp install` 클라이언트 등록 CLI (see `install/AGENTS.md`)                           |
-| `internal/` | 의존성 0인 최하단 유틸리티 (see `internal/AGENTS.md`)                                     |
-| `safety/`   | 명령 정규화·분류·승인 게이트·토큰 (see `safety/AGENTS.md`)                                |
-| `setup/`    | `ssh-mcp host add`(별칭 `setup`) 호스트 등록 CLI (see `setup/AGENTS.md`)                  |
-| `ssh/`      | SSH/SFTP 전송, 연결 풀, 세션 (see `ssh/AGENTS.md`)                                        |
-| `tools/`    | MCP 도구 7종과 공용 래퍼 (see `tools/AGENTS.md`)                                          |
+| Directory   | Purpose                                                                                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `audit/`    | `history` 도구의 페이징 커서(`cursor.ts`)와 `audit.jsonl`을 회전 파일까지 역방향으로 읽는 리더(`reader.ts`). 정식 도구 이름 목록 `TOOL_NAMES`는 최상위 `audit.ts`에 있습니다 — 이름이 겹치지만 다른 파일입니다 (AGENTS.md 없음) |
+| `config/`   | `hosts.json`·`state.json` 스키마와 영속화, 호스트 등록 명령 형태 (see `config/AGENTS.md`)                                                                                                                                       |
+| `connect/`  | `connect`/`exec` CLI가 시스템 `ssh`를 찾아 위임하는 코드(G-1 격리 경계). 서버 경로는 이 디렉터리를 import할 수 없습니다 (AGENTS.md 없음)                                                                                        |
+| `doctor/`   | `ssh-mcp doctor` 진단 CLI (see `doctor/AGENTS.md`)                                                                                                                                                                              |
+| `host/`     | `ssh-mcp host add`/`host list` 명령 그룹 (see `host/AGENTS.md`)                                                                                                                                                                 |
+| `install/`  | `ssh-mcp install` 클라이언트 등록 CLI (see `install/AGENTS.md`)                                                                                                                                                                 |
+| `internal/` | 의존성 0인 최하단 유틸리티 (see `internal/AGENTS.md`)                                                                                                                                                                           |
+| `output/`   | `format:"json"` 재작성 표·파서(`jsonCommands.ts`, `tables.ts`), `fetch_output`의 백업 스토어(`store.ts`), 크기 상한(`limits.ts`) (AGENTS.md 없음)                                                                               |
+| `safety/`   | 명령 정규화·분류·승인 게이트·토큰 (see `safety/AGENTS.md`)                                                                                                                                                                      |
+| `setup/`    | `ssh-mcp host add`(별칭 `setup`) 호스트 등록 CLI (see `setup/AGENTS.md`)                                                                                                                                                        |
+| `ssh/`      | SSH/SFTP 전송, 연결 풀, 세션 (see `ssh/AGENTS.md`)                                                                                                                                                                              |
+| `tools/`    | MCP 도구 표면(수는 `audit.ts`의 `TOOL_NAMES`에서 파생)과 공용 래퍼 (see `tools/AGENTS.md`)                                                                                                                                      |
 
 ## Architecture
 
@@ -50,7 +53,8 @@ MCP client
 ```
 
 - **레이어 규칙.** `internal/`은 아무것도 import 하지 않고, `log.ts`/`config/`/`audit.ts`는 `internal/`만 바라봅니다. `tools/`는 `safety/`와 `ssh/`를 쓰지만 그 반대는 없습니다. 이 방향을 뒤집으면 순환 참조가 생깁니다.
-- **도구 개수는 7로 고정.** `assertSevenTools()`가 기동 시 실패시킵니다 — "아무도 합의하지 않은 도구 표면"이 조용히 노출되는 것보다 기동 실패가 낫다는 판단입니다.
+- **`ssh` 탐색·spawn 코드는 `src/connect/`에만 둡니다.** 서버 경로(`src/server.ts`, `src/tools/`, `src/ssh/`)에서 그 디렉터리를 import하는 것은 단순한 관례가 아니라 `eslint.config.js`의 첫 번째 layer guard(G-1, `no-restricted-imports`)가 강제합니다. 이 패키지가 내세우는 "순수 JS, OpenSSH 불필요" 약속은 서버 경로가 시스템 `ssh`에 닿을 수 없을 때만 참이고, `connect`/`exec` CLI가 시스템 `ssh`에 위임하는 유일하고 의도된 예외입니다. `src/doctor/`는 이 가드에서 일부러 빠져 있습니다 — `ssh` 유무를 INFO로만 보고하고(G-4) 서버 경로가 아니기 때문입니다.
+- **도구 개수는 `TOOL_NAMES`에서 파생됩니다.** `assertRegisteredTools()`가 등록된 이름 집합이 그것과 정확히 일치하는지 기동 시 확인하고, 어긋나면 실패시킵니다 — "아무도 합의하지 않은 도구 표면"이 조용히 노출되는 것보다 기동 실패가 낫다는 판단입니다.
 
 ## For AI Agents
 
@@ -85,7 +89,7 @@ npm run test:integration
 - 파일 상단 블록 주석에 **설계 근거와 계획서 참조(plan row, AC 번호, ADR, CR/F 번호)** 를 남깁니다. 새 파일도 같은 형식을 따르세요.
 - 상대 import에는 `.js` 확장자를 붙입니다(`NodeNext`).
 - 타입만 필요하면 `import type`.
-- 입력 검증은 `zod`, 내부 불변식은 assert 함수(`assertSevenTools` 같은)로 기동 시 확인합니다.
+- 입력 검증은 `zod`, 내부 불변식은 assert 함수(`assertRegisteredTools` 같은)로 기동 시 확인합니다.
 
 ## Dependencies
 

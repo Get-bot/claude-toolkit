@@ -364,7 +364,7 @@ jobs:
 
       # `test:e2e` runs tests/e2e/**/*.test.ts (realHost.test.ts self-skips without
       # SSH_MCP_E2E_HOST, so it's safe to include in the same run).
-      - name: package smoke test (initialize + tools/list, expect 7 tools)
+      - name: package smoke test (initialize + tools/list, tool set == TOOL_NAMES)
         run: npm run test:e2e
 
   windows-spawn:

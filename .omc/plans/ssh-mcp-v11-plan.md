@@ -424,7 +424,7 @@ iteration 2의 "명시 CLI > ssh_config > 위저드"는 토큰 순서와 뒤집�
 | # | 작업 | 파일 | AC |
 |---|------|------|-----|
 | G1 | `version` `0.3.0` | `package.json:3` | AC-R1 |
-| G2 | CHANGELOG `[0.3.0]`. 굵게: 도구 7→9, 응답 필드 추가, `output_ref` non-null, 승인 스키마 변경, `setup` 경고 시작, `host list --json` 스키마. AC-H7 관측 결과 1줄 | `CHANGELOG.md:5` 이후 | AC-R1, A2, E4, H7 |
+| G2 | CHANGELOG `[0.3.0]`. 굵게: 도구 7→9, 응답 필드 추가, `output_ref` non-null, 승인 스키마 변경, `setup` 경고 시작, `host list --json` 스키마. AC-H7 관측 결과 1줄. **단, 상위 목록 중 `승인 스키마 변경`은 Phase B 산출물이고 Phase B가 미착수라 0.3.0 CHANGELOG에 아직 없다** — probe 실측 전이라 쓸 내용이 확정되지 않았기 때문이며, 구현되지 않은 동작을 사용자 문서에 미리 적지 않는다는 뜻이다. 릴리스 전에 Phase B가 끝나면 같은 `[0.3.0]` 절에 채운다(절이 아직 `Unreleased`라 가능하다). | `CHANGELOG.md:5` 이후 | AC-R1, A2, E4, H7 |
 | G3 | README: 도구 9개, 감사 로그 절에 `history` 예(`README.md:698` 교체), 출력 절(`fetch_output`·`format`·메모리 10분·**PEM 마스킹**·**`fetch_output.total_bytes`가 마스킹 후 보관 길이라 `stdout_meta.total_bytes`와 다를 수 있다는 한 줄**), `host add --from-ssh-config`, 새 절 `connect`/`exec`, 로드맵(`:785-796`) | `README.md` | AC-R2, C4, O2a, O7, A2 |
 | G4 | `setup` 제거 예정 버전(0.4.0)을 README·CHANGELOG에 | `README.md`, `CHANGELOG.md` | AC-A2 |
 | G5 | `tests/AGENTS.md:27`의 "실제 sshd 컨테이너 티어는 v1.1 후보"와 CI 헤더 주석(`.github/workflows/ssh-mcp-ci.yml:5-6`, `:111-114`) 갱신 | `tests/AGENTS.md`, 워크플로 | AC-T1 |
@@ -617,6 +617,22 @@ v1의 ADR-001~009에 이어 번호를 매긴다.
 **Why chosen.** Phase A의 산출물은 코드가 아니라 결정과 검증 능력이고, 등록은 그 능력이 안정적임을 관측한 뒤에 거는 것이 맞다.
 **Consequences.** 초반에 눈에 보이는 기능 진척이 없다. AC-T1은 릴리스 직전까지 "잡은 녹색이지만 미등록" 상태로 남는다 — §8.4-1이 그것을 체크리스트로 관리한다.
 **Follow-ups.** A2가 지연되면 Phase C·D·F는 B와 독립이므로 먼저 진행할 수 있다. B만 차단된다.
+
+### ADR-018. 타임아웃된 `exec`는 프레임으로 받은 pid를 2차 채널에서 거둔다
+
+**Context.** `execOnce`는 예산이 끝나면 SSH 채널에 signal을 보내고 채널을 닫았다. 실제 OpenSSH 서버를 상대로 측정하니(단계 A12) **둘 다 아무 일도 하지 않는다** — sshd는 세션 채널의 `signal` 요청을 무시하고, pty 없는 exec 채널이 사라져도 자식 프로세스는 죽지 않는다. 1.5초 예산의 `sleep 37`이 6초 넘게 살아남았다. v1이 이것을 놓친 이유가 이 ADR의 본론이다: 검증이 인프로세스 픽스처로만 이루어졌고, 픽스처는 채널을 닫으면 자식도 사라지는 것처럼 굴었다. 세션 경로는 OPT-2 단계 8부터 pid로 거두고 있었으므로(`session.ts`의 `reapChildren`), 결함은 "정리 방법을 모른다"가 아니라 "일회성 `exec`에는 거둘 pid가 없다"였다.
+
+**Decision.** POSIX 원격에서 `exec`의 명령을 `printf '%s\n' "$$"; eval '<command>'`로 감싸 **원격 셸의 pid를 stdout 첫 줄로 받는다**(`src/ssh/execWrapper.ts`). `execOnce`는 그 한 줄을 발췌 누산기가 보기 전에 걷어내므로 바이트 수·줄 수·UTF-8 판정은 명령 자신의 출력으로만 계산된다. 타임아웃이 나면 **원래 채널이 아니라 2차 채널**(`src/ssh/control.ts`)에서 `pkill -TERM -P <pid>`와 `kill -TERM <pid>`를 보내고, `DEFAULT_KILL_GRACE_MS`만큼 기다린 뒤 같은 쌍을 `KILL`로 반복한다(`src/ssh/reaper.ts`). 두 명령이 모두 필요하다 — 원격 셸이 사용자 명령으로 `exec`해 버리면 자식이 없고 그 pid가 곧 명령이다. **프레이밍은 전송이지 내용이 아니다**: 분류·승인 창·감사 줄은 전부 사용자가 준 원문을 보고, 감싼 문자열은 `execOnce`만 본다.
+
+**Drivers.** AC-T4(타임아웃 후 원격 프로세스 정리) / 감사된 명령 = 실행된 명령이라는 불변식을 깨지 않을 것 / 세션 경로와 정리 이야기를 둘로 만들지 않을 것.
+
+**Alternatives considered.** **채널 signal** — 이미 하고 있었고 실제 sshd에서 동작하지 않음이 측정으로 확인됐다. **pty 요청** — signal은 전달되지만 대가가 크다. pty를 붙이면 stdout과 stderr가 한 채널로 합쳐져 AC10의 "분리해서 반환"이 프로토콜 수준에서 거짓이 되고, 원격 도구들이 출력을 터미널 폭에 맞춰 자르기 시작한다(`src/output/tables.ts` 헤더가 `ps`의 폭 절단이 왜 지금은 일어나지 않는지를 근거와 함께 적어 두었다 — pty를 요청하는 순간 그 근거가 무너진다). **명령마다 `timeout(1)` 삽입** — 원격에 GNU coreutils를 요구하고, 사용자 명령을 우리가 고쳐 쓰는 형태라 감사 불변식과 충돌한다.
+
+**Why chosen.** 정리에 필요한 유일한 정보가 pid이고, 그것을 아는 쪽은 원격 셸뿐이다. 물어보려면 명령을 감싸야 하는데, 감싸되 **전송 계층에만** 감싸면 감사 불변식은 그대로 남는다. 2차 채널을 쓰는 이유는 정리해야 할 시점에 원래 채널이 이미 믿을 수 없는 상태이기 때문이다.
+
+**Consequences.** `cmd`/`powershell` 원격은 프레이밍 대상이 아니므로 **기존 동작 그대로 = 정리되지 않는다**. README의 알려진 한계에 적는다. `nohup`·`setsid`로 떼어 낸 프로세스는 POSIX 원격에서도 살아남는다. `pkill`은 어디에나 있지 않으므로(`ubuntu:24.04` 기본 이미지에 `procps`가 없고 Git for Windows에는 아예 없다) `command not found`는 `kill` 단독으로 축소하고 연결당 한 번만 알린다. `DEFAULT_KILL_GRACE_MS`는 세션 경로와 **정의를 공유**하지만(`reaper.ts`가 정본, `session.ts`가 import) **런타임 손잡이는 둘로 남는다** — `configureReaper`와 `configureSessions`가 각각 `killGraceMs`를 덮어쓸 수 있어야 테스트가 한쪽 경로만 짧게 만들 수 있기 때문이다.
+
+**Follow-ups.** `session.ts`의 `reapChildren`은 이 모듈보다 먼저 있었고 같은 순서를 자기 사본으로 갖고 있다(`kill <pid>` 절반이 빠진 형태). 합치는 것은 A12에서 의도적으로 뺐다 — `session.ts`가 동시에 편집되고 있었다. 후속으로 하나로 접는다.
 
 ---
 

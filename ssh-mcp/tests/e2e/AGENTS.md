@@ -9,10 +9,10 @@
 
 ## Key Files
 
-| File               | Description                                                                                                                                                                                                       |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `package.test.ts`  | 패키징된 서버가 stdio로 MCP를 올바르게 말하는지 — `initialize` + `tools/list`에서 도구 7개 확인. 최상위 `help`가 서버가 아니라 터미널에 닿는지도 같은 진입점을 스폰해서 봅니다. CI의 `package-smoke` 잡이 씁니다. |
-| `realHost.test.ts` | 이미 `ssh-mcp setup`으로 등록된 **실제 호스트**에 대한 선택적 스모크. `SSH_MCP_E2E_HOST`가 없으면 CI 포함 어디서든 깨끗하게 skip 합니다.                                                                          |
+| File               | Description                                                                                                                                                                                                                                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `package.test.ts`  | 패키징된 서버가 stdio로 MCP를 올바르게 말하는지 — `initialize` + `tools/list`에서 도구 이름 집합이 `TOOL_NAMES`(`src/audit.ts`)와 정확히 일치하는지 확인. 최상위 `help`가 서버가 아니라 터미널에 닿는지도 같은 진입점을 스폰해서 봅니다. CI의 `package-smoke` 잡이 씁니다. |
+| `realHost.test.ts` | 이미 `ssh-mcp setup`으로 등록된 **실제 호스트**에 대한 선택적 스모크. `SSH_MCP_E2E_HOST`가 없으면 CI 포함 어디서든 깨끗하게 skip 합니다.                                                                                                                                   |
 
 ## How it runs
 
@@ -33,7 +33,7 @@
 - **`tests/e2e`를 `vitest.config.ts`에 넣지 마세요.** 기본 설정에서 의도적으로 제외돼 있습니다.
 - **`realHost.test.ts`는 기본적으로 아무것도 하지 않아야 합니다.** 게이트가 풀리는 순간 실제 서버에 접속하므로, `describe.skipIf(!REAL_HOST_ALIAS)` 밖으로 코드를 옮기지 마세요. vitest가 파일당 최소 한 개의 테스트를 요구하기 때문에 파일 끝에 보고용 테스트가 하나 있습니다.
 - **릴리스 체크리스트 항목입니다.** 실제 호스트 상대로 이 테스트를 돌리고 결과를 기록하는 것은 릴리스 전 필수 수동 단계이지만 자동 CI의 일부는 아닙니다(계획 §8.7 #3).
-- **stdout에 JSON-RPC 프레임 외의 것이 없는지도 검증합니다.** `nonJsonStdoutLines`가 AC2.3의 근거이며, 도구는 정확히 7개여야 합니다.
+- **stdout에 JSON-RPC 프레임 외의 것이 없는지도 검증합니다.** `nonJsonStdoutLines`가 AC2.3의 근거이며, 도구 집합은 `TOOL_NAMES`와 정확히 일치해야 합니다(`EXPECTED_TOOLS`가 하드코딩 대신 `[...TOOL_NAMES].sort()`로 파생돼, 서버와 `TOOL_NAMES`가 어긋나는 쪽을 실제로 잡아냅니다).
 - **`assertNoWritesOutside(home)`는 `home.cleanup()`보다 먼저 호출해야 합니다.** cleanup이 환경변수를 복원해 버리기 때문입니다.
 - 자식이 응답 전에 죽으면 타임아웃을 기다리지 말고 즉시 실패해야 합니다. `stdioServer.ts`의 `describeFate()`가 종료 코드와 stderr 꼬리를 붙여 주며, 이 진단이 없으면 0.6초 만에 죽은 자식을 30초 동안 기다리게 됩니다.
 
@@ -46,7 +46,7 @@ SSH_MCP_TGZ=$(pwd)/get-bot-ssh-mcp-<package.json의 version>.tgz npm run test:e2
 SSH_MCP_E2E_HOST=myhost npm run test:e2e     # 실제 호스트 레그까지
 ```
 
-CI 잡: `package-smoke` (ubuntu + windows 매트릭스), 스텝 `package smoke test (initialize + tools/list, expect 7 tools)`.
+CI 잡: `package-smoke` (ubuntu + windows 매트릭스), 스텝 `package smoke test (initialize + tools/list, tool set == TOOL_NAMES)`.
 
 ## Dependencies
 

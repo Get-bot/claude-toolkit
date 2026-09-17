@@ -31,7 +31,7 @@
 
 2. Claude Desktop을 완전히 재시작한다.
 
-- [ ] 도구 목록에 **정확히 7개**(`list_hosts`, `exec`, `upload`, `download`, `open_session`, `run_in_session`, `close_session`)가 보인다.
+- [ ] 도구 목록에 **정확히 9개**(`list_hosts`, `exec`, `upload`, `download`, `open_session`, `run_in_session`, `close_session`, `history`, `fetch_output`)가 보인다. (출처: `src/audit.ts`의 `TOOL_NAMES` — 개수나 이름이 바뀌면 여기도 갱신)
 - [ ] (참고용) `command: "npx"` 형태(감싸지 않은 버전)도 한 번 시도해 실제로 실패/성공 여부를 기록한다. README의 `cmd /c` 권고가 실제로 필요한지 재확인하는 목적이다.
 
 ### AC4 추가 항목(계획 외) — `install claude-desktop` 자동 경로
@@ -48,7 +48,7 @@ npx @get-bot/ssh-mcp install claude-desktop
 - [ ] 기존에 다른 MCP 서버가 등록돼 있었다면 그 항목과 `mcpServers` 밖의 다른 키가 모두 그대로 남아 있다.
 - [ ] 기존 파일이 있었다면 같은 디렉터리에 `claude_desktop_config.json.bak-<YYYYMMDD-HHmmss>` 백업이 생긴다.
 - [ ] 같은 명령을 한 번 더 실행하면 종료 코드 1로 거부하고 파일이 바뀌지 않는다. `--force`를 주면 교체되고 백업이 하나 더 생긴다. 같은 초 안에 `--force`를 두 번 실행해도 첫 백업이 남고 `-1` 접미사가 붙은 백업이 추가된다.
-- [ ] Claude Desktop을 완전히 재시작하면 도구 목록에 **정확히 7개**가 보인다.
+- [ ] Claude Desktop을 완전히 재시작하면 도구 목록에 **정확히 9개**(위 AC4의 `TOOL_NAMES` 목록과 동일)가 보인다.
 
 ## AC5 — Claude Code 등록
 
@@ -56,7 +56,7 @@ npx @get-bot/ssh-mcp install claude-desktop
 claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 ```
 
-- [ ] `/mcp` 명령에서 같은 7개 도구가 보인다.
+- [ ] `/mcp` 명령에서 같은 9개 도구가 보인다.
 - [ ] 감싸지 않은 `claude mcp add ssh-mcp -- npx -y @get-bot/ssh-mcp` 형태도 연결된다(2.1.270 / Windows 11에서 2026-09-14 실측). 사용한 Claude Code 버전과 결과를 기록한다.
 
 ### AC5 추가 항목(계획 외) — `install claude-code` 자동 경로
@@ -78,13 +78,13 @@ npx @get-bot/ssh-mcp install claude-code
   ```
 
 - [ ] `--scope` 없이 실행하면 "Claude Code 어디에 등록할까요?" 메뉴가 뜨고, `local` 줄에 **현재 디렉터리의 절대 경로**가 보인다. `↑`/`↓`로 커서(`❯`)가 움직이고 화면이 위로 밀리지 않는다. Enter만 누르면 `local`로 진행한다.
-- [ ] 메뉴에서 `2`를 누르면 Enter 없이 즉시 `-s user`로 등록되고, 다른 디렉터리에서 Claude Code를 열어도 7개 도구가 보인다.
+- [ ] 메뉴에서 `2`를 누르면 Enter 없이 즉시 `-s user`로 등록되고, 다른 디렉터리에서 Claude Code를 열어도 9개 도구가 보인다.
 - [ ] 메뉴가 확정되면 메뉴가 지워지고 `선택: ...` 한 줄만 남는다.
 - [ ] **창을 80칸 이하로 좁혀서** 메뉴를 띄우고 키를 여러 번 눌러도 제목이 누적되거나 메뉴가 화면을 타고 내려가지 않는다. 긴 줄은 끝이 `…`로 잘린다. (WSL에서는 `stty cols 60`으로 좁힐 수 있다.)
 - [ ] `--scope user`를 붙이면 질문이 **뜨지 않는다**.
 - [ ] `npx @get-bot/ssh-mcp install claude-code < /dev/null`(비TTY)은 묻지 않고 `local`로 진행하며 "--scope를 지정하지 않아 ..." 한 줄을 남긴다.
 - [ ] 성공 메시지에 scope의 의미가 한 줄 나온다(`local`이면 현재 디렉터리 경로가 포함된다).
-- [ ] `--dry-run` 없이 실행하면 `claude mcp list`에 `ssh-mcp`가 나타나고 `/mcp`에서 7개 도구가 보인다.
+- [ ] `--dry-run` 없이 실행하면 `claude mcp list`에 `ssh-mcp`가 나타나고 `/mcp`에서 9개 도구가 보인다.
 - [ ] 같은 명령을 한 번 더 실행하면 `claude`가 중복 등록을 거부하고 종료 코드 1로 끝난다. `--force`를 주면 remove 후 add가 진행되어 성공한다.
 - [ ] `install claude-desktop --config <임시경로> --home --dry-run`이 종료 코드 2로 끝나고 **파일을 만들지 않는다**(값 자리에 플래그가 오는 경우).
 - [ ] **(Windows 전용)** `install claude-code --home "C:\R&D\ssh-mcp"`를 `claude`가 PATH에 없는 셸에서 실행하면 `cmd` 재시도 없이 수동 명령을 출력하고 종료 코드 1로 끝난다. WSL에는 `cmd` 재시도 경로 자체가 없으므로 여기서만 확인한다.

@@ -2,15 +2,30 @@
 
 사용자에게 보이는 변경만 적습니다. 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르고, 버전은 [SemVer](https://semver.org/lang/ko/)를 따릅니다. **0.x 동안은 minor 올림이 호환성을 깰 수 있습니다.** `npx -y @get-bot/ssh-mcp`처럼 버전을 지정하지 않고 등록한 클라이언트는 다음 세션부터 자동으로 새 버전을 받으므로, 호환성에 영향이 있는 항목은 아래에서 **굵게** 표시합니다.
 
-## [Unreleased]
+## [0.3.0] - Unreleased
 
 ### Added
 
-- `ssh-mcp help` — 명령어 목록. `--help`, `-h`도 같습니다. 사용할 수 있는 명령(`install`, `host add`, `host list`, `doctor`, `help`)과 인자 없이 실행하면 MCP 서버가 뜬다는 사실, 그리고 빠른 시작을 stdout에 내고 종료 코드 0으로 끝납니다. 빠른 시작은 `npm i -g @get-bot/ssh-mcp`로 시작합니다 — 한 번 설치하면 `npx -y @get-bot/ssh-mcp` 대신 `ssh-mcp`로 칩니다. README 설치 절도 같은 순서로 바꿨습니다(전역 설치 먼저, npx는 설치 없이 쓰는 대안). 클라이언트에 등록되는 서버 기동 명령은 그대로 npx 형태입니다.
+- **`history` 도구.** 감사 로그를 최신순으로 읽습니다. `host`·`since`·`until`·`grade`·`tool`·`outcome`으로 거르고, `limit`은 기본 50·최대 200이며, `cursor`로 페이지를 넘깁니다. 페이지가 끝났는지는 `next_cursor === null`로 판단합니다 — 한 번의 호출이 훑는 줄 수에 상한이 있어, 조건에 맞는 줄이 없는 빈 페이지가 아직 non-null인 커서와 함께 올 수 있기 때문입니다. 승인은 필요 없고 읽기 전용입니다. 감사 로그가 회전해 커서가 가리키던 자리를 승계할 수 없으면 `history_cursor_stale`로 알리며, 이때는 `cursor` 없이 다시 조회합니다.
+- **`fetch_output` 도구.** 발췌에서 잘려 나간 출력 전문을 페이지 단위로 읽습니다. 입력은 `{output_ref, cursor?, max_bytes?}`(기본 64 KiB, 최소 1 KiB, 최대 1 MiB), 출력은 `{chunk, encoding, offset, next_cursor, total_bytes}`입니다. 보관은 **서버 메모리에만** 하고 디스크에 쓰지 않으며, 수명은 10분, 전체 상한은 64 MiB(초과 시 오래된 것부터 폐기), 스트림 하나당 상한은 호스트 `maxOutputBytes`의 4배(절대 상한 16 MiB)입니다. 돌려주는 조각에도 `exec` 응답과 같은 개인키 블록 마스킹이 걸립니다. 만료·폐기·서버 재시작 뒤의 조회는 `output_expired`이며, 그때는 명령을 다시 실행해야 합니다. `close_session`이나 세션 만료는 보관 출력을 폐기하지 않습니다 — 수명은 TTL만 따릅니다.
+- `exec`와 `run_in_session`의 `format: "json"`. stdout을 파싱해 `parsed` 필드로 함께 돌려줍니다. 화이트리스트에 있는 단일 명령(`docker ps`·`docker images`·`docker container ls`·`docker inspect`, `systemctl list-units`·`list-timers`·`list-sockets`, `journalctl`, `lsblk`, `ip addr`·`link`·`route`)은 그 도구의 JSON 출력 플래그를 붙여 실행하고, JSON 모드가 없는 `df`와 `ps`는 고정 컬럼 형태로 정규화해 실행한 뒤 표를 갈라 냅니다. **정규화는 인자에도 미칩니다** — `df -h /var`는 `df -P /var`로(경로는 유지), `ps aux`와 `ps -p 123`은 둘 다 전체 프로세스 목록으로 실행됩니다. 명령에 파이프·리다이렉트·`;`·`&&`·서브셸이 있으면 재작성하지 않고 원문을 실행합니다. 어느 경우든 **분류·승인·감사·실행 대상은 모두 실제로 실행되는 그 문자열**이며, 승인 창에도 그것이 보입니다. 기본값은 `"text"`이고 이때는 응답에 `parsed`·`parse_error` 필드가 추가되지 않습니다.
+- `ssh-mcp connect <alias>` — 등록된 호스트로 대화형 셸을 엽니다. `ssh-mcp exec <alias> -- <command...>`는 같은 접속으로 명령 하나를 실행하며 `--` 뒤는 그대로 전달합니다. 둘 다 시스템의 `ssh`에 위임하므로 **이 경로는 분류·승인·감사·발췌를 거치지 않고**, 호스트 키 확인도 OpenSSH의 `known_hosts` 기준이라 `ssh-mcp`가 등록할 때 확인한 지문과 다를 수 있습니다. `ssh`가 `PATH`에 없으면 운영체제별 설치 안내를 내고 종료 코드 1입니다.
+- `ssh-mcp host add --from-ssh-config <Host>` — `~/.ssh/config`(`SSH_MCP_SSH_CONFIG`로 재지정 가능)에서 이름이 정확히 일치하는 `Host` 블록의 `HostName`·`Port`·`User`만 읽어 위저드 기본값으로 채웁니다. 값은 확인 단계에서 사람이 보고 고칠 수 있고, 키는 기존 것을 재사용하지 않고 전용 키를 새로 만듭니다. 와일드카드 `Host`·`Match`·`ProxyJump`/`ProxyCommand`가 걸린 블록은 부분 가져오기 없이 종료 코드 2이며, `Include`는 1단계까지만 따릅니다.
+- `host add --alias <name>`과 `--port <n>`. 우선순위는 위저드 확인 답 > 명시한 플래그 > ssh_config에서 읽은 값입니다.
+- `ssh-mcp help` — 명령어 목록. `--help`, `-h`도 같습니다. 사용할 수 있는 명령(`install`, `host add`, `host list`, `doctor`, `connect`, `exec`, `help`)과 인자 없이 실행하면 MCP 서버가 뜬다는 사실, 그리고 빠른 시작을 stdout에 내고 종료 코드 0으로 끝납니다. 빠른 시작은 `npm i -g @get-bot/ssh-mcp`로 시작합니다 — 한 번 설치하면 `npx -y @get-bot/ssh-mcp` 대신 `ssh-mcp`로 칩니다. README 설치 절도 같은 순서로 바꿨습니다(전역 설치 먼저, npx는 설치 없이 쓰는 대안). 클라이언트에 등록되는 서버 기동 명령은 그대로 npx 형태입니다.
 - `ssh-mcp help <command> ...` — 해당 명령의 사용법으로 넘깁니다. `ssh-mcp help doctor`는 `ssh-mcp doctor --help`와 같은 출력이고, 뒤에 붙인 단어도 그대로 넘어가므로 `ssh-mcp help host add`는 `host` 그룹이 아니라 `host add`의 사용법입니다. 명령별 플래그는 각자의 usage 한 곳에만 있고 목록이 복사해 두지 않습니다. `help version`·`help help`는 목록을 냅니다. 없는 명령은 stderr 한 줄 + 목록 + 종료 코드 2.
+
+### Changed
+
+- **`exec`와 `run_in_session`의 응답에 필드가 늘었습니다.** `format: "json"`으로 부르면 `parsed`와 `parse_error`가 붙고, 출력이 잘린 호출에서는 `stdout_meta.output_ref`/`stderr_meta.output_ref`가 더 이상 항상 `null`이 아니라 `fetch_output`에 넘길 수 있는 값이 됩니다. `format`을 주지 않으면 `parsed`·`parse_error`는 붙지 않지만, `output_ref`는 이 릴리스에서 별도로 바뀌므로 0.2.1과 바이트 단위로 같지는 않습니다.
+- **도구가 7개에서 9개로 늘었습니다**(`history`, `fetch_output` 추가). 기동 시 등록된 도구 수를 검증하는 단언도 그에 맞춰 바뀌었습니다. 기존 7개의 이름·입력·동작은 위 항목 외에는 그대로입니다.
+- **`ssh-mcp setup`이 이제 경고를 냅니다** — `host add`로 이름이 바뀐 별칭이며 0.4.0에서 제거된다는 안내입니다. 동작 자체는 그대로이고, 경고는 stderr로 나가므로 stdout을 파이프로 받는 스크립트에는 섞이지 않습니다.
+- **`host list --json`에 `reserved_alias` 필드가 생겼습니다.** 예약어(`install`·`host`·`doctor`·`setup`·`connect`·`exec`·`help`·`version`)와 같은 alias인 항목에만 `true`로 붙고, 그 외 JSON 구성은 `list_hosts` 도구의 응답과 같습니다. 표 모드에서는 같은 항목에 표시가 붙습니다. `host add`는 이제 이 이름들을 alias로 거부하지만, 이미 등록된 항목은 그대로 동작합니다.
+- 감사 로그는 계속 한 파일에 씁니다. 프로세스를 분리해 쓰면 줄이 섞일 수 있다는 우려를 측정으로 확인했는데 — 자식 프로세스 2개가 각각 1000줄을 동시에 쓰는 시나리오를 Windows에서 11회 반복 — 섞인 줄이 0건이라, 파일을 `audit-<pid>`로 나누는 변경은 넣지 않았습니다.
 
 ### Fixed
 
+- **타임아웃된 `exec`가 원격에 프로세스를 남기던 문제.** 지금까지는 시간이 다 되면 SSH 채널에 signal을 보내고 채널을 닫았는데, 실제 OpenSSH 서버는 세션 채널의 signal 요청을 무시하고 pty 없는 exec 채널이 닫혀도 자식 프로세스를 죽이지 않습니다. `sleep 37`에 1.5초 예산을 준 호출이 6초 넘게 살아 있었습니다. 이제 POSIX 원격에서는 명령을 감싸 원격 셸의 pid를 stdout 첫 줄로 받아 두고(그 줄은 응답에 닿기 전에 걷어내므로 바이트·줄 수 계산은 그대로입니다), 타임아웃 시 **별도 채널**에서 그 pid를 상대로 `pkill -P`와 `kill`을 TERM → 유예 → KILL 순으로 보냅니다. `pkill`이 없는 호스트에서는 `kill`만으로 축소하고 연결당 한 번 알립니다. `nohup`이나 `setsid`로 떼어 낸 프로세스는 여전히 살아남습니다. **이 결함은 v1을 인프로세스 픽스처로만 검증해서 놓친 것입니다** — 픽스처는 채널을 닫으면 자식도 죽는 것처럼 굴었고, 실제 `sshd`를 띄우는 테스트 티어를 붙이고 나서야 드러났습니다. Windows(`cmd`/`powershell`) 원격은 이 정리를 받지 않고 기존 동작 그대로입니다.
 - **`ssh-mcp --help`가 도움말 대신 서버를 띄우던 문제.** `help`·`--help`·`-h` 셋 다 라우터를 그냥 통과해 서버 모드로 떨어졌습니다. 터미널에서 치면 아무것도 출력하지 않고 stdin을 기다리며 멈춰 있었습니다 — 프로그램에 무엇을 할 수 있냐고 물었을 때 침묵과 멈춘 터미널이 돌아온 셈입니다. 하위 명령들은 이미 각자 `--help`를 갖고 있었고 최상위에만 없었습니다.
 - `ssh-mcp install --help`와 `ssh-mcp host add --help`(`setup --help`)가 사용법을 stderr에 쓰던 문제. 종료 코드는 0이었지만 `| less`나 `> 파일`로 받으면 비어 있었습니다. `host`·`host list`·`doctor`가 이미 따르는 규약("요청한 출력은 오류가 아니므로 stdout")대로 옮겼습니다. 그 밖의 출력 — 진행 메시지, 오류, 사용법 오류 — 은 그대로 stderr입니다.
 
@@ -77,7 +92,7 @@
 - append-only JSONL 감사 로그(호출당 1줄, 10 MiB × 4 회전, 출력 본문 미기록).
 - 원격 셸 지원: `bash`, `zsh`, `sh`/`dash`, busybox `ash`. `fish`·`cmd`·PowerShell은 `open_session` 미지원(`exec`는 동작).
 
-[Unreleased]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.1...HEAD
+[0.3.0]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.1...HEAD
 [0.2.1]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.0...ssh-mcp-v0.2.1
 [0.2.0]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.1.0...ssh-mcp-v0.2.0
 [0.1.0]: https://github.com/Get-bot/claude-toolkit/releases/tag/ssh-mcp-v0.1.0

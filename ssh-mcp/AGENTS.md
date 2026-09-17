@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Claude가 원격 서버에 SSH로 접속해 명령을 실행하고(`exec`), 파일을 주고받고(`upload`/`download`), 상태가 유지되는 셸 세션을 쓸 수 있게(`open_session`/`run_in_session`/`close_session`) 하는 stdio 전용 MCP 서버입니다. 네이티브 `ssh`/`scp` 바이너리에 의존하지 않고 순수 JavaScript SSH 클라이언트(`ssh2`)를 쓰므로 OpenSSH가 없는 Windows에서도 동작합니다. 이 프로젝트의 핵심 가치는 편의가 아니라 **안전성**입니다 — 모든 명령은 정규식 기반으로 safe/privileged/destructive로 분류되고, 호스트별 승인 모드와 승인 폴백을 거쳐야 실행되며, 성공·실패·거부와 무관하게 감사 로그에 한 줄씩 남습니다. 배포 단위는 npm 패키지 `@get-bot/ssh-mcp`이며 `npx -y @get-bot/ssh-mcp`로 바로 실행됩니다.
+Claude가 원격 서버에 SSH로 접속해 명령을 실행하고(`exec`), 파일을 주고받고(`upload`/`download`), 상태가 유지되는 셸 세션을 쓰고(`open_session`/`run_in_session`/`close_session`), 감사 로그와 발췌로 잘린 출력을 조회할 수 있게(`history`/`fetch_output`) 하는 stdio 전용 MCP 서버입니다. MCP 서버 경로와 도구 호출은 네이티브 `ssh`/`scp` 바이너리에 의존하지 않고 순수 JavaScript SSH 클라이언트(`ssh2`)를 쓰므로 OpenSSH가 없는 Windows에서도 동작합니다 — 사람이 직접 쓰는 `connect`/`exec` CLI만은 예외로, 시스템 `ssh`에 위임합니다(`src/connect/`, guard G-1). 이 프로젝트의 핵심 가치는 편의가 아니라 **안전성**입니다 — 모든 명령은 정규식 기반으로 safe/privileged/destructive로 분류되고, 호스트별 승인 모드와 승인 폴백을 거쳐야 실행되며, 성공·실패·거부와 무관하게 감사 로그에 한 줄씩 남습니다. 배포 단위는 npm 패키지 `@get-bot/ssh-mcp`이며 `npx -y @get-bot/ssh-mcp`로 바로 실행됩니다.
 
 ## Key Files
 
