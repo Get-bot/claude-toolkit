@@ -1,6 +1,9 @@
 # Frontmatter Specification
 
-TIL을 Git에 푸시할 때 사용하는 Markdown + Frontmatter 형식.
+TIL을 Git에 푸시할 때 사용하는 Markdown + Frontmatter 형식. **이 문서는 TIL 레포용 정본이다.**
+
+> 옵션 게시 대상인 Quartz 지식베이스는 폴더 구조와 태그 표기가 다르다. 차이점은 `quartz-publish.md` 가 정본이며,
+> 본문 변환 규칙·slug 규칙은 거기서도 이 문서를 그대로 따른다.
 
 ## Frontmatter란?
 
@@ -32,6 +35,9 @@ posts/TIL-YYMMDD-slug.md
 - 관사, 조사, 접속사 등 불필요한 단어 제거
 - 연속 하이픈 금지 (`--` → `-`)
 
+> Quartz에도 게시하는 경우 **파일명은 여기서 만든 것을 그대로 재사용**한다. 디렉토리만 `posts/` 대신 영역 폴더로 바뀐다
+> (`quartz-publish.md` 참조). 두 레포에서 파일명이 갈라지면 나중에 대조가 불가능하다.
+
 ## Frontmatter 필드
 
 ```yaml
@@ -51,6 +57,9 @@ description: "한 줄 요약"      # 필수. 핵심 내용 요약 (검색/SEO �
 3. **패턴/개념** 이름 포함: Cache-Aside, OAuth2, SRP, Saga 등
 4. 태그는 **3~7개** 범위로 유지
 5. 태그 형식: 기술명은 공식 표기 (Spring Boot, not springboot)
+
+> **Quartz 게시용 태그는 규칙이 다르다.** Quartz는 소문자 kebab-case 영어만 쓴다 (`Spring Boot` → `spring-boot`,
+> `문서 리팩토링` → `documentation`). 변환 규칙은 `quartz-publish.md` 의 "태그 변환 규칙"이 정본이다.
 
 ## 본문 변환 규칙
 
