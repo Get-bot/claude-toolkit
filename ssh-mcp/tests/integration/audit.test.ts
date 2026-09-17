@@ -18,7 +18,12 @@ import { ERROR_CODES } from '../../src/errors.js';
 import { clearTokens } from '../../src/safety/tokens.js';
 import { closeAll } from '../../src/ssh/pool.js';
 import { resetSessions } from '../../src/ssh/session.js';
-import { authorizeKey, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
+import {
+  authorizeKeyOverSsh,
+  hostEntryFor,
+  startEndpoint,
+  writeRemoteFile,
+} from '../fixtures/endpoints.js';
 import type { TestEndpoint } from '../fixtures/endpoints.js';
 import { generateClientKey } from '../fixtures/hostKeys.js';
 import {
@@ -98,7 +103,11 @@ beforeAll(async () => {
   home = createTmpHome('ssh-mcp-audit-');
   endpoint = await startEndpoint();
   const clientKey = generateClientKey();
-  authorizeKey(endpoint, clientKey.publicKey);
+  // 픽스처에서는 로컬 `fs`로, sshd 티어에서는 실제 SSH 설치 경로로 심습니다
+  // (`tests/fixtures/endpoints.ts:338`). 이 파일은 A7/A8 이후에 쓰였는데도
+  // 예전 모양인 `authorizeKey`를 그대로 물려받아, sshd 티어에서 훅 전체가
+  // throw 하고 이 파일의 테스트가 한 줄도 돌지 않았습니다.
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   keyPath = path.join(ensureKeysDir(), 'fixture');
   fs.writeFileSync(keyPath, clientKey.privateKey, { encoding: 'utf8', mode: 0o600 });
   localDir = fs.mkdtempSync(path.join(endpoint.localSandboxDir, 'local-'));
@@ -547,9 +556,11 @@ describe('what the file must not contain (AC20.5)', () => {
     // The sentinel lives in a file, so it appears in the output and nowhere in
     // the command: a hit in the audit file could only have come from stdout.
     const sentinel = 'AUDIT-OUTPUT-SENTINEL-8f21c';
-    const payload = path.join(endpoint.remoteHomeDir, 'audit-sentinel.txt');
-    fs.writeFileSync(payload, `${sentinel}\n`, 'utf8');
-    const command = `cat ${payload.replace(/\\/g, '/')}`;
+    // 원격에 있어야 `cat`이 읽습니다. 로컬 `fs`로 `remoteHomeDir`에 쓰면 sshd
+    // 티어에서는 러너 쪽 엉뚱한 경로가 되고, 단언은 stdout을 한 번도 보지
+    // 못한 채 초록이 됩니다.
+    await writeRemoteFile(endpoint, 'audit-sentinel.txt', `${sentinel}\n`);
+    const command = `cat ${remotePath('audit-sentinel.txt')}`;
 
     await withClient({ elicitation: 'none' }, async (harness) => {
       const result = await harness.callTool('exec', { host: 'auto', command });

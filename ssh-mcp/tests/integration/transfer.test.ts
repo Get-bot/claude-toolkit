@@ -24,7 +24,13 @@ import { ERROR_CODES } from '../../src/errors.js';
 import { clearTokens } from '../../src/safety/tokens.js';
 import { closeAll } from '../../src/ssh/pool.js';
 import { resetSessions } from '../../src/ssh/session.js';
-import { authorizeKeyOverSsh, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
+import {
+  authorizeKeyOverSsh,
+  hostEntryFor,
+  remoteFileExists,
+  startEndpoint,
+  writeRemoteFile,
+} from '../fixtures/endpoints.js';
 import type { TestEndpoint } from '../fixtures/endpoints.js';
 import { generateClientKey } from '../fixtures/hostKeys.js';
 import { startMcpTestClient, writeRegistry, type McpTestClient } from '../fixtures/mcpClient.js';
@@ -126,7 +132,11 @@ describe('paths inside the ssh-mcp home are refused (F1)', () => {
 
     expect(result.isError).toBe(true);
     expect(result.body.error).toBe(ERROR_CODES.local_path_forbidden);
-    expect(fs.existsSync(path.join(endpoint.remoteHomeDir, 'stolen-key'))).toBe(false);
+    // 부재 단언은 반드시 원격에 물어야 합니다. 로컬 `existsSync`로 물으면
+    // sshd 티어에서는 러너의 `D:\home\sshmcp`를 보고 언제나 false를 돌려주니,
+    // 거절이 실제로 일어났는지와 무관하게 초록이 됩니다
+    // (`tests/fixtures/endpoints.ts:440` 주석).
+    expect(await remoteFileExists(endpoint, 'stolen-key')).toBe(false);
   });
 
   it('refuses a symlink that points into the home directory', () => {
@@ -197,12 +207,15 @@ describe('transfers go through the approval gate (F1)', () => {
 
     expect(result.isError).toBe(true);
     expect(result.body.error).toBe(ERROR_CODES.command_denied);
-    expect(fs.existsSync(path.join(endpoint.remoteHomeDir, 'denied-upload.txt'))).toBe(false);
+    // 업로드가 거절됐다는 말의 내용 자체가 "원격에 파일이 없다"입니다.
+    expect(await remoteFileExists(endpoint, 'denied-upload.txt')).toBe(false);
   });
 
   it('refuses a download on a deny host', async () => {
     const remote = remotePath('deny-source.txt');
-    fs.writeFileSync(path.join(endpoint.remoteHomeDir, 'deny-source.txt'), 'payload\n', 'utf8');
+    // 내려받을 원본이므로 원격에 있어야 합니다.
+    await writeRemoteFile(endpoint, 'deny-source.txt', 'payload\n');
+    // 받는 쪽은 로컬입니다: `workDir`는 `localSandboxDir` 아래입니다.
     const target = path.join(workDir, 'deny-target.txt');
 
     const result = await harness.callTool('download', {
@@ -218,7 +231,9 @@ describe('transfers go through the approval gate (F1)', () => {
 
   it('asks before overwriting a local file, then runs once on the token', async () => {
     const name = 'overwrite-source.txt';
-    fs.writeFileSync(path.join(endpoint.remoteHomeDir, name), 'fresh remote payload\n', 'utf8');
+    // 원본은 원격, 덮어써질 대상은 로컬 — 이 테스트가 증명하려는 것이
+    // "로컬 파일을 덮어쓰기 전에 묻는다"이므로 두 쪽을 섞으면 안 됩니다.
+    await writeRemoteFile(endpoint, name, 'fresh remote payload\n');
     const target = path.join(workDir, 'overwrite-target.txt');
     fs.writeFileSync(target, 'original local payload\n', 'utf8');
 
@@ -293,7 +308,7 @@ describe('transfers go through the approval gate (F1)', () => {
       expect(elicited.elicitRequests[0]?.message).toContain(source);
       expect(elicited.elicitRequests[0]?.message).toContain(remote);
       expect(result.isError, result.text).toBe(false);
-      expect(fs.existsSync(path.join(endpoint.remoteHomeDir, 'elicited-upload.txt'))).toBe(true);
+      expect(await remoteFileExists(endpoint, 'elicited-upload.txt')).toBe(true);
     } finally {
       await elicited.close();
     }
@@ -318,14 +333,16 @@ describe('transfers go through the approval gate (F1)', () => {
 describe('the config-rewrite exploit chain is closed end to end (F1)', () => {
   it('cannot replace hosts.json and so cannot turn approval off', async () => {
     // 1. The attacker stages a registry that sets every host to `auto`.
-    const payload = path.join(endpoint.remoteHomeDir, 'evil-hosts.json');
-    fs.writeFileSync(payload, maliciousRegistry(), 'utf8');
+    //    미끼는 공격자가 장악한 원격에 있습니다. 로컬에 두면 이 체인은
+    //    "원격에서 끌어온다"는 전제 자체를 잃습니다.
+    await writeRemoteFile(endpoint, 'evil-hosts.json', maliciousRegistry());
+    const payload = remotePath('evil-hosts.json');
     const registryBefore = fs.readFileSync(hostsFilePath(), 'utf8');
 
     // 2. The model tries to download it over the real registry.
     const attack = await harness.callTool('download', {
       host: 'auto',
-      remote_path: payload.replace(/\\/g, '/'),
+      remote_path: payload,
       local_path: hostsFilePath(),
       overwrite: true,
     });

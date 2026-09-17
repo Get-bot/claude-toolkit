@@ -17,7 +17,12 @@ import { MAX_LOG_FIELD_BYTES } from '../../src/log.js';
 import { OMISSION_MARKER_PATTERN } from '../../src/ssh/excerpt.js';
 import { closeAll } from '../../src/ssh/pool.js';
 import { resetSessions } from '../../src/ssh/session.js';
-import { authorizeKey, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
+import {
+  authorizeKeyOverSsh,
+  hostEntryFor,
+  startEndpoint,
+  writeRemoteFile,
+} from '../fixtures/endpoints.js';
 import type { TestEndpoint } from '../fixtures/endpoints.js';
 import { generateClientKey } from '../fixtures/hostKeys.js';
 import { startMcpTestClient, writeRegistry, type McpTestClient } from '../fixtures/mcpClient.js';
@@ -75,11 +80,18 @@ function homeEntries(): string[] {
   return fs.readdirSync(home.dir).sort();
 }
 
+/** `name`의 원격 절대 경로. 명령줄에 그대로 넣을 수 있는 형태입니다. */
+function remotePath(name: string): string {
+  return `${endpoint.remoteHomeDir.replace(/\\/g, '/')}/${name}`;
+}
+
 beforeAll(async () => {
   home = createTmpHome('ssh-mcp-output-');
   endpoint = await startEndpoint();
   const clientKey = generateClientKey();
-  authorizeKey(endpoint, clientKey.publicKey);
+  // audit.test.ts와 같은 이유로 `authorizeKeyOverSsh`입니다: `authorizeKey`는
+  // 로컬 `fs`로 쓰기 때문에 sshd 티어에서 훅 단계에서 throw 합니다.
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   const keyPath = path.join(ensureKeysDir(), 'fixture');
   fs.writeFileSync(keyPath, clientKey.privateKey, { encoding: 'utf8', mode: 0o600 });
 
@@ -151,18 +163,20 @@ describe('output below the host cap comes back whole (F17)', () => {
 
 describe('lifting the length cap does not lift the masking (AC19.2)', () => {
   it('still masks a private key that a command prints', async () => {
-    const secret = path.join(endpoint.remoteHomeDir, 'leaked-key.pem');
     const pem = [
       '-----BEGIN OPENSSH PRIVATE KEY-----',
       'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz',
       'c2gtZWQyNTUxOQAAACBGFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFA==',
       '-----END OPENSSH PRIVATE KEY-----',
     ].join('\n');
-    fs.writeFileSync(secret, `${pem}\n`, 'utf8');
+    // 마스킹은 원격이 뱉은 바이트에 걸리는 것이므로 PEM은 원격에 있어야
+    // 합니다. 로컬 `fs`로 쓰면 sshd 티어에서는 `cat`이 읽을 파일이 없고,
+    // 마스킹이 아니라 "마스킹할 것이 없음"을 증명하게 됩니다.
+    await writeRemoteFile(endpoint, 'leaked-key.pem', `${pem}\n`);
 
     const result = await harness.callTool('exec', {
       host: 'roomy',
-      command: `cat ${secret.replace(/\\/g, '/')}`,
+      command: `cat ${remotePath('leaked-key.pem')}`,
     });
 
     expect(result.isError, result.text).toBe(false);
@@ -317,12 +331,11 @@ describe('fetched pages carry the same masking as the response (AC-O7)', () => {
       ),
       '-----END OPENSSH PRIVATE KEY-----',
     ].join('\n');
-    const secret = path.join(endpoint.remoteHomeDir, 'fetchable-key.pem');
-    fs.writeFileSync(secret, `${pem}\n`, 'utf8');
+    await writeRemoteFile(endpoint, 'fetchable-key.pem', `${pem}\n`);
 
     const result = await harness.callTool('exec', {
       host: 'tight',
-      command: `cat ${secret.replace(/\\/g, '/')}`,
+      command: `cat ${remotePath('fetchable-key.pem')}`,
     });
 
     expect(result.isError, result.text).toBe(false);

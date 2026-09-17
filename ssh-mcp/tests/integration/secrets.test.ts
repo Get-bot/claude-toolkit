@@ -27,10 +27,27 @@ import { clearTokens } from '../../src/safety/tokens.js';
 import { closeAll } from '../../src/ssh/pool.js';
 import { resetSessions } from '../../src/ssh/session.js';
 import { startEndpoint, type TestEndpoint } from '../fixtures/endpoints.js';
+import { generateClientKey } from '../fixtures/hostKeys.js';
 import { startMcpTestClient, type McpTestClient } from '../fixtures/mcpClient.js';
 import { assertNoWritesOutside, createTmpHome, type TmpHome } from '../fixtures/tmpHome.js';
 
-/** AC19.1. */
+/**
+ * AC19.1 — 픽스처 티어 서버에 심는 비밀번호.
+ *
+ * 아래 테스트가 실제로 타이핑하는 값은 이 상수가 아니라 `endpoint.password`
+ * 입니다. `startEndpoint`의 `password` 옵션은 픽스처 서버에만 먹히고, sshd
+ * 티어는 컨테이너 계정의 진짜 비밀번호(`SSH_MCP_SSHD_PASSWORD`)를 씁니다
+ * (`tests/fixtures/endpoints.ts:172`). 이 상수를 그대로 치면 진짜 sshd가
+ * 인증을 거절해 `runSetup`이 1을 돌려주고, AC19가 증명하려던 것은 한 줄도
+ * 실행되지 않습니다.
+ *
+ * 값을 바꿔도 단언의 증명력은 그대로입니다. AC19가 요구하는 것은 (1) 인증에
+ * 성공해서 마법사가 끝까지 돌 것과 (2) 싱크를 grep 했을 때 우연히 나올 리
+ * 없는 문자열일 것 두 가지인데, `fixture-password-v1`도
+ * `sshd-tier-password-v1`도 둘 다 만족합니다. "서버가 거절하는 비밀번호"를
+ * 전제하는 단언은 이 파일에 없습니다 — 오히려 두 테스트 모두
+ * `runSetup(...) === 0`, 즉 인증 성공을 요구합니다.
+ */
 const SENTINEL_PASSWORD = 'P@ssw0rd-SENTINEL-9f3a';
 /** AC19.2. */
 const PEM_HEADER = '-----BEGIN OPENSSH PRIVATE KEY-----';
@@ -95,8 +112,10 @@ afterEach(async () => {
 
 describe('AC19: no secret reaches a log, a response or the audit file', () => {
   it('keeps the password, the key and the token out of every sink', async () => {
+    // 티어가 실제로 받아주는 비밀번호. 왜 상수가 아닌지는 SENTINEL_PASSWORD 참조.
+    const secret = endpoint.password;
     const target = `${endpoint.user}@${endpoint.host}:${String(endpoint.port)}`;
-    const script = scripted([SENTINEL_PASSWORD, 'yes', 'token']);
+    const script = scripted([secret, 'yes', 'token']);
     expect(await runSetup([ALIAS, target], { prompter: script.prompter })).toBe(0);
 
     // The private key really exists and really is PEM, so the assertions below
@@ -177,13 +196,13 @@ describe('AC19: no secret reaches a log, a response or the audit file', () => {
       ['stderr', stderrText],
       ['audit.jsonl', audit],
     ] as const) {
-      expect(haystack, `${label} contains the sentinel password`).not.toContain(SENTINEL_PASSWORD);
+      expect(haystack, `${label} contains the sentinel password`).not.toContain(secret);
       expect(haystack, `${label} contains PEM key material`).not.toContain(PEM_HEADER);
       expect(haystack, `${label} contains the private key path`).not.toContain(
         keyText.slice(60, 120)
       );
     }
-    expect(script.output()).not.toContain(SENTINEL_PASSWORD);
+    expect(script.output()).not.toContain(secret);
 
     // AC19.3 / AC19.4: the token exists in exactly one response and nowhere else.
     expect(responses.filter((text) => text.includes(rawToken))).toHaveLength(1);
@@ -197,13 +216,25 @@ describe('AC19: no secret reaches a log, a response or the audit file', () => {
     const target = `${endpoint.user}@${endpoint.host}:${String(endpoint.port)}`;
     expect(
       await runSetup([ALIAS, target], {
-        prompter: scripted([SENTINEL_PASSWORD, 'yes', 'token']).prompter,
+        prompter: scripted([endpoint.password, 'yes', 'token']).prompter,
       })
     ).toBe(0);
 
     // Replace the authorised key so authentication fails with a real PEM on
     // disk: the failure path is where an error message might quote it.
-    fs.writeFileSync(path.join(endpoint.remoteHomeDir, '.ssh', 'authorized_keys'), '', 'utf8');
+    //
+    // 원격의 `authorized_keys`를 비우는 대신 로컬 개인키를 승인된 적 없는
+    // 다른 PEM으로 바꿉니다. sshd 티어에서 그 파일은 통합 테스트 파일들이
+    // 공유하는 한 계정의 것이고 vitest는 파일을 병렬로 돌리므로, 비우는 순간
+    // 같이 도는 audit/output/transfer의 키까지 날아갑니다. 이 테스트의 전제인
+    // "디스크에 진짜 PEM이 있는데 인증은 실패한다"는 어느 쪽을 어긋나게 하든
+    // 똑같이 성립하고, 이쪽은 샌드박스 밖을 건드리지 않습니다.
+    const unauthorized = generateClientKey();
+    expect(unauthorized.privateKey.startsWith(PEM_HEADER)).toBe(true);
+    fs.writeFileSync(privateKeyPath(ALIAS), unauthorized.privateKey, {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
     closeAll();
 
     harness = await startMcpTestClient({ elicitation: 'none' });
