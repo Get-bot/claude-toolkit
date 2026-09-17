@@ -62,13 +62,13 @@ export const ELICIT_CONFIRM_FIELD = 'confirm';
 /**
  * The checkbox label, which is also where the dialog explains itself.
  *
- * Claude Code (2.1.270, observed 2026-09-14) renders a required boolean as an
- * unchecked checkbox and refuses to submit the form while it is unchecked
- * ("This field is required"). Pressing Accept therefore does nothing until the
- * box is ticked, while Decline works immediately — which reads as "approval is
- * broken" to someone who has not been told about the box. The `confirm: true`
- * requirement itself stays (AC17.1b); the fix is to say, inside the dialog,
- * what the dialog expects.
+ * Claude Code (2.1.270, observed 2026-09-14) rendered a required boolean with no
+ * `default` as an unchecked checkbox that refused to submit while unchecked
+ * ("This field is required"): Accept did nothing until the box was ticked,
+ * while Decline worked immediately — which reads as "approval is broken" to
+ * someone who has not been told about the box. {@link ELICIT_CONFIRM_DEFAULT}
+ * is what fixes the dead key; this label is what names the key to press. The
+ * `confirm: true` requirement itself stays either way (AC17.1b).
  *
  * It is said here rather than in the message because 2.1.271 cuts this label at
  * roughly 46 display columns and shows only the first three lines of the
@@ -83,14 +83,36 @@ export const ELICIT_CONFIRM_TITLE = '스페이스로 체크 후 Accept';
  * The second line the checkbox is allowed, per `BooleanSchema.description`.
  *
  * The label has to stay short enough to survive the cut, which leaves no room
- * for the part that actually trips people up: an unchecked Accept looks like a
- * dead key rather than a rejected form. The spec has a field for exactly this,
- * so the sentence goes there instead of being dropped. Whether a given client
+ * for what the box actually decides. The spec has a field for exactly this, so
+ * the sentence goes there instead of being dropped. Whether a given client
  * paints it is the client's business — the MCP schema is deliberately about
  * content, not layout — but an unrendered sentence costs nothing, and a
  * rendered one is the explanation the truncated label cannot carry.
+ *
+ * It says what an untouched Accept does rather than that it is refused: with
+ * {@link ELICIT_CONFIRM_DEFAULT} the form submits either way, and the person
+ * needs to know that leaving it alone is itself an answer.
  */
-export const ELICIT_CONFIRM_DESCRIPTION = '체크하지 않은 채 Accept를 눌러도 제출되지 않습니다.';
+export const ELICIT_CONFIRM_DESCRIPTION = '체크하지 않고 Accept를 누르면 실행하지 않습니다.';
+
+/**
+ * The checkbox starts unticked, and says so.
+ *
+ * Measured on 2026-09-17 against Claude Code 2.1.274 with a probe server that
+ * sends one variant per call (`.omc/artifacts/elicit-probe-result.md`, third
+ * round). Three schemas were compared. Omitting `default` blocks submission
+ * while the box is clear, so Accept reads as a dead key. `default: true` draws
+ * the box **ticked**, so an untouched Accept approves — the fail-open path, and
+ * the reason the first round threw the checkbox out. `default: false` draws an
+ * empty box that submits `confirm: false` untouched and `confirm: true` once
+ * ticked, which is the only one of the three where both answers are reachable
+ * and the dangerous one costs a keystroke.
+ *
+ * The value is therefore load-bearing, not cosmetic, and flipping it to `true`
+ * turns the gate into a formality. `tests/unit/approval.test.ts` fails if it
+ * ever does.
+ */
+export const ELICIT_CONFIRM_DEFAULT = false;
 
 /**
  * M1/M2 shared text. §5.6b puts the same sentence in the `exec` and
@@ -123,7 +145,10 @@ export interface ElicitRequest {
   message: string;
   requestedSchema: {
     type: 'object';
-    properties: Record<string, { type: 'boolean'; title: string; description?: string }>;
+    properties: Record<
+      string,
+      { type: 'boolean'; title: string; description?: string; default?: boolean }
+    >;
     required: string[];
   };
 }
@@ -413,6 +438,7 @@ function buildElicitRequestFor(ctx: ApprovalContext): ElicitRequest {
           type: 'boolean',
           title: ELICIT_CONFIRM_TITLE,
           description: ELICIT_CONFIRM_DESCRIPTION,
+          default: ELICIT_CONFIRM_DEFAULT,
         },
       },
       required: [ELICIT_CONFIRM_FIELD],

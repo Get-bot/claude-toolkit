@@ -1,0 +1,9 @@
+PID   PPID  USER     STAT VSZ  RSS  COMMAND
+    1     0 root     S    1584 1584 /bin/sh /usr/local/bin/entrypoint.sh --config /etc/app/config.yaml --verbose
+    7     1 root     S    9.9m 6.8m /usr/bin/redis-server 0.0.0.0:6379
+   14     1 appsvcru S    1.5g 980m /usr/local/bin/app-server --listen 0.0.0.0:8080 --metrics 0.0.0.0:9090 --log-format json --data-dir /var/lib/app
+   21    14 appsvcru S    1.5g 236m /usr/local/bin/app-server (worker 1)
+   22    14 appsvcru S    1.5g 236m /usr/local/bin/app-server (worker 2)
+  118     1 root     S    2296 1712 crond -f -l 8
+  203     1 root     Z    0    0    [sh]
+  245     0 root     R    1592 1592 ps -eo pid,ppid,user,stat,vsz,rss,args

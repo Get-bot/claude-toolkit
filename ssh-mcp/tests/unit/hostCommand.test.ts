@@ -18,6 +18,7 @@ import { homePath, hostsFilePath, keysDirPath } from '../../src/config/paths.js'
 import { runHost } from '../../src/host/cli.js';
 import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, renderTable, runHostList } from '../../src/host/list.js';
 import type { HostRow } from '../../src/host/list.js';
+import { displayWidth } from '../../src/internal/text.js';
 import { runSetup } from '../../src/setup/cli.js';
 import type { Prompter } from '../../src/setup/prompt.js';
 import { assertNoWritesOutside, createTmpHome } from '../fixtures/tmpHome.js';
@@ -129,24 +130,34 @@ describe('host group routing', () => {
 });
 
 describe('`setup` is an alias of `host add`', () => {
-  /** Both paths write help to the prompter, so capture it the same way. */
-  async function helpOf(run: (write: (text: string) => void) => Promise<number>): Promise<string> {
+  /**
+   * Both paths write help to stdout (`out`), so capture it the same way. The
+   * prompter is stubbed silent: it is the wizard's stderr, and `--help` must
+   * not touch it.
+   */
+  async function helpOf(run: (out: (text: string) => void) => Promise<number>): Promise<string> {
     const lines: string[] = [];
     const code = await run((text) => lines.push(text));
     expect(code).toBe(EXIT_OK);
     return lines.join('');
   }
 
+  const silentPrompter = { write: (): void => undefined, interactive: false } as never;
+
   it('produces byte-identical help for both spellings', async () => {
-    const viaHost = await helpOf((write) =>
-      runHost(['add', '--help'], { prompter: { write, interactive: false } as never })
+    const viaHost = await helpOf((out) =>
+      runHost(['add', '--help'], { out, prompter: silentPrompter })
     );
-    const viaSetup = await helpOf((write) =>
-      runSetup(['--help'], { prompter: { write, interactive: false } as never })
-    );
+    const viaSetup = await helpOf((out) => runSetup(['--help'], { out, prompter: silentPrompter }));
     expect(viaHost).toBe(viaSetup);
     expect(viaHost).toContain('Usage: ssh-mcp host add');
-    expect(viaHost).toContain('`ssh-mcp setup`은 이 명령의 별칭으로 계속 동작합니다.');
+    // The alias still works and now says when it stops working (AC-A2). The
+    // version is the load-bearing part of the sentence: `setup` users only
+    // learn about 0.4.0 from here and from the one stderr line the alias
+    // prints.
+    expect(viaHost).toContain(
+      '`ssh-mcp setup`은 이 명령의 별칭으로 계속 동작하며 0.4.0에서 제거됩니다.'
+    );
   });
 
   it('gives both spellings the same non-interactive refusal', async () => {
@@ -417,6 +428,7 @@ describe('renderTable', () => {
       approvalFallback: 'fail-closed',
       fingerprint: 'SHA256:47DEQpj8HBSa+/T',
       label: '',
+      reservedAlias: false,
       ...overrides,
     };
   }
@@ -445,5 +457,89 @@ describe('renderTable', () => {
     const label = '아주긴라벨이름입니다'; // 10 syllables
     const segment = separatorLabelSegment([row({ label })]);
     expect(segment.length).toBe(label.length * 2);
+  });
+});
+
+/**
+ * An alias that is also a command name (AC-C6, F11, F12).
+ *
+ * `ssh-mcp connect <alias>` and `ssh-mcp <command>` are the same shape, so an
+ * alias called `doctor` makes one of the two unreachable. New ones are refused
+ * at the parser; the ones already in a registry cannot be refused retroactively,
+ * so the listing marks them instead — in both the table and `--json`, because a
+ * script reading the JSON is exactly who would otherwise never find out.
+ */
+describe('reserved aliases', () => {
+  it.each(['install', 'host', 'doctor', 'setup', 'connect', 'exec', 'help', 'version'])(
+    'refuses `host add %s` before anything is written',
+    async (reserved) => {
+      const lines: string[] = [];
+      const code = await runHost(['add', reserved, 'deploy@web01.example.com'], {
+        prompter: interactivePrompter(lines),
+      });
+      expect(code).toBe(EXIT_USAGE);
+      expect(lines.join('')).toContain('reserved');
+      expect(fs.existsSync(hostsFilePath())).toBe(false);
+    }
+  );
+
+  it('marks an already-registered command name in the table', () => {
+    writeHosts({ doctor: hostEntry(), web01: hostEntry() });
+    const io = capture();
+    expect(runHostList([], { out: (text) => io.out.push(text) })).toBe(EXIT_OK);
+
+    const rows = io.outText().split('\n');
+    const marked = rows.find((line) => line.startsWith('doctor'));
+    const plain = rows.find((line) => line.startsWith('web01'));
+    expect(marked).toContain('(예약어)');
+    expect(plain).not.toContain('(예약어)');
+  });
+
+  it('keeps the columns aligned once a marker widens the alias column', () => {
+    writeHosts({ doctor: hostEntry(), web01: hostEntry() });
+    const io = capture();
+    runHostList([], { out: (text) => io.out.push(text) });
+
+    const lines = io.outText().split('\n');
+    // Header, separator, then one line per host. Every row's second column
+    // starts in the same terminal cell, which is only true if the marker was
+    // measured as part of the alias cell rather than appended after the
+    // padding. Cells, not characters: `(예약어)` is five code units and eight
+    // cells, so a character offset would disagree even when the table is right.
+    const targetColumn = (line: string): number =>
+      displayWidth(line.slice(0, line.indexOf('deploy@')));
+    const offsets = lines.slice(2).map(targetColumn);
+    expect(new Set(offsets).size).toBe(1);
+    expect(offsets[0]).toBeGreaterThan(0);
+  });
+
+  it('adds reserved_alias to the JSON only where it applies', () => {
+    writeHosts({ doctor: hostEntry(), web01: hostEntry() });
+    const io = capture();
+    expect(runHostList(['--json'], { out: (text) => io.out.push(text) })).toBe(EXIT_OK);
+
+    const parsed = JSON.parse(io.outText()) as {
+      hosts: { alias: string; reserved_alias?: boolean }[];
+    };
+    const byAlias = new Map(parsed.hosts.map((host) => [host.alias, host]));
+    expect(byAlias.get('doctor')?.reserved_alias).toBe(true);
+    // Absent, not `false`: an ordinary host's object stays what the `list_hosts`
+    // tool returns, so one README description still covers both.
+    expect(byAlias.get('web01')).not.toHaveProperty('reserved_alias');
+  });
+
+  it('still keeps the private key path and the full fingerprint out of both forms', () => {
+    // The marker is new output on a surface with a standing rule about what it
+    // may show, so the rule is re-checked here rather than assumed.
+    writeHosts({ doctor: hostEntry() });
+    const table = capture();
+    runHostList([], { out: (text) => table.out.push(text) });
+    const json = capture();
+    runHostList(['--json'], { out: (text) => json.out.push(text) });
+
+    for (const text of [table.outText(), json.outText()]) {
+      expect(text).not.toContain('/home/me/.ssh-mcp/keys');
+      expect(text).not.toContain(FINGERPRINT);
+    }
   });
 });

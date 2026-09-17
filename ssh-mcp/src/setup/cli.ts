@@ -5,8 +5,10 @@
  * The whole command exists so that one password is typed once, in a terminal,
  * by a human - and never again. Two rules are load-bearing:
  *
- * - **All output goes to stderr.** `setup` is not the server, but sharing the
- *   habit keeps stdout free of anything but JSON-RPC frames (Principle 3).
+ * - **Everything but `--help` goes to stderr.** `setup` is not the server, but
+ *   sharing the habit keeps stdout free of anything but JSON-RPC frames
+ *   (Principle 3). Help that was asked for is the one exception: stdout, like
+ *   every other command's, so `host add --help | less` has something to show.
  * - **Nothing is half-written.** Every failure after key generation restores
  *   the previous key pair and leaves `hosts.json` untouched (AC7.5, AC7.7).
  *
@@ -19,6 +21,7 @@ import fs from 'node:fs';
 import ssh2, { Client } from 'ssh2';
 import type { AuthenticationType, ClientChannel, ConnectConfig } from 'ssh2';
 
+import { RESERVED_ALIASES, isReservedAlias } from '../commands.js';
 import { ensureKeysDir, homePath, keysDirPath, privateKeyPath } from '../config/paths.js';
 import { optionValue } from '../internal/argv.js';
 import { hasControlChars } from '../internal/util.js';
@@ -40,7 +43,9 @@ import { probeTcp as defaultProbeTcp } from '../ssh/reach.js';
 import type { TcpProbe } from '../ssh/reach.js';
 import { PromptUnavailableError, canPrompt, inquirerAsker } from './ask.js';
 import type { Asker } from './ask.js';
+import { readSshConfigHost } from './sshConfig.js';
 import { runSetupWizard } from './wizard.js';
+import type { WizardDefaults } from './wizard.js';
 import { backupKeyPair, generateKeyPair, restoreKeyPair } from './keygen.js';
 import type { GeneratedKeyPair, KeyPairBackup } from './keygen.js';
 import { installAuthorizedKey } from './install.js';
@@ -110,9 +115,12 @@ export const USAGE = [
   '',
   '인자 없이 터미널에서 실행하면 호스트 주소·사용자명·포트·alias·승인 모드를',
   '하나씩 물어봅니다. 인자를 주면 지금까지처럼 묻지 않고 바로 진행합니다.',
-  '`ssh-mcp setup`은 이 명령의 별칭으로 계속 동작합니다.',
+  '`ssh-mcp setup`은 이 명령의 별칭으로 계속 동작하며 0.4.0에서 제거됩니다.',
   '',
   'Options:',
+  '  --from-ssh-config <Host>                 ~/.ssh/config에서 값을 읽어 미리 채웁니다.',
+  '  --alias <name>                           alias를 플래그로 지정합니다.',
+  '  --port <1-65535>                         포트를 지정합니다 (대상에 :포트가 없을 때).',
   '  --approval-fallback <token|fail-closed>  승인 폴백을 미리 정해 프롬프트를 건너뜁니다.',
   '  --approval-mode <auto|ask-destructive|ask-all|deny>  기본값: ask-destructive',
   '  --label <text>                           호스트 설명 (선택)',
@@ -131,6 +139,8 @@ export interface SetupArgs {
   approvalMode: ApprovalMode | null;
   label: string | null;
   force: boolean;
+  /** The `Host` name asked for with `--from-ssh-config`, if any (AC-S1). */
+  fromSshConfig: string | null;
 }
 
 /**
@@ -148,15 +158,36 @@ export interface GivenFlags {
   force: boolean;
 }
 
+/**
+ * Flag values that survived a parse the positionals made fail.
+ *
+ * Deliberately **not** part of {@link GivenFlags}: these become the wizard's
+ * default answers, and a value in `given` is a question the wizard stops
+ * asking. The ssh_config seed reaches the wizard through here precisely so
+ * that every question is still put to the person (AC-S5, ADR-013).
+ */
+export interface PartialFlags {
+  fromSshConfig: string | null;
+  alias: string | null;
+  port: number | null;
+}
+
 export type ParsedArgs =
   | { ok: true; help: false; args: SetupArgs }
   | { ok: true; help: true }
   /**
    * `missingPositionals` marks the one failure the wizard can fix: neither
    * argument was given at all. One of two is a typo, not a request to be asked.
-   * `given` accompanies it so the wizard can skip what was already supplied.
+   * `given` accompanies it so the wizard can skip what was already supplied,
+   * and `partial` carries what to pre-fill in the questions it still asks.
    */
-  | { ok: false; message: string; missingPositionals?: boolean; given?: GivenFlags };
+  | {
+      ok: false;
+      message: string;
+      missingPositionals?: boolean;
+      given?: GivenFlags;
+      partial?: PartialFlags;
+    };
 
 function isApprovalMode(value: string): value is ApprovalMode {
   return (APPROVAL_MODES as readonly string[]).includes(value);
@@ -204,6 +235,31 @@ export function parseTarget(
   return { user, hostname, port };
 }
 
+function invalidAliasMessage(alias: string): string {
+  return (
+    `invalid alias "${alias}": must start with a letter or digit and contain only ` +
+    'letters, digits, dot, underscore or hyphen (max 64 characters)'
+  );
+}
+
+/**
+ * Did the target itself name a port?
+ *
+ * {@link parseTarget} substitutes {@link DEFAULT_PORT} when it did not, and
+ * `--port` has to fill exactly that gap without overriding a port the user
+ * wrote down. It matters for more than tidiness: the wizard always emits
+ * `user@host:port`, so "the target said so" is what makes a confirmed answer
+ * beat the ssh_config seed's `--port` (AC-S5).
+ */
+function targetNamesPort(target: string): boolean {
+  const rest = target.slice(target.lastIndexOf('@') + 1);
+  if (rest.startsWith('[')) {
+    const end = rest.indexOf(']');
+    return end !== -1 && rest.slice(end + 1).startsWith(':');
+  }
+  return rest.includes(':');
+}
+
 /** Parse the arguments that follow the `setup` sub-command (row 5.1). */
 export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
   const positional: string[] = [];
@@ -211,6 +267,9 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
   let approvalMode: ApprovalMode | null = null;
   let label: string | null = null;
   let force = false;
+  let fromSshConfig: string | null = null;
+  let aliasFlag: string | null = null;
+  let portFlag: number | null = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i] ?? '';
@@ -221,6 +280,36 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
       case '--force':
         force = true;
         break;
+      case '--from-ssh-config': {
+        const read = optionValue(argv, i + 1, '--from-ssh-config');
+        i += 1;
+        if (!read.ok) return { ok: false, message: read.message };
+        fromSshConfig = read.value;
+        break;
+      }
+      case '--alias': {
+        const read = optionValue(argv, i + 1, '--alias');
+        i += 1;
+        if (!read.ok) return { ok: false, message: read.message };
+        // Validated here as well as below, so that a bad `--alias` is named as
+        // such instead of resurfacing as "needs both <alias> and …".
+        if (!AliasSchema.safeParse(read.value).success) {
+          return { ok: false, message: invalidAliasMessage(read.value) };
+        }
+        aliasFlag = read.value;
+        break;
+      }
+      case '--port': {
+        const read = optionValue(argv, i + 1, '--port');
+        i += 1;
+        if (!read.ok) return { ok: false, message: read.message };
+        const value = /^\d+$/u.test(read.value) ? Number.parseInt(read.value, 10) : 0;
+        if (value < 1 || value > 65535) {
+          return { ok: false, message: '--port must be a number between 1 and 65535' };
+        }
+        portFlag = value;
+        break;
+      }
       case '--approval-fallback': {
         const read = optionValue(argv, i + 1, '--approval-fallback');
         i += 1;
@@ -275,39 +364,53 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
     }
   }
 
-  if (positional.length < 2) {
+  // Nothing positional at all is the one shape the wizard can fix, and it stays
+  // that shape whatever flags came with it: `--alias` still leaves the target
+  // unsaid, and `--from-ssh-config` is a request to be asked, not to skip.
+  if (positional.length === 0) {
     return {
       ok: false,
       message: 'host add needs both <alias> and <user@host[:port]>',
-      ...(positional.length === 0
-        ? {
-            missingPositionals: true,
-            given: { approvalMode: approvalMode !== null, label: label !== null, force },
-          }
-        : {}),
+      missingPositionals: true,
+      given: { approvalMode: approvalMode !== null, label: label !== null, force },
+      partial: { fromSshConfig, alias: aliasFlag, port: portFlag },
     };
+  }
+  // One positional is a typo — unless `--alias` supplied the other half, in
+  // which case the single positional is the target.
+  if (positional.length === 1 && aliasFlag === null) {
+    return { ok: false, message: 'host add needs both <alias> and <user@host[:port]>' };
   }
   if (positional.length > 2) {
     return { ok: false, message: `unexpected extra argument: ${positional[2] ?? ''}` };
   }
 
-  const alias = positional[0] ?? '';
+  // A written-out position beats the flag. That ordering is what lets a
+  // wizard-confirmed answer be final: the wizard appends positionals, and the
+  // ssh_config seed only ever produces flags (ADR-013).
+  const twoPositionals = positional.length === 2;
+  const alias = twoPositionals ? (positional[0] ?? '') : (aliasFlag ?? '');
+  const targetText = (twoPositionals ? positional[1] : positional[0]) ?? '';
+
   const aliasCheck = AliasSchema.safeParse(alias);
   if (!aliasCheck.success) {
+    return { ok: false, message: invalidAliasMessage(alias) };
+  }
+  // An alias that is also a command name would make `ssh-mcp connect <alias>`
+  // ambiguous with `ssh-mcp <command>` (AC-C6). The `-h`/`--help` spellings
+  // need no entry here: `AliasSchema` already refuses a leading hyphen.
+  if (isReservedAlias(alias)) {
     return {
       ok: false,
       message:
-        `invalid alias "${alias}": must start with a letter or digit and contain only ` +
-        'letters, digits, dot, underscore or hyphen (max 64 characters)',
+        `alias "${alias}" is reserved: it is one of the ssh-mcp command names ` +
+        `(${RESERVED_ALIASES.join(', ')}). Pick another name.`,
     };
   }
 
-  const target = parseTarget(positional[1] ?? '');
+  const target = parseTarget(targetText);
   if (target === null) {
-    return {
-      ok: false,
-      message: `invalid target "${positional[1] ?? ''}": expected user@host[:port]`,
-    };
+    return { ok: false, message: `invalid target "${targetText}": expected user@host[:port]` };
   }
 
   return {
@@ -317,11 +420,12 @@ export function parseSetupArgs(argv: readonly string[]): ParsedArgs {
       alias,
       user: target.user,
       hostname: target.hostname,
-      port: target.port,
+      port: targetNamesPort(targetText) ? target.port : (portFlag ?? target.port),
       approvalFallback,
       approvalMode,
       label,
       force,
+      fromSshConfig,
     },
   };
 }
@@ -395,6 +499,14 @@ export interface SetupDeps {
    * {@link canPrompt}; injected so tests drive both branches.
    */
   canAsk?: () => boolean;
+  /**
+   * Where `--help` goes; defaults to stdout. Every other line `host add` prints
+   * is a prompt or a progress message and belongs on stderr with the wizard,
+   * but help that was asked for is not an error — on stderr it vanished from
+   * `host add --help | less`. `host`, `host list` and `doctor` make the same
+   * split.
+   */
+  out?: (text: string) => void;
 }
 
 /** Read the `ssh-<algo>` name out of a raw SSH public key blob. */
@@ -459,6 +571,7 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   const err = (text: string): void => {
     prompter.write(`${text}\n`);
   };
+  const out = deps.out ?? ((text: string): void => void process.stdout.write(`${text}\n`));
 
   const probeTcp = deps.probeTcp ?? defaultProbeTcp;
   // Only the wizard needs this. The password and fingerprint prompts ask for
@@ -469,10 +582,6 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
   let addressVerified = false;
 
   let parsed = parseSetupArgs(argv);
-  if (parsed.ok && parsed.help) {
-    err(USAGE);
-    return EXIT_OK;
-  }
 
   // Read once and reuse. The wizard needs the alias list, and step 1 below needs
   // the same file; loading twice was two chances to disagree, and only one of
@@ -487,6 +596,67 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     err('hosts.json을 고친 뒤 다시 실행하세요. setup은 깨진 파일을 덮어쓰지 않습니다.');
   };
 
+  // `--from-ssh-config` is resolved *before* the wizard branch, because what it
+  // produces is the wizard's default answers (ADR-013). Three rules hold it in
+  // place: it contributes **flag tokens only** and never a positional, the
+  // tokens go *ahead* of the user's argv so a flag actually typed wins by
+  // last-wins, and none of it enters `given` — an answer marked as given is an
+  // answer the wizard stops asking about, and that confirmation step is the
+  // whole of AC-S5.
+  let configDefaults: WizardDefaults | null = null;
+  /** Flag tokens the ssh_config import contributed; they lead the final argv. */
+  let seedTokens: readonly string[] = [];
+  const fromSshConfig = parsed.ok
+    ? parsed.help
+      ? null
+      : parsed.args.fromSshConfig
+    : (parsed.partial?.fromSshConfig ?? null);
+  if (fromSshConfig !== null) {
+    const found = readSshConfigHost(fromSshConfig);
+    // A warning is about a part of the file we skipped, which is worth saying
+    // whether or not the import as a whole worked out.
+    for (const warning of found.warnings) err(`ssh-mcp host add: ${warning}`);
+    if (!found.ok) {
+      err(`ssh-mcp host add: ${found.message}`);
+      return EXIT_NOT_INTERACTIVE;
+    }
+    if (parsed.ok) {
+      // Both positionals are on the command line, so there is nothing for these
+      // values to fill in. The refusal check above still ran, which is the part
+      // of AC-S3 that has to happen either way.
+      err(
+        'ssh-mcp host add: alias와 user@host를 직접 지정했으므로 ' +
+          '--from-ssh-config에서 읽은 값은 쓰지 않습니다.'
+      );
+    } else if (!canAsk) {
+      // The generic "this terminal cannot draw a list" message below is no help
+      // to somebody who asked for values to be *filled in* for confirmation.
+      err(
+        'ssh-mcp host add: --from-ssh-config는 읽은 값을 확인받는 단계가 필요하므로 ' +
+          '터미널(TTY)에서만 동작합니다.'
+      );
+      err('alias와 user@host[:port]를 직접 지정하면 질문 없이 실행됩니다.');
+      return EXIT_NOT_INTERACTIVE;
+    } else {
+      // Only a name the parser and the registry would both accept is seeded; a
+      // `Host` entry named `help`, or one with characters an alias may not
+      // have, would otherwise turn the whole interview into a usage error.
+      const seed: string[] = [];
+      if (AliasSchema.safeParse(found.host.alias).success && !isReservedAlias(found.host.alias)) {
+        seed.push('--alias', found.host.alias);
+      }
+      if (found.host.port !== null) seed.push('--port', String(found.host.port));
+      seedTokens = seed;
+      parsed = parseSetupArgs([...seed, ...argv]);
+      configDefaults = {
+        source: fromSshConfig,
+        hostname: found.host.hostname,
+        identityIgnored: found.host.identityIgnored,
+        ...(found.host.user === null ? {} : { user: found.host.user }),
+      };
+    }
+  }
+
   // Nothing was given and we are in a terminal: collect the same arguments by
   // asking, then re-parse. Everything downstream sees an ordinary command line.
   if (!parsed.ok && parsed.missingPositionals === true && canAsk) {
@@ -495,6 +665,16 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
       reportBadRegistry(registry);
       return EXIT_FAILED;
     }
+    // Pre-filled answers, not answers. `alias` and `port` come from the parser
+    // so that a flag the user typed has already beaten the ssh_config seed by
+    // last-wins; the two values with no flag of their own come straight from
+    // the file.
+    const partial = parsed.partial;
+    const defaults: WizardDefaults = {
+      ...(configDefaults ?? {}),
+      ...(partial?.alias === undefined || partial.alias === null ? {} : { alias: partial.alias }),
+      ...(partial?.port === undefined || partial.port === null ? {} : { port: partial.port }),
+    };
     try {
       const extra = await runSetupWizard({
         prompter,
@@ -504,9 +684,13 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
         // flag's value is in argv without having been given.
         given: parsed.given ?? { approvalMode: false, label: false, force: false },
         probeTcp,
+        defaults,
       });
       addressVerified = true;
-      parsed = parseSetupArgs([...argv, ...extra]);
+      // One line, in one order: seed first, what the user typed next, the
+      // answers last. Every later token wins, so the confirmed answers are
+      // final and an explicit flag still beats the seed it was given instead of.
+      parsed = parseSetupArgs([...seedTokens, ...argv, ...extra]);
     } catch (error) {
       // The library failing to load is its own story, and it already reads as a
       // whole sentence. Wrapping it in "입력 중 오류가 발생했습니다 (…)" buries
@@ -536,11 +720,11 @@ export async function runSetup(argv: string[], deps: SetupDeps = {}): Promise<nu
     err(USAGE);
     return EXIT_NOT_INTERACTIVE;
   }
+  // Help that was asked for is not an error: stdout, exit 0. `--help` parses
+  // as a success, so it skips the wizard (which runs only on a failed parse)
+  // and the usage-error block above, and arrives here untouched.
   if (parsed.help) {
-    // Not reachable: `--help` returned above and the wizard only appends
-    // positionals and value flags. Kept because it is also how the compiler
-    // narrows `parsed` to the variant that carries `args`.
-    err(USAGE);
+    out(USAGE);
     return EXIT_OK;
   }
   const args = parsed.args;

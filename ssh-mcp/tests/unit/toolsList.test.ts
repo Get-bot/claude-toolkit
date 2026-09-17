@@ -14,10 +14,12 @@ import {
   TOOL_ANNOTATIONS,
 } from '../../src/tools/annotations.js';
 import { TOOL_DESCRIPTION_APPROVAL_RULE } from '../../src/safety/approval.js';
-import { assertSevenTools, SERVER_NAME } from '../../src/server.js';
+import { assertRegisteredTools, SERVER_NAME } from '../../src/server.js';
 import { CLOSE_SESSION_DESCRIPTION } from '../../src/tools/closeSession.js';
 import { DOWNLOAD_DESCRIPTION } from '../../src/tools/download.js';
 import { EXEC_DESCRIPTION } from '../../src/tools/exec.js';
+import { FETCH_OUTPUT_DESCRIPTION } from '../../src/tools/fetchOutput.js';
+import { HISTORY_DESCRIPTION } from '../../src/tools/history.js';
 import { LIST_HOSTS_DESCRIPTION } from '../../src/tools/listHosts.js';
 import { OPEN_SESSION_DESCRIPTION } from '../../src/tools/openSession.js';
 import { RUN_IN_SESSION_DESCRIPTION } from '../../src/tools/runInSession.js';
@@ -50,13 +52,13 @@ function properties(schema: unknown): Record<string, { description?: string }> {
 }
 
 describe('tools/list (AC2.2)', () => {
-  it('advertises exactly the seven v1 tools', async () => {
+  it('advertises exactly the canonical tool list', async () => {
     harness = await startMcpTestClient();
     const tools = await harness.listTools();
 
-    expect(tools).toHaveLength(7);
+    expect(tools).toHaveLength(TOOL_NAMES.length);
     expect(tools.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES].sort());
-    expect(harness.server.toolNames).toHaveLength(7);
+    expect(harness.server.toolNames).toHaveLength(TOOL_NAMES.length);
   });
 
   it('reports the server name the acceptance criteria pin', async () => {
@@ -64,15 +66,18 @@ describe('tools/list (AC2.2)', () => {
     expect(harness.client.getServerVersion()?.name).toBe(SERVER_NAME);
   });
 
-  it('refuses to start when the registered set is not the seven', () => {
+  it('refuses to start when the registered set is not the canonical one', () => {
+    // The message quotes the count derived from `TOOL_NAMES`, so this regex
+    // follows the list instead of pinning a number that a new tool invalidates.
+    const expected = new RegExp(`exactly ${String(TOOL_NAMES.length)} tools`);
     expect(() => {
-      assertSevenTools(['exec', 'list_hosts']);
-    }).toThrow(/exactly 7 tools/);
+      assertRegisteredTools(['exec', 'list_hosts']);
+    }).toThrow(expected);
     expect(() => {
-      assertSevenTools([...TOOL_NAMES, 'exec']);
-    }).toThrow(/exactly 7 tools/);
+      assertRegisteredTools([...TOOL_NAMES, 'exec']);
+    }).toThrow(expected);
     expect(() => {
-      assertSevenTools([...TOOL_NAMES]);
+      assertRegisteredTools([...TOOL_NAMES]);
     }).not.toThrow();
   });
 });
@@ -88,11 +93,15 @@ describe('annotations (§5.6)', () => {
     }
   });
 
-  it('marks only list_hosts read-only', async () => {
+  it('marks the read-only tools and nothing else (AC-H4)', async () => {
     harness = await startMcpTestClient();
     const tools = await harness.listTools();
     const readOnly = tools.filter((tool) => tool.annotations?.readOnlyHint === true);
-    expect(readOnly.map((tool) => tool.name)).toEqual(['list_hosts']);
+    expect(readOnly.map((tool) => tool.name).sort()).toEqual([
+      'fetch_output',
+      'history',
+      'list_hosts',
+    ]);
   });
 });
 
@@ -137,6 +146,8 @@ describe('descriptions (§5.6b, M2)', () => {
     expect(byName.get('open_session')).toBe(OPEN_SESSION_DESCRIPTION);
     expect(byName.get('run_in_session')).toBe(RUN_IN_SESSION_DESCRIPTION);
     expect(byName.get('close_session')).toBe(CLOSE_SESSION_DESCRIPTION);
+    expect(byName.get('history')).toBe(HISTORY_DESCRIPTION);
+    expect(byName.get('fetch_output')).toBe(FETCH_OUTPUT_DESCRIPTION);
   });
 
   it('carries the approval rule in every tool that can be gated', async () => {

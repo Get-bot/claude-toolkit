@@ -20,7 +20,7 @@ import { ERROR_CODES } from '../../src/errors.js';
 import { clearTokens, tokenStoreSize, TOKEN_TTL_MS } from '../../src/safety/tokens.js';
 import { closeAll } from '../../src/ssh/pool.js';
 import { resetSessions } from '../../src/ssh/session.js';
-import { authorizeKey, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
+import { authorizeKeyOverSsh, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
 import type { TestEndpoint } from '../fixtures/endpoints.js';
 import { generateClientKey } from '../fixtures/hostKeys.js';
 import {
@@ -103,7 +103,7 @@ beforeAll(async () => {
   home = createTmpHome('ssh-mcp-approval-');
   endpoint = await startEndpoint();
   const clientKey = generateClientKey();
-  authorizeKey(endpoint, clientKey.publicKey);
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   keyPath = path.join(ensureKeysDir(), 'fixture');
   fs.writeFileSync(keyPath, clientKey.privateKey, { encoding: 'utf8', mode: 0o600 });
   registerHosts();

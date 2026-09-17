@@ -13,9 +13,11 @@
  *
  * Not in the plan (`.omc/plans/ssh-mcp-plan.md`); added 2026-09-14.
  */
+import { isReservedAlias } from '../commands.js';
 import { DEFAULT_APPROVAL_FALLBACK } from '../config/schema.js';
 import type { HostEntry } from '../config/schema.js';
 import * as store from '../config/store.js';
+import { displayWidth, pad } from '../internal/text.js';
 import { stripControlChars } from '../internal/util.js';
 import { fingerprintPrefix } from '../tools/listHosts.js';
 
@@ -46,6 +48,9 @@ export function printable(value: string): string {
   return stripControlChars(value);
 }
 
+/** The marker appended to a reserved alias in the table (AC-C6). */
+export const RESERVED_ALIAS_MARKER = '(예약어)';
+
 /** One row of the table, already reduced to what may be shown. */
 export interface HostRow {
   alias: string;
@@ -55,6 +60,16 @@ export interface HostRow {
   approvalFallback: string;
   fingerprint: string;
   label: string;
+  /**
+   * The alias is also an `ssh-mcp` command name (AC-C6).
+   *
+   * `host add` refuses these now, so such an entry can only come from a
+   * registry written before that rule existed. It still works everywhere the
+   * alias is an argument; what it cannot do is be reached as
+   * `ssh-mcp connect <alias>`, because that spelling is the command. Saying so
+   * in the listing is the only place a person would find out.
+   */
+  reservedAlias: boolean;
 }
 
 export function toRow(alias: string, entry: HostEntry, normalised: boolean): HostRow {
@@ -62,6 +77,7 @@ export function toRow(alias: string, entry: HostEntry, normalised: boolean): Hos
     // Every field is printed to a terminal, so every field is sanitised — not
     // just the label, which is merely the easiest one to get a payload into.
     alias: printable(alias),
+    reservedAlias: isReservedAlias(alias),
     target: printable(`${entry.user}@${entry.hostname}:${String(entry.port)}`),
     approvalMode: entry.approvalMode,
     approvalFallback: normalised
@@ -72,28 +88,14 @@ export function toRow(alias: string, entry: HostEntry, normalised: boolean): Hos
   };
 }
 
-/** Width in terminal cells; CJK labels occupy two, so counting code points misaligns. */
-function displayWidth(text: string): number {
-  let total = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    const wide =
-      (code >= 0x1100 && code <= 0x115f) ||
-      (code >= 0x2e80 && code <= 0xa4cf) ||
-      (code >= 0xac00 && code <= 0xd7a3) ||
-      (code >= 0xf900 && code <= 0xfaff) ||
-      (code >= 0xfe30 && code <= 0xfe6f) ||
-      (code >= 0xff00 && code <= 0xff60) ||
-      (code >= 0xffe0 && code <= 0xffe6) ||
-      (code >= 0x20000 && code <= 0x3fffd);
-    total += wide ? 2 : 1;
-  }
-  return total;
-}
-
-function pad(text: string, target: number): string {
-  const fill = target - displayWidth(text);
-  return fill > 0 ? text + ' '.repeat(fill) : text;
+/**
+ * The alias column's text, with the reserved-name marker when it applies.
+ *
+ * One function feeds both the width measurement and the printed line; two
+ * expressions would drift and misalign every row after the first marked one.
+ */
+function aliasCell(row: HostRow): string {
+  return row.reservedAlias ? `${row.alias} ${RESERVED_ALIAS_MARKER}` : row.alias;
 }
 
 export function renderTable(rows: readonly HostRow[]): string {
@@ -104,13 +106,14 @@ export function renderTable(rows: readonly HostRow[]): string {
     approvalFallback: '폴백',
     fingerprint: '호스트 키',
     label: '라벨',
+    reservedAlias: false,
   };
   const all = [header, ...rows];
   const width = (pick: (row: HostRow) => string): number =>
     all.reduce((max, row) => Math.max(max, displayWidth(pick(row))), 0);
 
   const widths = {
-    alias: width((row) => row.alias),
+    alias: width(aliasCell),
     target: width((row) => row.target),
     mode: width((row) => row.approvalMode),
     fallback: width((row) => row.approvalFallback),
@@ -120,7 +123,7 @@ export function renderTable(rows: readonly HostRow[]): string {
 
   const line = (row: HostRow): string =>
     [
-      pad(row.alias, widths.alias),
+      pad(aliasCell(row), widths.alias),
       pad(row.target, widths.target),
       pad(row.approvalMode, widths.mode),
       pad(row.approvalFallback, widths.fallback),
@@ -196,6 +199,11 @@ export function runHostList(argv: readonly string[], deps: HostListDeps = {}): n
       audit_mode: entry.auditMode,
       host_key_fingerprint_prefix: fingerprintPrefix(entry.hostKey.sha256),
       ...(entry.label === undefined ? {} : { label: entry.label }),
+      // Present only when true, like `label` — an ordinary host's JSON stays
+      // byte-identical to the `list_hosts` tool's, and the one field the tool
+      // has no counterpart for appears only on the entry that needs the
+      // warning (F12, AC-C6).
+      ...(isReservedAlias(alias) ? { reserved_alias: true } : {}),
     }));
     out(JSON.stringify({ hosts, count: hosts.length }, null, 2));
     return EXIT_OK;

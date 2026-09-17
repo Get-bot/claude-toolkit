@@ -1,0 +1,8 @@
+Filesystem           1024-blocks    Used Available Capacity Mounted on
+overlay               61202244  14230520  43828604  25% /
+tmpfs                    65536         0     65536   0% /dev
+shm                      65536         0     65536   0% /dev/shm
+/dev/sda1             61202244  14230520  43828604  25% /etc/resolv.conf
+/dev/mapper/vg--data-really--long--logical--volume--name 1056758832 372194048 630746416  37% /var/lib/docker/volumes
+tmpfs                  4194304   1048576   3145728  25% /mnt/backup snapshots
+tmpfs                    65536         0     65536   0% /proc/asound

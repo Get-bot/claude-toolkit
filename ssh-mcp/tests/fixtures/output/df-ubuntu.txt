@@ -1,0 +1,11 @@
+Filesystem                                                         1024-blocks      Used  Available Capacity Mounted on
+tmpfs                                                                  1608724      1868    1606856       1% /run
+/dev/mapper/ubuntu--vg-ubuntu--lv                                     98559220  41205312   52307032      45% /
+tmpfs                                                                  8043604         0    8043604       0% /dev/shm
+tmpfs                                                                     5120         4       5116       1% /run/lock
+/dev/nvme0n1p2                                                         1992552    263716    1607596      15% /boot
+/dev/nvme0n1p1                                                         1098632      6220    1092412       1% /boot/efi
+/dev/disk/by-id/nvme-Samsung_SSD_990_PRO_2TB_S7DPNU0X123456B-part3  1921724416 812993024 1011092992      45% /srv/data
+//fileserver.example.internal/team share                             524288000 191234560  333053440      37% /mnt/team share
+portal                                                                       0         0          0        - /run/user/1000/doc
+tmpfs                                                                  1608720       124    1608596       1% /run/user/1000

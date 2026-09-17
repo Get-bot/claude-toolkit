@@ -9,10 +9,12 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 ## 목차
 
 - [설치](#설치)
+- [help — 명령어 목록](#help--명령어-목록)
 - [host add — 호스트 등록](#host-add--호스트-등록)
 - [host list — 등록된 호스트 보기](#host-list--등록된-호스트-보기)
 - [install — 클라이언트 등록](#install--클라이언트-등록)
-- [도구 7개 레퍼런스](#도구-7개-레퍼런스)
+- [connect / exec — 터미널에서 직접 쓰기](#connect--exec--터미널에서-직접-쓰기)
+- [도구 9개 레퍼런스](#도구-9개-레퍼런스)
 - [승인 모드](#승인-모드)
 - [hosts.json 스키마](#hostsjson-스키마)
 - [Claude Desktop / Claude Code 연결](#claude-desktop--claude-code-연결)
@@ -21,6 +23,8 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 - [백그라운드(`&`) 작업](#백그라운드-작업)
 - [sudo](#sudo)
 - [바이너리 출력](#바이너리-출력)
+- [format: "json" 구조화 출력](#format-json-구조화-출력)
+- [출력 보관과 fetch_output](#출력-보관과-fetch_output)
 - [오류 코드](#오류-코드)
 - [보안 모델](#보안-모델)
 - [알려진 한계](#알려진-한계)
@@ -28,25 +32,31 @@ Claude가 원격 서버에 SSH로 접속해 명령을 실행하고, 파일을 �
 - [진단 (`ssh-mcp doctor`)](#진단-ssh-mcp-doctor)
 - [원격 셸 지원 범위](#원격-셸-지원-범위)
 - [설계 결정](#설계-결정)
-- [v1 범위 밖 / v1.1 후보](#v1-범위-밖--v11-후보)
+- [로드맵 / 범위 밖](#로드맵--범위-밖)
 
 ## 설치
 
 **Node.js 20.17 이상**이 필요합니다(또는 22.13 이상, 23.5 이상). 서버 자체는 Node 20이면 돌지만 `install`·`host add`의 대화형 질문이 그 버전을 요구합니다.
 
-별도 설치 없이 npx로 바로 씁니다. 세 명령이면 끝납니다.
+전역으로 한 번 설치하면 `ssh-mcp`로 바로 실행됩니다. 세 명령이면 끝납니다.
 
 ```bash
+npm i -g @get-bot/ssh-mcp
+
 # 1. Claude에 등록한다. 어느 클라이언트에, 어느 범위에 등록할지 물어본다.
-npx @get-bot/ssh-mcp install
+ssh-mcp install
 
 # 2. 원격 호스트를 등록한다. 주소·사용자명·포트·alias·승인 모드를 하나씩 물어보고,
 #    그다음 비밀번호를 한 번 입력받아 키를 심는다. 터미널 필수.
-npx @get-bot/ssh-mcp host add
+ssh-mcp host add
 
 # 3. 점검한다
-npx @get-bot/ssh-mcp doctor
+ssh-mcp doctor
 ```
+
+설치하지 않고 쓰려면 `ssh-mcp` 자리에 `npx -y @get-bot/ssh-mcp`를 씁니다. 두 형태는 같은 명령이라 이 문서의 예시는 어느 쪽으로 읽어도 됩니다. 차이는 버전 관리뿐입니다 — 전역 설치는 버전이 고정되어 올릴 때 `npm i -g @get-bot/ssh-mcp@latest`를 직접 치고, npx는 실행할 때마다 최신 배포판을 받습니다.
+
+**전역 설치로 짧아지는 것은 터미널에서 치는 명령뿐입니다.** `install`이 클라이언트에 등록하는 서버 기동 명령은 여전히 `npx -y @get-bot/ssh-mcp`입니다 — Claude가 띄우는 쪽은 바뀌지 않습니다.
 
 인자를 주면 **그 항목은** 묻지 않습니다. 다만 `host add`의 비밀번호 입력, 호스트 키 지문 `yes` 확인, 승인 폴백 선택은 어떤 인자를 줘도 항상 터미널에서 진행합니다. 스크립트나 문서에서는 이렇게 씁니다.
 
@@ -56,7 +66,7 @@ npx @get-bot/ssh-mcp install claude-desktop
 npx @get-bot/ssh-mcp host add myhost deploy@web01.example.com
 ```
 
-`install`은 운영체제와 클라이언트에 맞는 등록 형태를 알아서 고릅니다(Windows에서 필요한 `cmd /c` 감싸기 포함). 자세한 옵션은 [install — 클라이언트 등록](#install--클라이언트-등록), 손으로 등록하는 방법은 [Claude Desktop / Claude Code 연결](#claude-desktop--claude-code-연결)을 보세요. 등록 후 Claude Code에서는 `/mcp`에, Claude Desktop에서는 재시작 후 도구 목록에 도구 7개가 보여야 합니다.
+`install`은 운영체제와 클라이언트에 맞는 등록 형태를 알아서 고릅니다(Windows에서 필요한 `cmd /c` 감싸기 포함). 자세한 옵션은 [install — 클라이언트 등록](#install--클라이언트-등록), 손으로 등록하는 방법은 [Claude Desktop / Claude Code 연결](#claude-desktop--claude-code-연결)을 보세요. 등록 후 Claude Code에서는 `/mcp`에, Claude Desktop에서는 재시작 후 도구 목록에 도구 9개가 보여야 합니다.
 
 **`npx -y @get-bot/ssh-mcp`를 인자 없이 실행하면 stdio MCP 서버로 기동합니다.** 이것은 Claude가 내부적으로 띄우는 명령이라, 터미널에서 직접 치면 `ssh-mcp server ready` 로그 한 줄을 남기고 클라이언트의 요청을 기다리며 조용히 멈춘 것처럼 보입니다. 정상이며 Ctrl+C로 빠져나오면 됩니다. 호스트를 하나도 등록하지 않은 상태에서도 서버는 정상 기동하며, `list_hosts`가 빈 목록을 반환할 뿐입니다.
 
@@ -77,11 +87,27 @@ npm test
 
 커밋 시 husky + lint-staged로 구성된 pre-commit 훅이 staged 파일을 자동으로 포맷합니다. `ssh-mcp/`가 저장소 루트가 아니라 하위 디렉터리이므로 `prepare` 스크립트는 husky의 서브디렉터리 설치 형태(`cd .. && husky ssh-mcp/.husky`)를 씁니다 — 훅 자체는 저장소 루트의 `.git`에 등록되지만 훅 스크립트는 `ssh-mcp/.husky`에 둡니다. CI나 그 밖의 비대화형 자동화 환경에서는 `npm ci`/`npm install`이 이 훅 설치를 시도하지 않도록 `HUSKY=0` 환경변수를 설정하세요 — `.github/workflows/ssh-mcp-ci.yml`의 모든 잡에 이미 적용되어 있습니다.
 
+## help — 명령어 목록
+
+`ssh-mcp help`, `ssh-mcp --help`, `ssh-mcp -h` 셋 다 명령어 목록을 stdout에 내고 종료 코드 0으로 끝납니다.
+
+```
+$ ssh-mcp --help
+Usage: ssh-mcp [<command>] [options]
+...
+```
+
+목록에는 사용할 수 있는 명령(`install`, `host add`, `host list`, `doctor`, `help`)과 인자 없이 실행하면 서버가 뜬다는 사실, 빠른 시작이 들어 있습니다. 명령별 플래그는 각 명령의 usage 한 곳에만 적혀 있고, 이 목록도 이 문서도 복사해 두지 않습니다 — 그래서 위 예시는 첫 줄까지만 보여 줍니다. 실제 목록은 명령을 직접 치면 나옵니다.
+
+`help <command> ...`는 해당 명령의 사용법으로 넘깁니다. `ssh-mcp help doctor`와 `ssh-mcp doctor --help`는 같은 출력이고, 뒤에 붙인 단어도 그대로 넘어가므로 `ssh-mcp help host add`는 `host` 그룹이 아니라 `host add`의 사용법입니다. `help version`과 `help help`는 목록을 냅니다. 없는 명령을 물으면 stderr에 한 줄과 목록을 내고 종료 코드 2입니다.
+
+**인자 없이 실행하면 서버가 뜹니다.** `ssh-mcp`만 치면 도움말이 아니라 stdio MCP 서버가 시작되어 stdin을 기다립니다 — 클라이언트가 이 형태로 실행하기 때문입니다. 터미널에서 뭘 할 수 있는지 보려면 `--help`를 붙이세요.
+
 ## host add — 호스트 등록
 
 호스트 관련 명령은 `ssh-mcp host` 그룹 아래에 있습니다. 하위 명령 없이 `ssh-mcp host`만 실행하면 `add`와 `list`를 안내하는 사용법을 stderr에 출력하고 종료 코드 2로 끝냅니다. 반면 `ssh-mcp host --help`는 요청한 출력이므로 같은 사용법을 **stdout**에 내고 종료 코드 0입니다(`host list --help`, `doctor`와 같은 관례).
 
-**`ssh-mcp setup`은 이 명령의 별칭입니다.** 0.1.0에서 쓰던 그 명령이 그대로 동작하며 경고도 나오지 않습니다. 새 이름은 무엇을 설정하는지 이름에 드러내기 위한 것입니다.
+**`ssh-mcp setup`은 이 명령의 별칭이며 0.4.0에서 제거됩니다.** 0.1.0에서 쓰던 그 명령은 지금도 `host add`와 **바이트 단위로 같은 출력**을 내지만, 실행하면 stderr에 제거 예고 한 줄이 먼저 나옵니다. stdout은 건드리지 않으므로 `ssh-mcp setup ... > out.txt`의 결과는 0.2.x와 같습니다. 새 이름은 무엇을 설정하는지 이름에 드러내기 위한 것입니다.
 
 ```bash
 npx @get-bot/ssh-mcp host add                       # 하나씩 물어봅니다
@@ -89,8 +115,13 @@ npx @get-bot/ssh-mcp host add <alias> <user@host[:port]> \
   [--approval-fallback token|fail-closed] \
   [--approval-mode auto|ask-destructive|ask-all|deny] \
   [--label "사람이 읽을 이름"] \
+  [--from-ssh-config <Host>] \
+  [--alias <name>] \
+  [--port <1-65535>] \
   [--force]
 ```
+
+**alias로 쓸 수 없는 이름이 있습니다.** `install`·`host`·`doctor`·`setup`·`connect`·`exec`·`help`·`version` — ssh-mcp 자신의 명령 이름 여덟 개는 예약어이며 `host add`가 거부합니다. `ssh-mcp connect`가 명령인지 alias인지 구분할 수 없게 되기 때문입니다. 0.3.0 이전에 등록해 둔 항목은 그대로 동작하지만, `host list` 표에서 `(예약어)` 표시가 붙고 `--json`에는 `reserved_alias: true` 필드가 추가됩니다.
 
 ### 위저드 — 인자 없이 실행하기
 
@@ -155,10 +186,34 @@ Claude Desktop은 elicitation(사람에게 되묻는 프로토콜 기능)을 지
 - `--force`가 있으면: (1) 기존 지문과 새로 계산된 지문을 **나란히** 출력하고, (2) 두 지문이 다르면 "서버가 교체됐거나 중간자 공격일 수 있다"는 경고를 덧붙이며, (3) `yes`를 직접 타이핑해야 진행합니다. **어떤 경우에도 조용히 재핀하지 않습니다.**
 - `stdin`이 TTY가 아니면 `--force` 자체가 거부됩니다. 지문 재핀은 사람의 확인이 반드시 있어야 하는 동작이기 때문입니다.
 
-### `--approval-mode`, `--label`
+### `--approval-mode`, `--label`, `--alias`, `--port`
 
 - `--approval-mode <auto|ask-destructive|ask-all|deny>`: 호스트의 초기 승인 모드를 지정합니다. 생략 시 기본값은 `ask-destructive`입니다.
 - `--label "<텍스트>"`: `list_hosts` 응답과 사람이 읽는 안내에 쓰이는 표시 이름입니다. 생략 가능합니다.
+- `--alias <name>`: alias를 플래그로 지정합니다. 첫 위치 인자를 대신할 수 있습니다.
+- `--port <1-65535>`: 포트를 지정합니다. 대상을 `user@host:2222` 형태로 준 경우에는 그쪽이 이깁니다.
+
+값이 여러 경로에서 올 때의 우선순위는 **위저드에서 사람이 확인한 답 > 명시한 플래그 > `--from-ssh-config`가 읽어온 값**입니다.
+
+### `--from-ssh-config` — 이미 써 둔 ssh_config에서 가져오기
+
+```bash
+npx @get-bot/ssh-mcp host add --from-ssh-config web01
+```
+
+`~/.ssh/config`(환경변수 `SSH_MCP_SSH_CONFIG`로 다른 경로를 지정할 수 있습니다)에서 이름이 **정확히 일치하는** `Host` 블록을 찾아 `HostName`·`Port`·`User` 세 값을 위저드 기본값으로 채웁니다. 이미 OpenSSH에 설명해 둔 서버를 두 번 설명하지 않게 하는 것이 목적입니다.
+
+**가져오는 것은 메타데이터 세 개뿐입니다.** 기존 키를 재사용하지 않고, `IdentityFile`·`IdentityAgent`는 읽되 무시하며, ssh-agent도 `known_hosts`도 참조하지 않습니다. 비밀번호 입력, 지문 확인, 전용 키 생성과 설치는 이 플래그가 없을 때와 완전히 같은 경로를 탑니다. 채워진 값은 위저드에서 확인 단계로 보여주고 고칠 수 있으므로 TTY가 필요합니다.
+
+거절하는 경우가 있고, 거절할 때는 **부분 가져오기를 하지 않습니다**(세 값 중 셋만 맞고 하나가 틀린 결과보다 아무것도 주지 않는 편이 낫다는 판단입니다). 아래에 해당하면 `config_unsupported` 사유와 함께 종료 코드 2입니다.
+
+- 대상 블록에 `ProxyJump`/`ProxyCommand`가 있는 경우
+- 요청한 이름에 매치되는 **와일드카드 `Host` 블록**이 `HostName`·`Port`·`User`·`ProxyJump`·`ProxyCommand` 중 하나라도 설정하는 경우. `Host *`에 `ServerAliveInterval`만 있는 흔한 설정은 세 값을 바꿀 수 없으므로 그냥 무시합니다.
+- `Match` 블록이 그 다섯 키워드 중 하나를 설정하는 경우. 조건이 무엇이든 거절합니다 — 적용 여부를 판정하려면 `ssh -G`를 다시 구현해야 하기 때문입니다.
+
+`Include`는 **한 단계만** 따라갑니다(glob과 `~` 확장 지원). 그 안에서 또 `Include`가 나오면 따라가지 않고 stderr에 한 줄 알립니다.
+
+> OpenSSH 자신은 키워드마다 파일 전체에서 **처음** 나온 값을 씁니다. 이 구현은 그 순서 규칙을 흉내내지 않고, 위와 같이 "값을 바꿀 수 있는 블록이 있으면 거절"하는 쪽으로 보수적으로 어긋납니다.
 
 ## host list — 등록된 호스트 보기
 
@@ -169,9 +224,9 @@ npx @get-bot/ssh-mcp host list --json
 
 `hosts.json`을 읽어 alias, 접속 대상, 승인 모드, 승인 폴백, 호스트 키 지문 **접두 16자**, 라벨을 표로 출력합니다. 출력은 stdout이라 파이프하고 grep할 수 있습니다.
 
-**개인키 경로와 지문 전문은 출력하지 않습니다.** [`list_hosts` 도구](#도구-7개-레퍼런스)와 같은 기준이며, 사람과 모델이 서로 다른 그림을 보지 않게 하려는 것입니다. 승인 폴백이 파일에 없어 `fail-closed`로 정규화된 항목은 `fail-closed(누락)`으로 표시합니다.
+**개인키 경로와 지문 전문은 출력하지 않습니다.** [`list_hosts` 도구](#도구-9개-레퍼런스)와 같은 기준이며, 사람과 모델이 서로 다른 그림을 보지 않게 하려는 것입니다. 승인 폴백이 파일에 없어 `fail-closed`로 정규화된 항목은 `fail-closed(누락)`으로 표시합니다.
 
-`--json`은 `list_hosts` 도구 응답과 같은 필드 구성(`{ hosts: [...], count }`)을 stdout에 출력합니다. 등록된 호스트가 없어도 마찬가지로 `{"hosts": [], "count": 0}`을 내므로 스크립트에서 분기 없이 파싱할 수 있습니다.
+`--json`은 `list_hosts` 도구 응답과 같은 필드 구성(`{ hosts: [...], count }`)을 stdout에 출력합니다. 예약어와 같은 alias인 항목에만 `reserved_alias: true`가 하나 더 붙고, 그 밖의 필드는 도구 응답과 동일합니다. 등록된 호스트가 없어도 마찬가지로 `{"hosts": [], "count": 0}`을 내므로 스크립트에서 분기 없이 파싱할 수 있습니다.
 
 표 모드에서만 빈 레지스트리를 `등록된 호스트가 없습니다. ssh-mcp host add로 추가하세요.` 한 줄로 안내합니다. 두 경우 모두 종료 코드 0이며, `hosts.json`이 깨져 있으면 `config_invalid` 사유를 stderr에 내고 종료 코드 1입니다(그때 stdout에는 아무것도 쓰지 않습니다).
 
@@ -216,7 +271,7 @@ claude 감지됨: ~/.local/bin/claude
 | `--dry-run`                      | 아무것도 바꾸지 않고 수행할 내용만 출력합니다                                                                    |
 | `-h`, `--help`                   | 도움말                                                                                                           |
 
-종료 코드는 `setup`과 같습니다 — `0` 성공, `1` 실패, `2` 사용법 오류. 모든 출력은 stderr로 나갑니다(`doctor`가 stdout을 쓰는 것과 대비됩니다).
+종료 코드는 `setup`과 같습니다 — `0` 성공, `1` 실패, `2` 사용법 오류. 출력은 stderr로 나갑니다(`doctor`가 stdout을 쓰는 것과 대비됩니다). 예외는 `--help` 하나로, 요청한 사용법은 다른 명령과 같이 stdout에 내고 종료 코드 0입니다 — 그래야 `install --help | less`에 내용이 있습니다.
 
 `--home`과 `--config`의 값은 절대 경로로 변환해 등록합니다. 서버는 MCP 호스트가 정한 작업 디렉터리에서 실행되므로 상대 경로는 사용자가 의도한 곳을 가리키지 않습니다. 값을 받는 플래그(`--name`, `--scope`, `--home`, `--config`) 뒤에 `-`로 시작하는 토큰이 오면 값으로 삼키지 않고 사용법 오류로 끝냅니다 — 그러지 않으면 `--home --dry-run`이 `--dry-run`을 값으로 먹고 실제로 파일을 쓰게 됩니다.
 
@@ -293,7 +348,7 @@ Claude Desktop은 Windows 앱이라 WSL 쪽에는 설정 폴더가 없습니다.
 - 쓰기는 임시 파일에 쓴 뒤 rename으로 교체합니다(`hosts.json`과 같은 원자적 교체).
 - 다른 키와 다른 서버 항목은 모두 보존합니다. 다만 파일 전체를 2칸 들여쓰기로 다시 직렬화하므로 기존 들여쓰기·공백은 바뀔 수 있습니다.
 
-반영하려면 Claude Desktop을 **완전히 종료했다가** 다시 시작해야 합니다. 그 뒤 도구 목록에 정확히 7개가 보여야 합니다.
+반영하려면 Claude Desktop을 **완전히 종료했다가** 다시 시작해야 합니다. 그 뒤 도구 목록에 정확히 9개가 보여야 합니다.
 
 ### `--dry-run`
 
@@ -305,25 +360,57 @@ $ npx @get-bot/ssh-mcp install claude-code --scope local --dry-run
   claude mcp add ssh-mcp -s local -- cmd /c npx -y @get-bot/ssh-mcp
 ```
 
-## 도구 7개 레퍼런스
+## connect / exec — 터미널에서 직접 쓰기
+
+등록해 둔 호스트에 **사람이** 바로 접속하거나 명령 한 줄을 실행하는 경로입니다. `hosts.json`의 주소·포트·사용자명·개인키를 그대로 쓰므로, `host add`를 한 번 하면 Claude와 사람이 같은 접속 정보를 공유합니다.
+
+```bash
+npx @get-bot/ssh-mcp connect web1
+npx @get-bot/ssh-mcp exec web1 -- systemctl status nginx
+```
+
+실제로 실행되는 것은 시스템 `ssh`이며 인자는 다음으로 고정됩니다.
+
+```
+ssh -i <privateKeyPath> -p <port> -o IdentitiesOnly=yes <user>@<hostname> [명령...]
+```
+
+`IdentitiesOnly=yes`는 장식이 아닙니다. 이것이 없으면 OpenSSH가 에이전트에 있는 키를 먼저 전부 내밀고, `MaxAuthTries 3`인 서버는 우리 키를 시도해 보기도 전에 거절합니다. `-i`만으로는 막지 못합니다.
+
+터미널을 그대로 자식 프로세스에 넘기므로(`stdio: 'inherit'`) 비밀번호 프롬프트, `less`, 색상, 창 크기 변경이 직접 `ssh`를 친 것과 똑같이 동작합니다. **MCP 도구가 거부하는 대화형 프로그램(`vim`, `top`)도 이 경로에서는 그대로 쓸 수 있습니다.** `exec`의 `--` 뒤 토큰은 하나도 바꾸지 않고 넘깁니다.
+
+> **이 경로는 게이트를 거치지 않습니다.** 명령 분류·승인·감사·출력 발췌가 전부 적용되지 않고, 호스트 키 확인도 ssh-mcp가 `hosts.json`에 고정한 지문이 아니라 **OpenSSH의 `known_hosts`**를 따릅니다. 즉 같은 서버에 대해 두 경로가 서로 다른 신뢰 근거를 씁니다. 승인과 감사가 필요하면 MCP 도구 `exec`를 쓰세요.
+
+종료 코드는 `ssh`의 것을 그대로 돌려줍니다. 예외는 셋입니다 — 등록되지 않은 alias는 `host_not_found` 사유와 함께 `2`, `hosts.json`이 깨졌거나 `ssh` 실행 파일이 PATH에 없으면 `1`(운영체제별 설치 안내를 stderr에 냅니다), 사용법 오류는 `2`입니다. `connect`는 alias 하나만 받고 다른 인자를 조용히 넘기지 않습니다 — `ssh-mcp connect web1 -X`는 `-X`가 목적지 뒤에 붙어 원격 명령으로 해석되므로, 지원하는 것처럼 보이게 두는 대신 사용법 오류로 끝냅니다.
+
+**기술 스택 경계.** 이 두 명령은 시스템 `ssh`에 위임하는 **CLI 전용** 예외입니다. MCP 서버의 기동과 도구 호출은 종전대로 순수 JavaScript `ssh2`만 쓰며, OpenSSH가 설치되지 않은 머신에서도 아무 영향 없이 동작합니다. 이 경계는 ESLint 규칙으로 강제됩니다 — 서버·도구·SSH 전송 계층은 `src/connect/`를 import 할 수 없고, 진입점은 `src/commands.ts`의 동적 import 하나뿐입니다. `doctor`의 `ssh` 항목이 정보(INFO)로만 표시되고 실패 개수에 잡히지 않는 것도 같은 이유입니다.
+
+## 도구 9개 레퍼런스
 
 모델이 실제로 읽는 안내문과 동일한 문구입니다.
 
-| 도구             | 설명                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 주요 인자                                                                |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `list_hosts`     | 등록된 SSH 호스트의 alias, 접속 정보, 승인 모드, 승인 폴백을 반환한다. 다른 도구에 넘길 `host` 값을 여기서 확인한다. 비밀키 경로와 호스트 키 지문 전문은 반환하지 않는다.                                                                                                                                                                                                                                                                                                                                                                     | (없음)                                                                   |
-| `exec`           | 등록된 호스트에서 셸 명령을 한 번 실행하고 stdout, stderr, exit code를 분리해 반환한다. 명령은 서버가 안전/파괴적/관리자로 분류하며 호스트의 승인 모드에 따라 확인을 요구할 수 있다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** 대화형 프로그램(vim, top, less 등)은 지원하지 않는다. 작업 디렉터리와 환경변수는 호출 간에 유지되지 않는다 — 유지가 필요하면 `open_session`을 쓴다. | `host`, `command`, `timeout_sec?`, `confirmation_token?`                 |
-| `upload`         | 로컬 파일을 원격 경로로 SFTP 전송한다. 원격에 같은 경로가 있으면 덮어쓴다. 전송은 호스트의 승인 모드를 따르며 관리자 등급으로 분류된다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** ssh-mcp 설정 디렉터리(`~/.ssh-mcp`) 안의 파일은 전송할 수 없다.                                                                                                                                  | `host`, `local_path`, `remote_path`, `confirmation_token?`               |
-| `download`       | 원격 파일을 로컬 경로로 SFTP 전송한다. 로컬에 같은 경로가 있으면 기본적으로 실패하며, 덮어쓰려면 `overwrite: true`를 넘긴다. 전송은 호스트의 승인 모드를 따르며, `overwrite: true`는 파괴적 등급으로 분류된다(그 외에는 관리자 등급). **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** ssh-mcp 설정 디렉터리(`~/.ssh-mcp`) 안의 경로에는 내려받을 수 없다.                                | `host`, `remote_path`, `local_path`, `overwrite?`, `confirmation_token?` |
-| `open_session`   | 상태가 유지되는 원격 셸 세션을 열고 `session_id`를 반환한다. 이후 `run_in_session` 호출들이 작업 디렉터리, 환경변수, 활성화한 가상환경을 공유한다. 호스트당 최대 5개이며 30분간 쓰지 않으면 자동으로 닫힌다. 다 쓰면 `close_session`으로 닫는다.                                                                                                                                                                                                                                                                                              | `host`                                                                   |
-| `run_in_session` | 열린 세션 안에서 명령을 실행한다. `cd`, `export`, `source venv/bin/activate`의 효과가 다음 호출까지 유지된다. 분류와 승인은 `exec`와 완전히 동일하다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** 대화형 프로그램은 지원하지 않는다.                                                                                                                                                 | `session_id`, `command`, `timeout_sec?`, `confirmation_token?`           |
-| `close_session`  | 세션을 닫고 원격 셸을 종료한다. 이미 닫힌 세션에 호출해도 오류가 아니다.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `session_id`                                                             |
+| 도구             | 설명                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | 주요 인자                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `list_hosts`     | 등록된 SSH 호스트의 alias, 접속 정보, 승인 모드, 승인 폴백을 반환한다. 다른 도구에 넘길 `host` 값을 여기서 확인한다. 비밀키 경로와 호스트 키 지문 전문은 반환하지 않는다.                                                                                                                                                                                                                                                                                                                                                                                       | (없음)                                                                          |
+| `exec`           | 등록된 호스트에서 셸 명령을 한 번 실행하고 stdout, stderr, exit code를 분리해 반환한다. 명령은 서버가 안전/파괴적/관리자로 분류하며 호스트의 승인 모드에 따라 확인을 요구할 수 있다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** 대화형 프로그램(vim, top, less 등)은 지원하지 않는다. 작업 디렉터리와 환경변수는 호출 간에 유지되지 않는다 — 유지가 필요하면 `open_session`을 쓴다.                   | `host`, `command`, `format?`, `timeout_sec?`, `confirmation_token?`             |
+| `upload`         | 로컬 파일을 원격 경로로 SFTP 전송한다. 원격에 같은 경로가 있으면 덮어쓴다. 전송은 호스트의 승인 모드를 따르며 관리자 등급으로 분류된다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** ssh-mcp 설정 디렉터리(`~/.ssh-mcp`) 안의 파일은 전송할 수 없다.                                                                                                                                                    | `host`, `local_path`, `remote_path`, `confirmation_token?`                      |
+| `download`       | 원격 파일을 로컬 경로로 SFTP 전송한다. 로컬에 같은 경로가 있으면 기본적으로 실패하며, 덮어쓰려면 `overwrite: true`를 넘긴다. 전송은 호스트의 승인 모드를 따르며, `overwrite: true`는 파괴적 등급으로 분류된다(그 외에는 관리자 등급). **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** ssh-mcp 설정 디렉터리(`~/.ssh-mcp`) 안의 경로에는 내려받을 수 없다.                                                  | `host`, `remote_path`, `local_path`, `overwrite?`, `confirmation_token?`        |
+| `open_session`   | 상태가 유지되는 원격 셸 세션을 열고 `session_id`를 반환한다. 이후 `run_in_session` 호출들이 작업 디렉터리, 환경변수, 활성화한 가상환경을 공유한다. 호스트당 최대 5개이며 30분간 쓰지 않으면 자동으로 닫힌다. 다 쓰면 `close_session`으로 닫는다.                                                                                                                                                                                                                                                                                                                | `host`                                                                          |
+| `run_in_session` | 열린 세션 안에서 명령을 실행한다. `cd`, `export`, `source venv/bin/activate`의 효과가 다음 호출까지 유지된다. 분류와 승인은 `exec`와 완전히 동일하다. **응답이 `confirmation_required`이면, `confirmation_token`을 붙여 다시 호출하기 전에 반드시 사용자에게 명령 전문을 보여주고 대화에서 명시적 승인을 받아야 한다. 사용자 승인 없이 재호출하지 말 것.** 대화형 프로그램은 지원하지 않는다.                                                                                                                                                                   | `session_id`, `command`, `format?`, `timeout_sec?`, `confirmation_token?`       |
+| `close_session`  | 세션을 닫고 원격 셸을 종료한다. 이미 닫힌 세션에 호출해도 오류가 아니다.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `session_id`                                                                    |
+| `history`        | 이 서버가 남긴 감사 로그를 최신순으로 조회한다. 호스트·기간·등급·도구·승인 결과로 거를 수 있고, 회전된 파일까지 이어 읽는다. `next_cursor`를 다음 호출의 `cursor`로 넘겨 페이지를 잇는다 — 페이징 종료 판정은 `entries`가 비었는지가 아니라 `next_cursor === null`로 한다(필터가 좁으면 결과 없는 페이지가 나올 수 있다). 읽을 수 없는 줄은 건너뛰고 개수만 `skipped`에 보고하며 원문은 싣지 않는다. 감사 파일이 회전해 커서를 이어받을 수 없으면 `history_cursor_stale`을 돌려준다 — 그때는 `cursor` 없이 다시 조회한다.                                       | `host?`, `since?`, `until?`, `grade?`, `tool?`, `outcome?`, `limit?`, `cursor?` |
+| `fetch_output`   | `exec`/`run_in_session`가 발췌로 잘라낸 출력의 전문을 처음부터 순서대로 페이지 단위로 읽는다. `stdout_meta.output_ref` 또는 `stderr_meta.output_ref`가 non-null일 때만 쓸 수 있다. `total_bytes`는 마스킹 후 보관 길이이며 `stdout_meta.total_bytes`(와이어 바이트)와 다를 수 있다. 페이징 종료 판정은 `next_cursor === null`로 한다. 보관은 서버 메모리에만 10분간 유지되며 디스크에 기록되지 않는다 — 만료·폐기·재시작 후에는 `output_expired`이고, 그때는 명령을 다시 실행해야 한다. 개인키 블록은 보관 시점에 마스킹돼 있고 그 외 리댁션은 적용되지 않는다. | `output_ref`, `cursor?`, `max_bytes?`                                           |
+
+**`history`와 `fetch_output`은 승인을 거치지 않습니다.** 둘 다 원격에 아무것도 보내지 않고 이 프로세스 안에서만 답합니다 — `history`는 감사 파일에서, `fetch_output`은 메모리의 출력 보관소에서. 그래서 `readOnlyHint: true`이고 `requiresUserInteraction`도 붙지 않습니다. 다만 호출 자체는 다른 도구와 똑같이 감사 줄 한 개로 남으며, 그 줄의 `command`는 `null`입니다.
 
 `exec`, `run_in_session` 두 도구에만 `_meta: { "anthropic/requiresUserInteraction": true }`가 붙어 있습니다. Claude Code에서 always-allow·bypassPermissions 설정을 무력화하고 매 호출마다 사람에게 확인을 강제하는 비표준 Anthropic 확장입니다. 필요하면 `SSH_MCP_REQUIRE_USER_INTERACTION=0`으로 끌 수 있습니다.
 
 `upload`/`download`의 `local_path`가 `~/.ssh-mcp`(레지스트리·개인키·상태·감사 로그) 안으로 해석되면, 승인 모드나 등급과 **무관하게** 승인 절차를 거치지도 않고 곧바로 `local_path_forbidden`으로 거부됩니다. 게이트를 통과해도 우회할 수 없는 하드 블록입니다.
 
-`exec`/`run_in_session` 응답에는 두 가지가 조건부로 더 붙습니다.
+`exec`/`run_in_session` 응답에는 네 가지가 조건부로 더 붙습니다.
+
+- **`parsed` / `parse_error`.** `format: "json"`으로 호출했을 때만 나타납니다. 기본값 `format: "text"`에서는 두 필드가 `null`로도 붙지 않습니다 — [format: "json" 구조화 출력](#format-json-구조화-출력)을 보세요.
+- **`stdout_meta.output_ref` / `stderr_meta.output_ref`.** 그 스트림이 발췌로 잘렸고 전문이 보관됐을 때만 문자열이고, 그 밖에는 `null`입니다. [출력 보관과 fetch_output](#출력-보관과-fetch_output)을 보세요.
 
 - **`classification_coverage`.** 원격 호스트의 로그인 셸이 평소대로 POSIX 계열이면 이 필드는 응답에 아예 나타나지 않습니다(전체 커버리지). `open_session`이 마지막으로 관측한 셸이 `cmd`나 PowerShell이었을 때만(`state.json`의 `observedShells` 기준) `classification_coverage: "reduced"`가 포함됩니다. `exec`는 자체 셸 프로브가 없어 이 마지막 관측치에만 의존합니다.
 - **`sudo`가 비밀번호를 요구하면 사후에 `sudo_password_required`로 번역됩니다.** stdin이 항상 닫혀 있으므로 `sudo`가 비밀번호를 요구하면 반드시 비영 종료 코드로 실패하는데, 그 stderr가 `sudo: no tty present`, `no askpass program`, `a password is required`, `[sudo] password for ` 중 하나에 걸리면(그리고 종료 코드가 0이 아니면) 원래 오류 대신 이 코드로 응답합니다. [sudo](#sudo) 절을 보세요.
@@ -360,7 +447,8 @@ $ npx @get-bot/ssh-mcp install claude-code --scope local --dry-run
       "confirm": {
         "type": "boolean",
         "title": "스페이스로 체크 후 Accept",
-        "description": "체크하지 않은 채 Accept를 눌러도 제출되지 않습니다."
+        "description": "체크하지 않고 Accept를 누르면 실행하지 않습니다.",
+        "default": false
       }
     },
     "required": ["confirm"]
@@ -380,7 +468,9 @@ lionpay-stg (root@10.0.0.9:22) · exec
 
 세 줄인 이유는 Claude Code(2.1.271 실측)가 elicitation 메시지의 **첫 세 줄만 보여주고 나머지를 `… (+N more lines)`로 접으며, 그 접힌 부분은 펼칠 수 없기 때문**입니다. 사유가 길면 셋째 줄이 접히지 않도록 개수만 세어 `외 N개`로 줄입니다 — 전체 목록은 감사 로그의 `reasons`에 그대로 남습니다.
 
-**승인 창에서는 체크박스를 먼저 체크해야 합니다.** Claude Code(2.1.270, Windows 11 실측)는 이 필수 불리언 필드를 체크되지 않은 체크박스 `☐`로 그리고, 체크하지 않은 채 Accept를 누르면 "This field is required"로 제출을 막습니다. 그래서 체크 없이 Accept만 누르면 창이 그대로 남아 "승인이 안 된다"처럼 보이지만 Decline은 즉시 먹힙니다. 방향키나 Tab으로 체크박스에 포커스를 옮겨 스페이스로 `☑`로 바꾼 뒤 Accept를 누르세요. 같은 안내가 체크박스 제목(`스페이스로 체크 후 Accept`)과 그 `description`에도 들어 있습니다 — 제목은 좁은 창에서 잘리므로 눌러야 할 키를 앞에 두었고, 클라이언트가 `description`을 그리지 않을 수 있어 제목만으로도 뜻이 통하게 했습니다.
+**승인 창에서는 체크박스를 먼저 체크해야 합니다.** Claude Code(2.1.274, Windows 11 실측)는 이 필드를 체크되지 않은 체크박스 `☐`로 그립니다. 방향키나 Tab으로 체크박스에 포커스를 옮겨 스페이스로 `☑`로 바꾼 뒤 Accept를 누르세요. 체크하지 않고 그냥 Accept를 누르면 창은 닫히지만 `confirm: false`가 와서 **실행되지 않습니다** — 즉 손대지 않는 것 자체가 "실행하지 않겠다"는 답입니다. 같은 안내가 체크박스 제목(`스페이스로 체크 후 Accept`)과 그 `description`에도 들어 있습니다 — 제목은 좁은 창에서 잘리므로 눌러야 할 키를 앞에 두었고, 클라이언트가 `description`을 그리지 않을 수 있어 제목만으로도 뜻이 통하게 했습니다.
+
+**`default: false`는 장식이 아닙니다.** 같은 스키마를 세 가지로 바꿔가며 실측했습니다(2026-09-17, Claude Code 2.1.274). `default`를 빼면 체크 전에는 제출 자체가 "This field is required"로 막혀 Accept가 먹통 키처럼 보이고, `default: true`로 두면 체크박스가 **이미 체크된 채로** 떠서 손대지 않은 Accept가 곧바로 승인이 됩니다(fail-open). `default: false`만이 빈 체크박스로 떠서 양쪽 답이 모두 도달 가능하고, 위험한 쪽에 키 입력 하나를 요구합니다. 값이 `true`로 바뀌면 깨지는 테스트를 `tests/unit/approval.test.ts`에 두었습니다.
 
 `confirm: true` 요구 자체는 "Accept 버튼이 눌렸다"와 "실행하겠다는 값이 왔다"를 분리해 두려는 의도(AC17.1b)라 유지합니다. 이 형태는 MCP TypeScript SDK가 파괴적 작업 확인에 쓰는 공식 예제와 같습니다 — 필수 불리언 하나를 요구하고, `accept`로 돌아왔더라도 값이 `true`가 아니면 실행하지 않습니다.
 
@@ -483,7 +573,7 @@ Windows (Claude Desktop은 셸 없이 서버를 스폰하므로 반드시 `cmd /
 }
 ```
 
-설정 후 Claude Desktop을 재시작하면 도구 목록에 정확히 7개가 나타나야 합니다.
+설정 후 Claude Desktop을 재시작하면 도구 목록에 정확히 9개가 나타나야 합니다.
 
 ### Claude Code
 
@@ -505,7 +595,7 @@ Windows에서도 위 형태 그대로 연결됩니다(2.1.270 실측 — Claude 
 claude mcp add ssh-mcp -- cmd /c npx -y @get-bot/ssh-mcp
 ```
 
-`/mcp`에서 같은 7개 도구가 보이는지 확인하세요.
+`/mcp`에서 같은 9개 도구가 보이는지 확인하세요.
 
 ## Windows
 
@@ -574,6 +664,67 @@ v1은 PTY(가상 터미널)를 할당하지 않습니다. 그래서 화면을 �
 
 stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인코딩해 반환하고, 응답에 `encoding: "base64"`를 포함합니다. UTF-8이면 `encoding: "utf8"`입니다. 비-UTF-8 출력에서는 줄 기반 발췌가 의미가 없으므로 앞·뒤를 **바이트** 단위로 보존하며 `omitted_lines: null`, `omitted_bytes`는 정확한 값을 반환합니다.
 
+## format: "json" 구조화 출력
+
+`exec`와 `run_in_session`은 `format` 인자를 받습니다. 기본값은 `"text"`이고, 그때 서버는 명령 문자열을 한 바이트도 건드리지 않으며 응답에 `parsed`·`parse_error` 필드가 **아예 추가되지 않습니다**.
+
+`format: "json"`을 주면 아래 표에 있는 **단일 명령**에 한해 서버가 그 도구의 JSON 출력 플래그를 붙여 실행하고, stdout을 파싱해 `parsed`에 함께 담습니다.
+
+| 명령                                                  | 재작성                                    | 파싱           |
+| ----------------------------------------------------- | ----------------------------------------- | -------------- |
+| `docker container ls`, `docker ps`, `docker images`   | 끝에 `--format json`                      | `JSON.parse`   |
+| `docker inspect`                                      | 없음(이미 JSON)                           | `JSON.parse`   |
+| `systemctl list-units`, `list-timers`, `list-sockets` | 끝에 `--output=json`                      | `JSON.parse`   |
+| `journalctl`                                          | 끝에 `-o json`                            | `JSON.parse`   |
+| `lsblk`                                               | 끝에 `-J`                                 | `JSON.parse`   |
+| `ip addr`, `ip link`, `ip route`                      | `ip` 바로 뒤에 `-j` **삽입**              | `JSON.parse`   |
+| `df`                                                  | 플래그를 `-P`로 교체, **피연산자는 유지** | 고정 컬럼 파서 |
+| `ps`                                                  | 전체를 `ps -eo <컬럼>`으로 교체           | 고정 컬럼 파서 |
+
+표에 없는 명령(`docker rm` 등)은 재작성 대상이 아닙니다. `docker`에 하위 명령 없는 항목을 두지 않은 것은 의도적입니다 — `docker rm`이 조용히 플래그를 얻는 일이 없어야 합니다.
+
+**`ip`만 삽입인 이유.** iproute2는 `ip [OPTIONS] OBJECT {COMMAND}`를 파싱하면서 대시로 시작하지 않는 첫 단어에서 옵션 읽기를 멈춥니다. `ip addr -j`는 `-j`가 주소 명령의 인자로 넘어가 장치 이름으로 해석되고 실패합니다. 나머지 프로그램은 플래그를 끝에 받아들입니다.
+
+**이미 같은 플래그를 준 경우**에는 재작성분이 뒤에 한 번 더 붙습니다(`docker ps --format '{{.Names}}'` → `docker ps --format '{{.Names}}' --format json`). 이는 해당 도구들이 같은 플래그를 여러 번 받으면 **마지막 값을 쓰는** 동작에 기댄 설계입니다. `lsblk -J`, `ip -j`, `systemctl --output=json`처럼 한 토큰으로 이미 지정된 형태는 중복을 붙이지 않고 건너뜁니다.
+
+**`df`와 `ps`만 파서가 따로 있는 이유.** 두 명령에는 JSON 출력 모드가 어느 구현에도 없습니다. 그래서 출력 형태가 고정되는 형태로 정규화한 뒤 고정 컬럼 파서로 읽습니다. `df`는 `-P`(POSIX 출력)로 맞추는데, 이 모드의 보장이 "파일시스템 하나당 한 줄"이고 헤더 문구와 컬럼 수까지 GNU·busybox·BSD에서 같아지기 때문입니다. 블록 단위는 구현마다 달라(`-P`에서 GNU·busybox는 1024바이트, BSD는 512바이트) 헤더의 `<N>-blocks`에서 읽어 `block_size_bytes`로 함께 돌려줍니다. `ps`의 컬럼 목록은 `src/output/tables.ts`의 `PS_COLUMNS`가 정본이며, 이 문서에 문자열을 옮겨 적지 않습니다.
+
+**재작성된 명령이 분류·승인·감사·실행의 대상입니다.** 승인 창에 보이는 문자열, 감사 줄의 `command`, 실제로 원격에서 도는 문자열이 모두 같습니다. 재작성이 등급을 바꾸지 않는다는 것(예: `sudo df -h` → `sudo df -P`는 여전히 관리자 등급)은 표의 모든 항목에 대해 테스트로 고정돼 있습니다.
+
+**재작성하지 않는 경우.** 명령에 파이프·리다이렉트·`;`·`&&`·`||`·서브셸이 있으면 손대지 않고 **원문 그대로 실행**한 뒤 `parsed: null`, `parse_error: "not_rewritable"`을 돌려줍니다. 표에 없는 명령도 같습니다. 어느 경우든 `stdout`에는 실행 결과가 정상적으로 담기므로, 잃는 것은 `parsed` 하나뿐입니다.
+
+**파싱 입력은 발췌 상한과 무관한 전체 stdout입니다.** 응답의 `stdout`이 발췌로 잘렸더라도 파서는 잘리기 전 전문을 읽습니다. 다만 두 개의 상한이 있습니다.
+
+- stdout이 `min(4 × maxOutputBytes, 4 MiB)`를 넘으면 파싱을 포기하고 `parse_error: "too_large"`.
+- 파싱은 됐지만 `parsed`를 직렬화한 크기가 `min(2 × maxOutputBytes, 4 MiB)`를 넘으면 싣지 않고 `parse_error: "parsed_too_large"`. 데이터가 있는데 봉투가 작은 경우이므로 명령 범위를 좁히면 됩니다.
+
+**`parsed`에도 리댁션이 적용됩니다.** 민감한 키 이름(`password`·`token` 등)은 `[redacted]`로, 문자열 안의 개인키 블록은 마스킹됩니다. 다만 로그용 리댁션과 달리 문자열을 2 KiB에서 자르지 않고 중첩 깊이 상한도 64입니다 — `docker inspect` 결과가 잘려 깨진 JSON이 되는 것을 막기 위한 것입니다.
+
+## 출력 보관과 `fetch_output`
+
+발췌(§[바이너리 출력](#바이너리-출력) 위의 출력 상한)로 잘린 스트림은 v1에서 그냥 사라졌습니다. v1.1부터는 잘린 스트림의 **전문**이 서버 메모리에 남고, 응답의 `stdout_meta.output_ref`/`stderr_meta.output_ref`로 `fetch_output`에 넘길 수 있습니다.
+
+```
+exec → stdout_meta: { truncated: true, output_ref: "…", total_bytes: 9876543 }
+     → fetch_output { output_ref, cursor: 0 }      → { chunk, next_cursor: 65536, … }
+     → fetch_output { output_ref, cursor: 65536 }  → { chunk, next_cursor: null, … }
+```
+
+- **한 번에 읽는 양**은 `max_bytes`로 정하며 기본 64 KiB, 최소 1 KiB, 최대 1 MiB입니다.
+- **페이징 종료 판정은 `next_cursor === null`**입니다.
+- **`chunk`의 인코딩은 `encoding` 필드를 따릅니다** — UTF-8 스트림이면 텍스트, 발췌기가 비-UTF-8로 판정한 스트림이면 base64입니다. `exec` 응답과 같은 규칙이므로 디코딩 방법도 같습니다.
+- **`fetch_output`의 `total_bytes`와 `stdout_meta.total_bytes`는 다른 양입니다.** 앞은 마스킹을 마친 보관 버퍼의 길이이고, 뒤는 원격에서 실제로 흘러온 와이어 바이트입니다. 마스킹이 길이를 바꾸므로 두 값이 다를 수 있습니다.
+
+보관의 성질은 다음과 같습니다.
+
+- **메모리에만 있고 디스크에 쓰지 않습니다.** 이 경로에는 파일을 여는 코드가 없습니다.
+- **10분**이 지나면 폐기됩니다. 서버를 재시작해도 사라집니다. 만료·폐기·재시작 뒤의 조회는 `output_expired`이며, 그때는 명령을 다시 실행해야 합니다.
+- **총량 64 MiB**를 넘으면 가장 오래된 항목부터 버립니다.
+- **스트림 하나당 상한은 `min(4 × maxOutputBytes, 16 MiB)`**입니다. 이 상한을 넘긴 스트림은 보관하지 않으므로, `truncated: true`인데도 `output_ref`가 `null`일 수 있습니다.
+- **개인키 블록은 보관 시점에 한 번 마스킹됩니다.** 페이지 경계가 개인키를 가로질러도 어느 페이지에도 키 바이트가 나오지 않게 하기 위해서이며, 그 외의 리댁션은 적용하지 않습니다.
+- **`output_ref`는 추측할 수 없고(128비트 난수) 응답 외에는 어디에도 기록되지 않습니다.** 감사 줄에도 넣지 않습니다.
+- **`close_session`이나 세션 만료는 보관 출력을 폐기하지 않습니다.** 수명은 위의 TTL 규칙만 따릅니다.
+
 ## 오류 코드
 
 도구 응답의 `error` 필드에 담기는 코드입니다. `confirmation_required`만 `isError: false`인 정상 흐름이고 나머지는 `isError: true`입니다.
@@ -600,7 +751,26 @@ stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인�
 | `sftp_failed`                                                                                                           | SFTP 오류                                                                                                                                                           |
 | `sudo_password_required`                                                                                                | `sudo`가 비밀번호를 요구함(NOPASSWD 아님)                                                                                                                           |
 | `alias_exists`                                                                                                          | `--force` 없이 기존 alias로 `setup` 실행                                                                                                                            |
+| `history_cursor_stale`                                                                                                  | `history`의 `cursor`가 가리키던 위치를 감사 로그 회전으로 이어받을 수 없음. `cursor` 없이 다시 조회하세요                                                           |
+| `output_expired`                                                                                                        | `fetch_output`의 `output_ref`가 만료(10분)·폐기(총량 상한)됐거나 서버가 재시작됨. 명령을 다시 실행해야 합니다                                                       |
 | `internal_error`                                                                                                        | 예상 밖 내부 오류(버그). 재현 정보와 함께 이슈로 보고하세요                                                                                                         |
+
+### `parse_error`
+
+`format: "json"` 호출에서만 나타나는 별도의 필드입니다. 오류 코드가 아니라 **`parsed`가 비어 있는 이유**이며, 이 값이 있어도 응답 자체는 정상이고 `stdout`에는 실행 결과가 그대로 담깁니다. 정의역은 여덟 개이고 정본은 `src/tools/gated.ts`의 `ParseErrorReason`입니다.
+
+| 값                    | 무슨 일이 있었나                                              | 다음 수                                                                    |
+| --------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `not_rewritable`      | 파이프·리다이렉트·`;`·`&&`·서브셸이 있어 원문 그대로 실행됐다 | 단일 명령으로 다시 부르거나, 그냥 `stdout`을 읽는다                        |
+| `too_large`           | stdout이 파싱 상한을 넘었다                                   | 명령 범위를 좁히거나, 발췌를 읽고 나머지는 `fetch_output`으로 넘긴다       |
+| `invalid_json`        | 명령은 돌았지만 JSON이 아닌 것을 출력했다                     | 대개 원격 도구가 그 플래그를 모르는 구버전이다 — `format: "text"`로 읽는다 |
+| `parsed_too_large`    | 파싱은 됐지만 결과가 응답에 들어가지 않는다                   | 명령 범위를 좁힌다. 데이터는 있고 봉투가 작다                              |
+| `output_not_retained` | 서버가 stdout을 보관하지 않아 파싱할 바이트가 없었다          | **호출자가 할 수 있는 것이 없다** — 아래를 보세요                          |
+| `empty_output`        | 헤더 줄조차 없다. 대개 명령 자체가 실패했다                   | `exit_code`와 `stderr`를 읽는다. `format`의 문제가 아니다                  |
+| `header_unrecognized` | 표 헤더가 정규화된 그 형태가 아니다                           | `format: "json"`은 같은 방식으로 또 실패한다 — `format: "text"`를 쓴다     |
+| `row_unparsable`      | 헤더는 맞았는데 행 하나가 어긋났다                            | 읽기가 중간에 끊긴 경우가 많아 같은 호출이 다시 성공하기도 한다            |
+
+**`output_not_retained`만 성격이 다릅니다.** 나머지 일곱은 명령이나 그 출력에 대한 설명이고 호출자에게 다음 수가 남아 있습니다 — 범위를 좁히거나, 다시 부르거나, `format: "text"`로 내려가거나, `stderr`를 읽거나. 이 값은 **서버 쪽 결함**을 가리킵니다. 파싱 경로를 배선하면서 파싱할 바이트를 남기지 않은 상태라, 재시도해도 같은 값이 돌아오고 `format`을 무엇으로 바꿔도 마찬가지입니다. 같은 사건이 서버 로그에 `error` 레벨로 남으며, 해결은 다른 요청이 아니라 코드 수정입니다.
 
 ## 보안 모델
 
@@ -610,6 +780,8 @@ stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인�
 - **프로덕션 호스트에는 `"approvalFallback": "fail-closed"`를 권장합니다.** `token` 모드는 Desktop처럼 elicitation을 지원하지 않는 클라이언트에서 파괴적/관리자 명령을 계속 쓸 수 있게 하는 완화책이지만, 그 경로에서는 서버가 사람의 승인을 검증할 수 없습니다(응답의 `server_cannot_verify_human_approval: true` 필드가 이 사실을 명시합니다). 사람 개입은 전적으로 Desktop 자체의 도구 승인 대화상자에 의존합니다.
 - **토큰은 프로세스 메모리에만 있습니다.** 서버를 재시작하면 발급된 모든 `confirmation_token`이 무효가 됩니다. 토큰은 명령 문자열과 호스트에 바인딩된 1회용입니다.
 - **도구 어노테이션(`readOnlyHint`, `destructiveHint` 등)은 힌트일 뿐 보안 경계가 아닙니다.** MCP SDK 자체가 "신뢰할 수 없는 서버의 어노테이션을 클라이언트가 신뢰해서는 안 된다"고 명시합니다. 차단은 전적으로 서버 내부의 분류·승인 로직이 담당합니다. 예외적으로 `_meta`의 `requiresUserInteraction`은 Claude Code에서는 실제 강제력이 있지만, 이것도 Claude Code 한정이며 다른 호스트는 무시합니다.
+- **잘린 출력은 메모리에만, 10분간, 개인키 블록을 마스킹해 보관합니다.** 디스크에는 기록하지 않고 총량은 64 MiB로 묶이며 오래된 것부터 버려집니다. 이 보관본을 가리키는 `output_ref`는 128비트 난수이고 응답 외에는 어디에도 — 감사 줄에도 — 기록되지 않습니다. 자세한 규칙은 [출력 보관과 fetch_output](#출력-보관과-fetch_output)에 있습니다.
+- **`connect`/`exec` CLI는 이 문서의 승인·감사 모델 밖입니다.** 사람이 직접 치는 경로이고 시스템 `ssh`에 위임하므로 분류·승인·감사가 적용되지 않으며, 호스트 키도 `known_hosts`를 따릅니다. 반대로 **MCP 서버 경로는 시스템 `ssh`의 존재 여부와 무관합니다** — 서버·도구·SSH 전송 계층은 그 코드를 import 할 수 없도록 ESLint로 막혀 있습니다. [connect / exec](#connect--exec--터미널에서-직접-쓰기) 절을 보세요.
 - **감사 파일은 명령 문자열을 담으며 모드 `0600`입니다.** `auditMode: "metadata-only"`로 바꾸면 명령 문자열 자체는 기록하지 않지만 등급·승인 결과·바이트 수 등 나머지 필드는 그대로 남습니다.
 - **감사 쓰기 실패는 도구 호출을 막지 않습니다.** 감사 파일에 쓰지 못해도(디스크 가득 참 등) `warn` 로그만 남기고 원래 도구 호출은 계속 성공 처리됩니다. 감사가 가용성보다 우선하지 않는다는 트레이드오프입니다.
 - **Windows 원격 셸에서는 분류 커버리지가 축소됩니다.** 내장 파괴적/관리자 패턴은 POSIX 셸 문법을 전제로 만들어졌으므로, 원격 로그인 셸이 `cmd`나 `powershell`로 감지되면 `del /s /q`, `Remove-Item -Recurse -Force` 같은 명령이 `safe`로 판정될 수 있습니다. 이런 호스트에서는 `exec`/`run_in_session` 응답과 `doctor` 진단에 `classification_coverage: "reduced"` 표시가 붙습니다.
@@ -621,6 +793,10 @@ stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인�
 - **비밀번호는 ssh2 내부에서 JS 문자열이 됩니다.** `setup`이 읽어들인 비밀번호는 `Buffer`로 보관되며 사용 후 `fill(0)`으로 지웁니다. 하지만 `ssh2` 1.17.0의 `ConnectConfig`가 `password` 필드로 문자열만 받기 때문에, 접속 시점에 그 버퍼 내용을 문자열로 한 번 복사합니다. JavaScript 문자열은 불변이라 이 복사본은 `fill(0)`으로 지울 수 없고 가비지 컬렉터가 수거할 때까지 메모리에 남습니다. 원본 버퍼는 여전히 지워지므로 노출 범위는 제한되며, 이 잔여 위험을 없애려면 ssh2가 `Buffer`를 받아들여야 합니다(현재는 받지 않습니다).
 - **감사 로그 쓰기는 원자적이지 않습니다.** 한 줄을 16 KiB로 제한해 쪼개질 확률은 낮추지만, 이는 원자성 보장이 아니라 실용적 완화입니다. 같은 `SSH_MCP_HOME`을 공유하는 서버 프로세스 2개가 동시에 쓰면 줄이 섞일 수 있습니다. ssh-mcp는 로컬 PC 한 대에 개인 서버 키를 두고 쓰는 단일 사용자 도구를 목표로 하므로 v1에서는 이 위험을 감수합니다. 실제로 섞임이 관측되면 프로세스별 감사 파일(`audit-<pid>.jsonl`) 분리가 v1.1 후보입니다.
 - **감사 쓰기 실패는 도구 호출을 막지 않습니다** (앞서 [보안 모델](#보안-모델)에도 있는 내용). 드물게 쓰기가 실패하면(디스크 가득 참 등) 그 호출의 감사 줄 한 개가 누락되고 `warn` 로그만 남습니다.
+- **`format: "json"`에서 `ps`는 선택 범위가 전체 프로세스로 넓어지고, `df`는 반대로 피연산자를 지킵니다.** 두 명령을 나란히 보면 규칙이 하나로 읽힙니다. `df -h /var`는 `df -P /var`가 되어 "어느 파일시스템을 물었는지"가 남지만, `ps -p 123`도 `ps aux`도 똑같이 전체 프로세스 목록을 내는 형태로 정규화됩니다. `df`는 플래그(`-h`)와 피연산자(`/var`)가 문법으로 구분되는 반면, `ps`는 선택 플래그(`-e`·`-p`·`-u`)와 포맷 플래그(`-o`)가 같은 인자 문법이고 BSD 문법(`ps aux`)에는 대시조차 없어서 "플래그만 버리고 피연산자는 남긴다"를 적용할 대상이 없기 때문입니다. **특정 프로세스만 보려면 `format: "text"`로 두세요.** 컬럼 목록에 경과시간(`etime`)과 CPU(`pcpu`)가 없는 것도 같은 성격의 타협입니다 — busybox에서 그 키워드들은 빌드 옵션에 따라 없을 수 있고, 없는 키워드는 컬럼 하나가 비는 것이 아니라 **명령 자체의 실패**가 됩니다. 임의의 원격 호스트를 상대하는 도구이므로 빌드에 따라 달라지는 키워드를 쓰지 않습니다.
+- **`format: "json"`에서 따옴표·이스케이프된 인자를 가진 `df`는 재작성하지 않습니다.** `df -h "/mnt/my disk"`는 원문 그대로 실행되고 `parsed: null` + `parse_error: "invalid_json"`이 됩니다(고정 컬럼 파서로 가지 않고 `JSON.parse`로 떨어지기 때문입니다). **`stdout`에는 실제 출력이 정상적으로 담기므로 잃는 것은 `parsed` 하나뿐입니다.** 분류기의 토큰에 원문 위치 정보가 없어 따옴표 친 단어가 원문 어디에 있는지 찾을 수 없고, 토큰 값으로 다시 조립하면 `$MOUNT` 같은 확장이 죽습니다. 남은 선택지는 "피연산자를 버리고 전체 파일시스템을 보고하기"와 "`parsed`를 포기하기" 둘뿐인데, 묻지 않은 질문에 성공적으로 답하는 쪽이 더 나쁘다고 판단했습니다.
+- **타임아웃된 `exec`의 원격 프로세스 정리는 POSIX 원격에서만 동작합니다.** sshd는 세션 채널의 SSH `signal` 요청을 무시하고 pty 없는 채널이 닫혀도 자식이 죽지 않으므로, 서버는 타임아웃 뒤 `pkill -TERM -P <pid>`와 `kill -TERM <pid>`를, 유예 후 다시 `KILL`로 보냅니다. `pkill`이 없는 원격(스톡 `ubuntu:24.04`에는 `procps`가 없습니다)에서는 `kill`만으로 축소되며 연결당 한 번 알립니다. 원격 로그인 셸이 `cmd`나 PowerShell이면 이 정리는 적용되지 않습니다.
+- **잘린 출력을 보관하는 동안 메모리를 더 씁니다.** 명령이 도는 내내 방향마다 하나씩, 스트림당 최대 `min(4 × maxOutputBytes, 16 MiB)`의 버퍼가 살아 있습니다. 한 호스트에 세션 5개를 동시에 열고 모두 큰 출력을 내면 출력 보관소의 64 MiB와 **별개로** 최대 약 160 MiB가 더 필요할 수 있습니다. 호스트의 `maxOutputBytes`를 낮추면 이 값도 함께 내려갑니다.
 - **`SSH_MCP_REQUIRE_USER_INTERACTION=0`은 Claude Code의 프롬프트 강제를 끕니다.** 이 환경변수를 설정하면 `exec`/`run_in_session`의 `_meta` 힌트가 빠져, Claude Code에서 always-allow를 걸어 둔 경우 더 이상 매 호출마다 확인창이 뜨지 않습니다. **`approvalFallback: "token"`으로 설정한 호스트와 이 옵션을 함께 쓰지 마세요.** `token` 경로는 애초에 서버가 사람의 승인을 검증할 수 없다는 전제 위에 있고(§[보안 모델](#보안-모델)), Claude Code의 강제 프롬프트가 사실상 그 호스트에 남은 유일한 클라이언트 측 방어선인 경우가 많습니다. 둘을 같이 쓰면 그 방어선마저 사라집니다.
 
 ## 감사 로그
@@ -629,29 +805,29 @@ stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인�
 
 한 도구 호출마다 성공·실패·거부와 무관하게 정확히 한 줄이 추가됩니다. 2단계 토큰 승인(요청 → 재호출)은 두 줄로 남습니다.
 
-| 필드                                  | 설명                                                                                 |
-| ------------------------------------- | ------------------------------------------------------------------------------------ |
-| `schemaVersion`                       | 항상 `1`. 향후 `history` 도구가 v1/v1.1 혼재 파일을 읽을 수 있게 한다                |
-| `ts`                                  | ISO 8601 UTC, 밀리초                                                                 |
-| `tool`                                | 7개 도구 이름 중 하나                                                                |
-| `host`                                | alias 또는 `null` (`run_in_session`/`close_session`은 `session_id`로 역조회)         |
-| `session_id`                          | 문자열 또는 `null`                                                                   |
-| `command`                             | 리댁션 통과 문자열, 2 KiB 절단. `auditMode: "metadata-only"`면 `null`                |
-| `command_grade`                       | `safe` / `privileged` / `destructive` / `null`                                       |
-| `reasons`                             | 매칭된 패턴 id 배열                                                                  |
-| `approval_mode`                       | 호출 시점 호스트의 `approvalMode`                                                    |
-| `approval_outcome`                    | 아래 8개 값 중 하나                                                                  |
-| `approval_fallback`                   | `token` / `fail-closed` / `null`                                                     |
-| `server_cannot_verify_human_approval` | `approval_outcome === "token-approved"`일 때 `true`                                  |
-| `exit_code`                           | 숫자 또는 `null`                                                                     |
-| `error_code`                          | 오류 코드 또는 `null`                                                                |
-| `exec_duration_ms`                    | 실제 원격 실행 시간(ms)                                                              |
-| `approval_wait_ms`                    | 승인 대기 시간(ms). 느린 실행과 사람의 긴 고민 시간을 구분하기 위해 별도 필드로 둔다 |
-| `stdout_bytes` / `stderr_bytes`       | 발췌 전 원본 총 바이트                                                               |
-| `truncated`                           | 발췌 여부                                                                            |
-| `normalized_command` / `segments`     | 분류기가 실제로 매칭에 쓴 정규화 문자열·세그먼트. `metadata-only`면 `null`           |
-| `client`                              | `{name, version}` 또는 `null`                                                        |
-| `audit_mode`                          | 이 줄이 기록된 모드(`full`/`metadata-only`)                                          |
+| 필드                                  | 설명                                                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `schemaVersion`                       | 항상 `1`. `history` 도구가 v1/v1.1 혼재 파일을 읽을 수 있게 한다. 값이 다른 줄은 읽지 않고 `skipped.unknown_schema`로만 셉니다 |
+| `ts`                                  | ISO 8601 UTC, 밀리초                                                                                                           |
+| `tool`                                | 9개 도구 이름 중 하나                                                                                                          |
+| `host`                                | alias 또는 `null` (`run_in_session`/`close_session`은 `session_id`로 역조회)                                                   |
+| `session_id`                          | 문자열 또는 `null`                                                                                                             |
+| `command`                             | 리댁션 통과 문자열, 2 KiB 절단. `auditMode: "metadata-only"`면 `null`                                                          |
+| `command_grade`                       | `safe` / `privileged` / `destructive` / `null`                                                                                 |
+| `reasons`                             | 매칭된 패턴 id 배열                                                                                                            |
+| `approval_mode`                       | 호출 시점 호스트의 `approvalMode`                                                                                              |
+| `approval_outcome`                    | 아래 8개 값 중 하나                                                                                                            |
+| `approval_fallback`                   | `token` / `fail-closed` / `null`                                                                                               |
+| `server_cannot_verify_human_approval` | `approval_outcome === "token-approved"`일 때 `true`                                                                            |
+| `exit_code`                           | 숫자 또는 `null`                                                                                                               |
+| `error_code`                          | 오류 코드 또는 `null`                                                                                                          |
+| `exec_duration_ms`                    | 실제 원격 실행 시간(ms)                                                                                                        |
+| `approval_wait_ms`                    | 승인 대기 시간(ms). 느린 실행과 사람의 긴 고민 시간을 구분하기 위해 별도 필드로 둔다                                           |
+| `stdout_bytes` / `stderr_bytes`       | 발췌 전 원본 총 바이트                                                                                                         |
+| `truncated`                           | 발췌 여부                                                                                                                      |
+| `normalized_command` / `segments`     | 분류기가 실제로 매칭에 쓴 정규화 문자열·세그먼트. `metadata-only`면 `null`                                                     |
+| `client`                              | `{name, version}` 또는 `null`                                                                                                  |
+| `audit_mode`                          | 이 줄이 기록된 모드(`full`/`metadata-only`)                                                                                    |
 
 **`approval_outcome`의 8개 값**: `not-required`, `auto`, `elicitation-approved`, `token-approved`, `pending-confirmation`, `declined`, `denied`, `approval_unavailable`.
 
@@ -659,7 +835,25 @@ stdout/stderr가 유효한 UTF-8이 아니면 해당 스트림을 base64로 인�
 
 **회전.** 10 MiB를 넘으면 회전합니다(`.3` 삭제 → `.2`를 `.3`으로 → `.1`을 `.2`로 → 본체를 `.1`로). 총 4개 파일, 최대 약 40 MiB. 한 줄은 16 KiB로 제한되며, 넘치면 `command` → `segments` → `normalized_command` → `reasons` 순으로 잘립니다.
 
-**조회 도구는 v1에 없습니다.** `jq` 등으로 직접 읽어야 합니다.
+**모델은 `history` 도구로 이 로그를 읽습니다.** 회전된 파일까지 이어 읽으므로 사람이 `jq`로 네 파일을 붙이는 것과 같은 결과를 한 번에 얻습니다.
+
+```jsonc
+// 최근 20줄
+{ "limit": 20 }
+
+// 특정 호스트에서 파괴적으로 분류된 호출만
+{ "host": "web1", "grade": "destructive" }
+
+// 어제 하루, 사람이 거절한 것만
+{ "since": "2026-09-16T00:00:00Z", "until": "2026-09-16T23:59:59Z", "outcome": "declined" }
+
+// 다음 페이지 — 직전 응답의 next_cursor를 그대로 넘긴다
+{ "host": "web1", "cursor": "<next_cursor>" }
+```
+
+`limit`은 기본 50, 최대 200입니다. 응답은 `{ entries, next_cursor, skipped }`입니다. **`entries`가 비었다고 끝난 것이 아닙니다** — 필터가 좁으면 한 페이지를 다 읽고도 걸리는 줄이 없을 수 있으므로, 종료 판정은 `next_cursor === null`로 합니다. 한 번의 호출이 훑는 줄 수에는 상한이 있어서(10,000줄), 그 전에 `limit`을 채우지 못해도 커서를 주고 돌아옵니다. 깨져서 읽을 수 없는 줄은 건너뛰고 개수만 `skipped`에 `invalid_json`/`unknown_schema`로 보고하며 원문은 싣지 않습니다. 감사 파일이 회전해 커서가 가리키던 자리를 이어받을 수 없으면 틀린 페이지를 주는 대신 `history_cursor_stale`로 실패합니다 — 그때는 `cursor` 없이 다시 조회하세요.
+
+사람이 직접 읽을 때는 `jq`가 그대로 편합니다.
 
 ```bash
 # 최근 20개 호출의 도구/승인 결과
@@ -672,8 +866,6 @@ jq -c 'select(.command_grade == "destructive")' ~/.ssh-mcp/audit.jsonl
 jq -r '.approval_outcome' ~/.ssh-mcp/audit.jsonl | sort | uniq -c | sort -rn
 ```
 
-v1.1에서 이 로그를 필터·페이지 조회하는 `history` 도구를 추가하는 것이 로드맵 후보입니다.
-
 ## 진단 (`ssh-mcp doctor`)
 
 ```bash
@@ -684,23 +876,24 @@ npx @get-bot/ssh-mcp doctor --patterns
 
 **연결이 안 되면 가장 먼저 이 명령을 돌리세요.** 결과는 stdout에 출력됩니다(서버 모드가 아니므로 stdout을 JSON-RPC 전용으로 쓸 필요가 없습니다).
 
-| #   | 항목                                      | 비고                                                                                                                                                                                                     |
-| --- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Node 버전 ≥ 20                            | 미만이면 FAIL. 서버는 Node 20이면 동작하지만, 대화형 질문(`install`·`host add`)은 `@inquirer`가 요구하는 20.17 이상이 필요합니다                                                                         |
-| 2   | `ssh2` 로드                               | 네이티브 `cpu-features` 바인딩 유무는 정보로만 표시                                                                                                                                                      |
-| 3   | `~/.ssh-mcp/` 레이아웃                    | 없지만 생성 가능하면 PASS(신규 설치). 생성도 불가할 때만 FAIL                                                                                                                                            |
-| 4   | 디렉터리·키 파일 권한                     | POSIX `0700`/`0600` 확인. Windows는 등록된 개인키가 하나도 없으면 **`icacls`를 실행하지 않고 PASS**(아직 `setup`을 안 한 새 머신을 FAIL로 만들지 않기 위함) — 개인키가 있으면 `icacls`로 ACL을 읽어 확인 |
-| 5   | `hosts.json` 스키마                       | 파싱/zod 검증 실패 시 FAIL, issue 경로 표시                                                                                                                                                              |
-| 6   | `audit.jsonl` 쓰기 가능                   | 현재 크기·회전 파일 수 함께 표시                                                                                                                                                                         |
-| 7   | 호스트별 키 파일 존재·권한                | 파일 없으면 FAIL                                                                                                                                                                                         |
-| 8   | 호스트별 TCP 연결(5초)                    | 실패 시 FAIL                                                                                                                                                                                             |
-| 9   | 호스트별 호스트 키 지문 일치              | 불일치 시 FAIL                                                                                                                                                                                           |
-| 10  | 호스트별 키 전용 인증                     | 인증 실패 시 FAIL. **명령은 실행하지 않는다**                                                                                                                                                            |
-| 11  | 호스트별 승인 설정                        | FAIL 없음. `auto`/`token`/필드 누락은 WARN                                                                                                                                                               |
-| 12  | 마지막 클라이언트의 elicitation 지원 여부 | FAIL 없음. 기록 없으면 "미기록"                                                                                                                                                                          |
-| 13  | 원격 셸 분류 커버리지                     | FAIL 없음. `cmd`/`powershell`로 관측된 호스트는 WARN, 미관측은 "미확인" 정보 행                                                                                                                          |
-| 14  | 분류 패턴 목록                            | 항상 PASS(정보 행). `--patterns`로 단독 출력 가능                                                                                                                                                        |
-| 15  | 호스트 설정 스니펫 출력                   | 항상 PASS. Windows에서는 `cmd /c` 변형도 함께 출력. 표 출력에는 [`install`](#install--클라이언트-등록) 자동 등록 안내 한 줄이 스니펫 뒤에 붙습니다(`--json` 페이로드에는 없음)                           |
+| #   | 항목                                      | 비고                                                                                                                                                                                                                                   |
+| --- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Node 버전 ≥ 20                            | 미만이면 FAIL. 서버는 Node 20이면 동작하지만, 대화형 질문(`install`·`host add`)은 `@inquirer`가 요구하는 20.17 이상이 필요합니다                                                                                                       |
+| 2   | `ssh2` 로드                               | 네이티브 `cpu-features` 바인딩 유무는 정보로만 표시                                                                                                                                                                                    |
+| 3   | `~/.ssh-mcp/` 레이아웃                    | 없지만 생성 가능하면 PASS(신규 설치). 생성도 불가할 때만 FAIL                                                                                                                                                                          |
+| 4   | 디렉터리·키 파일 권한                     | POSIX `0700`/`0600` 확인. Windows는 등록된 개인키가 하나도 없으면 **`icacls`를 실행하지 않고 PASS**(아직 `setup`을 안 한 새 머신을 FAIL로 만들지 않기 위함) — 개인키가 있으면 `icacls`로 ACL을 읽어 확인                               |
+| 5   | `hosts.json` 스키마                       | 파싱/zod 검증 실패 시 FAIL, issue 경로 표시                                                                                                                                                                                            |
+| 6   | `audit.jsonl` 쓰기 가능                   | 현재 크기·회전 파일 수 함께 표시                                                                                                                                                                                                       |
+| 7   | 호스트별 키 파일 존재·권한                | 파일 없으면 FAIL                                                                                                                                                                                                                       |
+| 8   | 호스트별 TCP 연결(5초)                    | 실패 시 FAIL                                                                                                                                                                                                                           |
+| 9   | 호스트별 호스트 키 지문 일치              | 불일치 시 FAIL                                                                                                                                                                                                                         |
+| 10  | 호스트별 키 전용 인증                     | 인증 실패 시 FAIL. **명령은 실행하지 않는다**                                                                                                                                                                                          |
+| 11  | 호스트별 승인 설정                        | FAIL 없음. `auto`/`token`/필드 누락은 WARN                                                                                                                                                                                             |
+| 12  | 마지막 클라이언트의 elicitation 지원 여부 | FAIL 없음. 기록 없으면 "미기록"                                                                                                                                                                                                        |
+| 13  | 원격 셸 분류 커버리지                     | FAIL 없음. `cmd`/`powershell`로 관측된 호스트는 WARN, 미관측은 "미확인" 정보 행                                                                                                                                                        |
+| 14  | 분류 패턴 목록                            | 항상 PASS(정보 행). `--patterns`로 단독 출력 가능                                                                                                                                                                                      |
+| 15  | 호스트 설정 스니펫 출력                   | 항상 PASS. Windows에서는 `cmd /c` 변형도 함께 출력. 표 출력에는 [`install`](#install--클라이언트-등록) 자동 등록 안내 한 줄이 스니펫 뒤에 붙습니다(`--json` 페이로드에는 없음)                                                         |
+| 16  | 시스템 `ssh` 실행 파일                    | **FAIL이 없는 정보 행**입니다. `ssh`가 있으면 경로를, 없으면 [`connect`/`exec`](#connect--exec--터미널에서-직접-쓰기)만 못 쓴다는 안내를 표시합니다. MCP 서버와 도구 9개는 `ssh` 없이 동작하므로 이 항목은 실패 개수에 잡히지 않습니다 |
 
 **종료 코드.** FAIL이 하나라도 있으면 `1`, 없으면 `0`. WARN은 종료 코드에 영향을 주지 않습니다.
 
@@ -745,7 +938,7 @@ npx @get-bot/ssh-mcp doctor --patterns
 
 ## 설계 결정
 
-아래 ADR(Architecture Decision Record)은 `.omc/plans/ssh-mcp-plan.md`에 전문이 있습니다. 여기서는 제목만 남깁니다.
+아래 ADR(Architecture Decision Record)은 v1이 `.omc/plans/ssh-mcp-plan.md`, v1.1이 `.omc/plans/ssh-mcp-v11-plan.md`에 전문이 있습니다. 여기서는 제목만 남깁니다.
 
 - **ADR-001.** 세션 명령 완료를 양방향 UUID 마커 + base64 + `eval` + stdin 차단으로 감지한다
 - **ADR-002.** 통합 테스트를 두 엔드포인트로 파라미터화한다 — 인프로세스 픽스처(양 OS) + 실제 sshd 컨테이너(ubuntu)
@@ -757,19 +950,31 @@ npx @get-bot/ssh-mcp doctor --patterns
 - **ADR-008.** 출력 상한 초과 시 앞·뒤를 보존하고 가운데를 한 줄로 대체한다
 - **ADR-009.** 원격 셸 지원 경계를 POSIX 계열 4종으로 두고 나머지는 조기 거부한다
 
+v1.1에서 추가된 결정입니다. ADR-006(발췌로 잘린 출력을 보관하지 않는다)은 ADR-010이 뒤집었습니다.
+
+- **ADR-010.** 발췌 누산기에 옵트인 보관 옵션을 두고 `output_ref`는 응답 조립부에서 발행한다
+- **ADR-011.** `history`는 역방향 청크 읽기 + `(파일, 오프셋, 크기, 줄 해시)` 커서로 구현한다
+- **ADR-012.** 재작성은 게이트 직전에 하되, 누락을 브랜드 타입으로 막는다
+- **ADR-013.** ssh_config 가져오기는 위저드와 같은 "argv를 채운다" 경로를 쓰고, 플래그 토큰만 만든다
+- **ADR-014.** `connect`/`exec`는 `ssh`를 먼저 찾고 `shell:false`로 spawn한다
+- **ADR-015.** `real-sshd`는 저장소 안 Dockerfile을 잡에서 빌드해 띄운다
+- **ADR-016.** 승인 elicitation 스키마는 probe 실측 후 enum을 우선 채택한다
+- **ADR-017.** 선행 단계를 앞에 두되 브랜치 보호 등록은 릴리스 게이트로 미룬다
+- **ADR-018.** 타임아웃된 `exec`는 프레임으로 받은 pid를 2차 채널에서 거둔다
+
 **계획에 없던 추가.** [알려진 의존성 이슈](#알려진-의존성-이슈)에 적은 키 쌍 건전성 검증(재파싱 + 지문 일치 확인 + 최대 12회 재시도)은 원래 계획서에는 없었습니다. ssh2 1.17.0의 결함이 구현 중에 발견되면서 `ssh-mcp/src/setup/keygen.ts`에 추가됐습니다. [`install` 명령](#install--클라이언트-등록)(`ssh-mcp/src/install/`)도 계획서에 없던 추가분으로, Windows에서 `cmd /c`로 감싸야 한다는 사실을 사용자가 알아야만 등록할 수 있다는 마찰을 없애기 위해 2026-09-14에 넣었습니다.
 
-## v1 범위 밖 / v1.1 후보
+## 로드맵 / 범위 밖
 
-v1에는 없지만 설계가 이들을 막지 않도록 만들었습니다.
+0.3.0에서 아래 여섯 항목이 v1.1 후보 목록을 떠나 실제 기능이 됐습니다 — `history` 도구, 커서 기반 출력 조회(`fetch_output`), `format: "json"` 구조화 출력, `host add --from-ssh-config`, 터미널 직접 접속 CLI(`connect`/`exec`), 그리고 실제 OpenSSH 컨테이너를 상대로 도는 CI 티어(`real-sshd`). 앞의 다섯은 각각 이 문서의 해당 절에 설명이 있습니다.
 
-- `history` 도구 — `audit.jsonl`을 호스트·기간·등급으로 필터해 페이지 단위로 반환
-- 페이지 커서 출력 조회 — 발췌로 잘린 나머지를 커서로 가져오는 도구
-- 구조화 JSON 파서 — `df`, `ps`, `docker ps`, `systemctl status`, `journalctl` 등을 `format: "json"`으로 구조화 반환
+아직 없지만 설계가 막지 않는 것들입니다.
+
 - SQLite 감사 저장소 — JSONL을 대체 또는 보강
 - `.mcpb` 원클릭 번들 패키징
-- `setup`의 `~/.ssh/config` 가져오기(기존 키·설정 재사용)
-- 실제 OpenSSH 컨테이너 CI 티어 — `StrictModes`·`authorized_keys`·sftp 서브시스템을 실제 sshd 상대로 검증. v1의 게이팅 증거는 인프로세스 ssh2 `Server` 픽스처(실제 bash 브리지)이며, 통합 테스트는 이미 `ENDPOINT=fixture|sshd` 두 엔드포인트로 파라미터화돼 있어 컨테이너 티어 추가를 막지 않는다
+- `connect`/`exec`에 ssh-mcp 지문 강제 — 지금 이 경로는 OpenSSH의 `known_hosts`를 따르므로, `hosts.json`에 고정한 지문을 `-o` 옵션으로 넘겨 두 경로의 신뢰 근거를 하나로 맞추는 것이 후속 후보입니다
+- 따옴표 친 인자를 가진 명령의 재작성 — `src/safety/normalize.ts`의 토큰에 원문 위치(span)를 실으면 [알려진 한계](#알려진-한계)의 `df -h "/mnt/my disk"` 제약이 그대로 해소됩니다. 분류기의 핵심 자료구조라 Phase E 범위 밖이었습니다
+- `%CPU`·경과시간을 포함한 `ps` 컬럼 — 원격의 `ps`가 무엇인지 알 수 있게 되면(예: 호스트별 프로브 결과 캐시) 빌드 의존 키워드를 골라 쓸 수 있습니다
 
 다음은 v1에서 명시적으로 제외되었고 로드맵에도 없습니다.
 

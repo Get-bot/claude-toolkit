@@ -34,6 +34,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// For the tool count in the closing hint only. `audit.ts` is the canonical
+// list of registered tools (src/AGENTS.md), and this line told users to expect
+// a number that a release changed underneath it.
+import { TOOL_NAMES } from '../audit.js';
 import { buildDesktopEntry } from '../config/registration.js';
 import { errorMessage, isEnoent, isErrnoCode } from '../internal/util.js';
 
@@ -263,7 +267,8 @@ export function installClaudeDesktop(options: DesktopInstallOptions): boolean {
     '파일 전체를 2칸 들여쓰기로 다시 직렬화했습니다. 다른 서버 항목과 키는 그대로 보존됩니다.'
   );
   options.write(
-    'Claude Desktop을 완전히 종료했다가 다시 시작해야 반영됩니다. 도구 목록에 정확히 7개가 보여야 합니다.'
+    'Claude Desktop을 완전히 종료했다가 다시 시작해야 반영됩니다. ' +
+      `도구 목록에 정확히 ${String(TOOL_NAMES.length)}개가 보여야 합니다.`
   );
   return true;
 }

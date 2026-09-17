@@ -19,6 +19,9 @@
  *    silently losing the bytes dropped inside a long line (§5.8 step 7).
  * 3. **Memory is bounded.** Both sides are clamped to `HARD_CEILING / 2`, so a
  *    stream of any length costs at most about `cap + 320 KiB` per direction.
+ *    The opt-in `retain` option (ADR-010) raises that figure by its own cap and
+ *    by nothing else: the bound stays independent of how long the stream is,
+ *    which is what ADR-008 actually promised.
  *
  * The buffers are deliberately larger than the reported budgets: a stream that
  * ends up at or below `cap` must be returned byte for byte, which is only
@@ -100,13 +103,46 @@ export interface ExcerptMeta {
   returned_bytes: number;
   /** True when the minimum-line extension stopped at `HARD_CEILING`. */
   ceiling_hit: boolean;
-  /** Reserved for v1.1 paged output retrieval; always `null` in v1 (ADR-006). */
-  output_ref: null;
+  /**
+   * Handle for retrieving the whole stream through `fetch_output`, or `null`.
+   *
+   * Always `null` as it leaves this module: minting a reference means putting
+   * bytes in the output store, and that happens in `commandResultBody()`
+   * (`src/tools/gated.ts`) — the one place that knows both `truncated` and the
+   * shape of the response being built, and the one place a timed-out command
+   * never reaches (ADR-010, AC-O1b).
+   */
+  output_ref: string | null;
 }
 
-export interface ExcerptResult {
+/** What the builders produce; {@link ExcerptResult} adds the retained bytes. */
+interface BuiltExcerpt {
   text: string;
   meta: ExcerptMeta;
+}
+
+/**
+ * What became of the whole-stream copy (ADR-010).
+ *
+ * Three states and not `Buffer | null`, because the two ways of getting
+ * `null` mean opposite things to a caller that wants to parse the stream:
+ *
+ * - `dropped` — retention was asked for and the stream outgrew its cap, so the
+ *   output is genuinely too big. A parser should report that.
+ * - `not_requested` — nobody asked to keep it. The stream may have been three
+ *   bytes long. A parser that reads this as "too big" gives a confident wrong
+ *   answer, which is exactly the bug a single `null` invites.
+ *
+ * Collapsing them was safe only while every caller on the parsing path happened
+ * to pass `retain`; that is a property of two call sites, held by nothing. Here
+ * it is a value the compiler makes each consumer account for.
+ */
+export type Retention =
+  { kind: 'kept'; bytes: Buffer } | { kind: 'dropped' } | { kind: 'not_requested' };
+
+export interface ExcerptResult extends BuiltExcerpt {
+  /** What became of the whole-stream copy — see {@link Retention}. */
+  retention: Retention;
 }
 
 export interface ExcerptOptions {
@@ -114,6 +150,25 @@ export interface ExcerptOptions {
   cap: number;
   minSideLines?: number;
   maxLineBytes?: number;
+  /**
+   * Opt in to keeping the whole stream alongside the excerpt (ADR-010).
+   *
+   * Off by default, so the bound this module promises — about `cap + 320 KiB`
+   * per direction — is unchanged for every caller that does not ask. A caller
+   * that does ask raises its own bound to `cap + 320 KiB + retain.cap`, still
+   * independent of stream length. A stream that exceeds `retain.cap` is given
+   * up on the moment it does, and `retention` comes back `{ kind: 'dropped' }`:
+   * partially retained bytes would be indistinguishable from the whole stream
+   * at the other end (AC-O4a). Not asking at all is the separate
+   * `{ kind: 'not_requested' }` — the two are distinct so a caller cannot
+   * report a stream nobody kept as one that was too large.
+   *
+   * The decision lives here rather than in a second buffer bolted onto the same
+   * `data` handler because this is the only place that knows whether the stream
+   * was UTF-8 and whether it was truncated — and because one buffer cannot
+   * disagree with itself about how many bytes it saw.
+   */
+  retain?: { cap: number };
 }
 
 export interface ExcerptAccumulator {
@@ -343,6 +398,10 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
   const tailChunks: Buffer[] = [];
   let tailBytes = 0;
 
+  const retainCap = options.retain?.cap;
+  let retainChunks: Buffer[] | null = retainCap === undefined ? null : [];
+  let retainBytes = 0;
+
   let totalBytes = 0;
   let newlines = 0;
   let lastByte = -1;
@@ -358,6 +417,18 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
     newlines += countNewlines(chunk);
     lastByte = chunk[chunk.length - 1] as number;
     utf8.update(chunk);
+
+    if (retainChunks !== null && retainCap !== undefined) {
+      if (retainBytes + chunk.length > retainCap) {
+        // Give up as soon as the cap is passed and let the buffers go: holding
+        // a prefix would cost the same memory for output nobody can use.
+        retainChunks = null;
+        retainBytes = 0;
+      } else {
+        retainChunks.push(chunk);
+        retainBytes += chunk.length;
+      }
+    }
 
     if (headBytes < headCapacity) {
       const take = Math.min(chunk.length, headCapacity - headBytes);
@@ -383,7 +454,7 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
     }
   }
 
-  function buildFull(head: Buffer, tail: Buffer, isUtf8: boolean): ExcerptResult | null {
+  function buildFull(head: Buffer, tail: Buffer, isUtf8: boolean): BuiltExcerpt | null {
     const overlap = headBytes + tail.length - totalBytes;
     if (overlap < 0) return null; // Cannot rebuild the stream: excerpt instead.
     const full =
@@ -412,7 +483,7 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
     };
   }
 
-  function buildBinaryExcerpt(head: Buffer, tail: Buffer): ExcerptResult {
+  function buildBinaryExcerpt(head: Buffer, tail: Buffer): BuiltExcerpt {
     const headKeep = head.subarray(0, Math.min(headBytes, headByteTarget));
     const tailKeep = tail.subarray(Math.max(0, tail.length - tailByteTarget));
     const kept = headKeep.length + tailKeep.length;
@@ -436,7 +507,7 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
     };
   }
 
-  function buildTextExcerpt(head: Buffer, tail: Buffer): ExcerptResult {
+  function buildTextExcerpt(head: Buffer, tail: Buffer): BuiltExcerpt {
     const tailOffset = totalBytes - tail.length; // absolute offset of tail[0]
 
     // Head side: byte budget first, then back off to the last complete line.
@@ -556,16 +627,21 @@ export function createExcerptAccumulator(options: ExcerptOptions): ExcerptAccumu
     const tail =
       tailAll.length > tailWindow ? tailAll.subarray(tailAll.length - tailWindow) : tailAll;
     const isUtf8 = utf8.done();
+    // `retainChunks` is null both when retention was never requested and when
+    // the cap was passed; `retainCap` is what tells the two apart (see
+    // {@link Retention}).
+    const retention: Retention =
+      retainCap === undefined
+        ? { kind: 'not_requested' }
+        : retainChunks === null
+          ? { kind: 'dropped' }
+          : { kind: 'kept', bytes: Buffer.concat(retainChunks) };
 
-    if (totalBytes <= cap) {
-      const full = buildFull(head, tail, isUtf8);
-      if (full !== null) {
-        finished = full;
-        return finished;
-      }
-    }
+    let built: BuiltExcerpt | null = null;
+    if (totalBytes <= cap) built = buildFull(head, tail, isUtf8);
+    built ??= isUtf8 ? buildTextExcerpt(head, tail) : buildBinaryExcerpt(head, tail);
 
-    finished = isUtf8 ? buildTextExcerpt(head, tail) : buildBinaryExcerpt(head, tail);
+    finished = { ...built, retention };
     return finished;
   }
 

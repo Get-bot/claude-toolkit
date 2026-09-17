@@ -1,0 +1,8 @@
+  PID  PPID USER          STAT      VSZ    RSS ARGS
+    1     0 root            Ss  4374568  24608 /sbin/launchd
+   89     1 root            Ss  4400796  12960 /usr/sbin/syslogd
+  402     1 _windowserver   Ss 12908376 512432 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+  517     1 _mdnsresp       Ss  4401284   6144 /usr/sbin/mDNSResponder
+ 1204     1 alice            S  5033472  98304 /Applications/Visual Studio Code.app/Contents/MacOS/Electron --type=renderer --enable-crashpad --user-data-dir=/Users/alice/Library/Application Support/Code --standard-schemes=vscode-webview,vscode-file
+ 1350  1204 alice            S  4402188   2048 /bin/zsh -l
+ 3301  1350 alice           R+  4399404   1536 ps -eo pid,ppid,user,stat,vsz,rss,args

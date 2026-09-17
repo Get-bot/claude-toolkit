@@ -57,6 +57,8 @@ function harness(
     answers?: readonly string[];
     taken?: readonly string[];
     given?: WizardIo['given'];
+    /** Pre-filled answers, as `--from-ssh-config`/`--alias`/`--port` supply them. */
+    defaults?: WizardIo['defaults'];
     /** One result per reachability check, in order. Defaults to always reachable. */
     reach?: readonly ReachResult[];
   } = {}
@@ -130,6 +132,7 @@ function harness(
       ask,
       takenAliases: new Set(options.taken ?? []),
       given: options.given ?? { approvalMode: false, label: false, force: false },
+      ...(options.defaults === undefined ? {} : { defaults: options.defaults }),
       probeTcp: (host: string, port: number): Promise<ReachResult> => {
         probed.push(`${host}:${String(port)}`);
         return Promise.resolve(reach.shift() ?? { ok: true, code: '', reason: '' });
@@ -394,5 +397,157 @@ describe('runSetupWizard', () => {
   it('aborts when the questions run out of answers', async () => {
     const io = harness({ answers: ['host'] });
     await expect(runSetupWizard(io.io)).rejects.toBeInstanceOf(PromptAbortedError);
+  });
+});
+
+describe('pre-filled answers (AC-S5, ADR-013)', () => {
+  it('offers every default and still puts every question', async () => {
+    // A default is not an answer. `given` is what makes the wizard skip a
+    // question, and the ssh_config seed deliberately never reaches it — press
+    // Enter six times and the six questions were all there to press it on.
+    const io = harness({
+      answers: ['', '', '', '', '', ''],
+      defaults: {
+        source: 'web01',
+        hostname: 'web01.internal',
+        user: 'deploy',
+        port: 2022,
+        alias: 'web01',
+      },
+    });
+    const extra = await runSetupWizard(io.io);
+
+    expect(io.asked).toHaveLength(6);
+    expect(io.asked[0]?.default).toBe('web01.internal');
+    expect(io.asked[1]?.default).toBe('deploy');
+    expect(io.asked[2]?.default).toBe('2022');
+    expect(io.asked[3]?.default).toBe('web01');
+    expect(extra).toEqual([
+      '--approval-mode',
+      'ask-destructive',
+      'web01',
+      'deploy@web01.internal:2022',
+    ]);
+  });
+
+  it('lets a different answer replace every one of them', async () => {
+    const io = harness({
+      answers: ['other.example.com', 'root', '2200', 'confirmed', 'ask-all', ''],
+      defaults: { source: 'web01', hostname: 'web01.internal', user: 'deploy', port: 2022 },
+    });
+    expect(await runSetupWizard(io.io)).toEqual([
+      '--approval-mode',
+      'ask-all',
+      'confirmed',
+      'root@other.example.com:2200',
+    ]);
+  });
+
+  it('names the source and says the existing key is not reused (AC-S4)', async () => {
+    const io = harness({
+      answers: ['', 'deploy', '', '', '', ''],
+      defaults: { source: 'web01', hostname: 'web01.internal', identityIgnored: true },
+    });
+    await runSetupWizard(io.io);
+    const text = io.output();
+    expect(text).toContain('ssh_config의 "web01" 항목에서 읽은 값을 미리 채웠습니다');
+    expect(text).toContain('IdentityFile·IdentityAgent는 무시합니다');
+    expect(text).toContain('이 호스트 전용 키를 새로 만듭니다');
+  });
+
+  it('says nothing about ssh_config when nothing came from it', async () => {
+    const io = harness({ answers: ['web01.example.com', 'deploy', '', '', '', ''] });
+    await runSetupWizard(io.io);
+    expect(io.output()).not.toContain('ssh_config');
+  });
+
+  it('leaves the identity line out when the block had neither keyword', async () => {
+    const io = harness({
+      answers: ['', 'deploy', '', '', '', ''],
+      defaults: { source: 'web01', hostname: 'web01.internal' },
+    });
+    await runSetupWizard(io.io);
+    expect(io.output()).not.toContain('IdentityFile');
+  });
+
+  it('spends the address default on the first ask only', async () => {
+    // The second ask follows a failed reachability check, so re-offering the
+    // address that just failed would make Enter the obvious move and fail the
+    // same way.
+    const io = harness({
+      answers: ['', 'deploy', '', 'web02.example.com', '', '', '', ''],
+      defaults: { source: 'web01', hostname: 'web01.internal' },
+      reach: [{ ok: false, code: 'ECONNREFUSED', reason: 'refused' }],
+    });
+    await runSetupWizard(io.io);
+    const addresses = io.asked.filter((entry) => entry.message.includes('호스트 주소'));
+    expect(addresses).toHaveLength(2);
+    expect(addresses[0]?.default).toBe('web01.internal');
+    expect(addresses[1]?.default).toBeUndefined();
+  });
+
+  it('keeps the port default across a re-ask, which the failure does not implicate', async () => {
+    const io = harness({
+      answers: ['web01.example.com', 'deploy', '', 'web02.example.com', '', '', '', ''],
+      defaults: { port: 2022 },
+      reach: [{ ok: false, code: 'ECONNREFUSED', reason: 'refused' }],
+    });
+    await runSetupWizard(io.io);
+    const ports = io.asked.filter((entry) => entry.message.includes('SSH 포트'));
+    expect(ports.map((entry) => entry.default)).toEqual(['2022', '2022']);
+  });
+});
+
+describe('an alias default has to be one the question accepts', () => {
+  it('falls back to the hostname label when the seeded alias is taken', async () => {
+    const io = harness({
+      answers: ['', 'deploy', '', '', '', ''],
+      defaults: { hostname: 'box.example.com', alias: 'web01' },
+      taken: ['web01'],
+    });
+    await runSetupWizard(io.io);
+    expect(io.asked[3]?.default).toBe('box');
+  });
+
+  it('offers the taken alias again under --force, which is what --force is for', async () => {
+    const io = harness({
+      answers: ['', 'deploy', '', '', '', ''],
+      defaults: { hostname: 'box.example.com', alias: 'web01' },
+      taken: ['web01'],
+      given: { approvalMode: false, label: false, force: true },
+    });
+    await runSetupWizard(io.io);
+    expect(io.asked[3]?.default).toBe('web01');
+  });
+
+  it('never offers a command name, from the seed or from the hostname (AC-C6)', async () => {
+    const seeded = harness({
+      answers: ['', 'deploy', '', 'chosen', '', ''],
+      defaults: { hostname: 'box.example.com', alias: 'doctor' },
+    });
+    await runSetupWizard(seeded.io);
+    expect(seeded.asked[3]?.default).toBe('box');
+
+    const derived = harness({ answers: ['doctor.example.com', 'deploy', '', 'chosen', '', ''] });
+    await runSetupWizard(derived.io);
+    expect(derived.asked[3]?.default).toBeUndefined();
+  });
+
+  it('refuses a command name typed into the alias question', async () => {
+    // `parseSetupArgs` refuses it too, but it runs after the wizard — without
+    // this the whole finished interview would die as a usage error.
+    const io = harness({
+      answers: ['web01.example.com', 'deploy', '', 'connect', 'web01', '', ''],
+    });
+    await runSetupWizard(io.io);
+    expect(io.rejections.join('\n')).toContain('ssh-mcp 명령 이름이라 alias로 쓸 수 없습니다');
+  });
+});
+
+describe('suggestAlias and reserved names', () => {
+  it('offers nothing when the first label is a command name', () => {
+    expect(suggestAlias('help.example.com')).toBeNull();
+    expect(suggestAlias('version')).toBeNull();
+    expect(suggestAlias('helper.example.com')).toBe('helper');
   });
 });

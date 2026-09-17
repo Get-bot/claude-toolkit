@@ -11,11 +11,13 @@
  *
  * Conventions inherited from the sibling CLIs:
  *
- * - **All output goes to stderr**, like `setup` and unlike `doctor`. This
- *   command reports progress and failures rather than producing data to pipe,
- *   and the habit keeps stdout free of anything but JSON-RPC frames
- *   (Principle 3). The writer is injected so tests can capture it, which is
- *   also why no ESLint `no-console` exception is needed for this directory.
+ * - **Everything but `--help` goes to stderr**, like `setup` and unlike
+ *   `doctor`. This command reports progress and failures rather than producing
+ *   data to pipe, and the habit keeps stdout free of anything but JSON-RPC
+ *   frames (Principle 3). Help that was asked for is the one exception: stdout,
+ *   like every other command's, so `install --help | less` has something to
+ *   show. Both writers are injected so tests can capture them, which is also
+ *   why no ESLint `no-console` exception is needed for this directory.
  * - **Exit codes carry the same meanings as `setup`**: 0 success, 1 a step
  *   failed, 2 a usage error.
  * - **No new `ERROR_CODES`.** Those describe tool responses over MCP; a CLI has
@@ -84,7 +86,7 @@ export const USAGE = [
   'npx는 배치 파일(npx.cmd)이라 셸 없이 스폰하는 호스트에서는 ENOENT로 실패하기 때문입니다.',
   '그 밖의 플랫폼에서는 `npx -y @get-bot/ssh-mcp`로 등록합니다.',
   '',
-  '모든 출력은 stderr로 나갑니다.',
+  '이 도움말 외의 모든 출력은 stderr로 나갑니다.',
 ].join('\n');
 
 export interface InstallArgs {
@@ -267,6 +269,13 @@ export interface InstallDeps {
   /** Injected so tests can capture output; defaults to stderr. */
   write?: (text: string) => void;
   /**
+   * Where `--help` goes; defaults to stdout. Help that was asked for is not an
+   * error, so it must not share the stream everything else here uses — on
+   * stderr, `install --help | less` showed nothing. `host`, `host list` and
+   * `doctor` already make this split.
+   */
+  out?: (text: string) => void;
+  /**
    * Used only to ask for the Claude Code scope. Injected so tests can drive
    * both the TTY and the non-TTY branch without a terminal; the
    * `claude-desktop` path never touches it, because Desktop has no scopes.
@@ -355,13 +364,14 @@ export function shortenHome(target: string, home: string): string {
  */
 export async function runInstall(argv: readonly string[], deps: InstallDeps = {}): Promise<number> {
   const write = deps.write ?? ((text: string): void => void process.stderr.write(`${text}\n`));
+  const out = deps.out ?? ((text: string): void => void process.stdout.write(`${text}\n`));
   const platform = deps.platform ?? process.platform;
   const packageName = deps.packageName ?? PACKAGE_NAME;
   const cwd = deps.cwd ?? ((): string => process.cwd());
 
   const parsed = parseInstallArgs(argv, cwd);
   if (parsed.ok && parsed.help) {
-    write(USAGE);
+    out(USAGE);
     return EXIT_OK;
   }
   if (!parsed.ok) {

@@ -55,6 +55,12 @@ export const TOOL_ANNOTATIONS: Record<ToolName, ToolAnnotations> = {
     idempotentHint: true,
     openWorldHint: true,
   },
+  // The two v1.1 readers. Both answer from this process alone — `history` from
+  // the audit file, `fetch_output` from the in-memory output store — so neither
+  // opens a world beyond the server, and the destructive and idempotent hints
+  // carry no information next to `readOnlyHint: true` (AC-H4, AC-O6).
+  history: { readOnlyHint: true, openWorldHint: false },
+  fetch_output: { readOnlyHint: true, openWorldHint: false },
 };
 
 /** Non-standard Anthropic extension key (M4). */

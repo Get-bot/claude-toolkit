@@ -17,9 +17,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Client } from 'ssh2';
+import { Client, type SFTPWrapper } from 'ssh2';
 
 import type { HostEntry } from '../../src/config/schema.js';
+import { installAuthorizedKey } from '../../src/setup/install.js';
 import { sha256Fingerprint } from '../../src/ssh/fingerprint.js';
 import { generateHostKey, type FixtureKeyPair } from './hostKeys.js';
 import {
@@ -313,4 +314,146 @@ export function authorizeKey(endpoint: TestEndpoint, publicKey: string): void {
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const separator = existing === '' || existing.endsWith('\n') ? '' : '\n';
   fs.writeFileSync(file, `${existing}${separator}${publicKey.trim()}\n`, { encoding: 'utf8' });
+}
+
+/**
+ * Authorise `publicKey` on whichever tier is running (A7, AC-T3a).
+ *
+ * On `sshd` the key has to travel the same road the product does: a
+ * password-authenticated connection running the §5.7 install script, which is
+ * also what makes the tier prove AC-T4's first item — `StrictModes yes` refuses
+ * a key whose `~/.ssh` and `authorized_keys` modes are wrong, so a later
+ * key-only connection succeeding is the evidence that 0700/0600 were applied.
+ * The script is idempotent through `grep -qxF` (`MARKER_ALREADY_PRESENT`), so
+ * re-running it against the container's one reused account never doubles a line.
+ *
+ * On `fixture` it delegates to {@link authorizeKey}: that server's remote home
+ * is a directory on this machine, and an emulated shell (`shellEmulation`)
+ * cannot run the install script at all.
+ *
+ * Every caller goes through this one function rather than branching on
+ * `endpoint.kind` itself — three copies of the same branch is exactly how test
+ * harnesses drift apart.
+ */
+export async function authorizeKeyOverSsh(
+  endpoint: TestEndpoint,
+  publicKey: string
+): Promise<void> {
+  if (endpoint.kind !== 'sshd') {
+    authorizeKey(endpoint, publicKey);
+    return;
+  }
+  await withEndpointClient(endpoint, (client) => installAuthorizedKey(client, publicKey));
+}
+
+/**
+ * Run `fn` over a short-lived password-authenticated connection to `endpoint`.
+ *
+ * Password rather than key, because the helpers built on this have to work
+ * before any key has been installed, and because it is the one credential both
+ * tiers are guaranteed to accept. The connection is per-call and closed again:
+ * these helpers are test scaffolding, not the path under test, and borrowing
+ * the pool would entangle them with the `closeAll()` a suite runs between cases.
+ */
+async function withEndpointClient<T>(
+  endpoint: TestEndpoint,
+  fn: (client: Client) => Promise<T>
+): Promise<T> {
+  const client = await new Promise<Client>((resolve, reject) => {
+    const conn = new Client();
+    conn.on('ready', () => {
+      resolve(conn);
+    });
+    conn.on('error', reject);
+    conn.connect({
+      host: endpoint.host,
+      port: endpoint.port,
+      username: endpoint.user,
+      password: endpoint.password,
+      hostVerifier: (_key: Buffer, verify: (valid: boolean) => void): void => {
+        verify(true);
+      },
+    });
+  });
+
+  try {
+    return await fn(client);
+  } finally {
+    client.end();
+  }
+}
+
+/** An SFTP session on `endpoint`, opened and closed around `fn`. */
+async function withSftp<T>(
+  endpoint: TestEndpoint,
+  fn: (sftp: SFTPWrapper) => Promise<T>
+): Promise<T> {
+  return withEndpointClient(
+    endpoint,
+    (client) =>
+      new Promise<T>((resolve, reject) => {
+        client.sftp((err, sftp) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          fn(sftp).then(resolve, reject);
+        });
+      })
+  );
+}
+
+/** Absolute path of `name` inside the endpoint's remote home. */
+function remoteHomePath(endpoint: TestEndpoint, name: string): string {
+  return `${endpoint.remoteHomeDir.replace(/\\/g, '/')}/${name}`;
+}
+
+/**
+ * Write `content` to `name` in the endpoint's remote home, over SFTP.
+ *
+ * The reason this exists rather than a `fs.writeFileSync` on `remoteHomeDir`:
+ * that path is a directory on this machine only on the fixture tier. Under
+ * `ENDPOINT=sshd` it names a path inside the container, so a local write lands
+ * in a lookalike directory on the runner, the remote file never appears, and
+ * the test fails somewhere far away from the mistake — or worse, passes,
+ * because an assertion that a remote file is ABSENT is vacuously true when you
+ * are looking at the wrong machine.
+ */
+export async function writeRemoteFile(
+  endpoint: TestEndpoint,
+  name: string,
+  content: string | Buffer
+): Promise<void> {
+  const target = remoteHomePath(endpoint, name);
+  await withSftp(
+    endpoint,
+    (sftp) =>
+      new Promise<void>((resolve, reject) => {
+        sftp.writeFile(target, content, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      })
+  );
+}
+
+/**
+ * Whether `name` exists in the endpoint's remote home, asked over SFTP.
+ *
+ * Use this for both directions. Proving a file is absent is the assertion that
+ * matters most in the transfer suite — it is what "the upload was refused"
+ * means — and it is exactly the assertion a local `existsSync` turns into a
+ * false green on the sshd tier.
+ */
+export async function remoteFileExists(endpoint: TestEndpoint, name: string): Promise<boolean> {
+  const target = remoteHomePath(endpoint, name);
+  return withSftp(
+    endpoint,
+    (sftp) =>
+      new Promise<boolean>((resolve) => {
+        sftp.stat(target, (err) => {
+          resolve(err === undefined || err === null);
+        });
+      })
+  );
 }

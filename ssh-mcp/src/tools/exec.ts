@@ -10,6 +10,8 @@ import { z } from 'zod';
 import { MAX_TIMEOUT_SEC, MIN_TIMEOUT_SEC } from '../config/schema.js';
 import { TOOL_DESCRIPTION_APPROVAL_RULE } from '../safety/approval.js';
 import type { ToolTextResult } from '../errors.js';
+import { resolveCommand } from '../output/resolve.js';
+import type { OutputFormat } from '../output/resolve.js';
 import { execOnce } from '../ssh/exec.js';
 import type { CommandOutput } from '../ssh/exec.js';
 import { connectHost, observedCoverage, requireHost, type ToolContext } from './context.js';
@@ -37,7 +39,19 @@ export const execShape = {
   command: z
     .string()
     .describe(
-      '원격에서 실행할 셸 명령 전문. 서버는 이 문자열을 한 바이트도 변형하지 않으며, 분류·승인·실행 대상이 모두 이 문자열이다.'
+      '원격에서 실행할 셸 명령 전문. format이 "text"(기본)면 서버는 이 문자열을 한 바이트도 변형하지 않는다. ' +
+        'format이 "json"이면 화이트리스트에 있는 단일 명령에 한해 도구의 JSON 출력 플래그가 덧붙고, ' +
+        'df·ps는 인자가 고정 형태로 정규화된다 — 특히 ps는 선택 범위가 전체 프로세스로 넓어지므로 ' +
+        '특정 프로세스만 보려면 format을 "text"로 둘 것. 어느 경우든 분류·승인·감사·실행 대상은 ' +
+        '모두 실제로 실행되는 그 문자열이며, 승인 창에도 그것이 보인다.'
+    ),
+  format: z
+    .enum(['text', 'json'])
+    .optional()
+    .describe(
+      '"json"이면 stdout을 파싱해 parsed 필드로 함께 반환한다(실패 시 parsed는 null이고 parse_error에 사유가 담긴다). ' +
+        '파이프·리다이렉트·`;`·`&&`·서브셸이 있으면 재작성하지 않고 원문을 실행한다. ' +
+        '기본값 "text"에서는 응답에 parsed·parse_error 필드가 아예 추가되지 않는다.'
     ),
   timeout_sec: z
     .number()
@@ -64,10 +78,15 @@ async function handler(
   const args = execArgs.parse(raw);
   const host = requireHost(ctx.loadConfig(), args.host);
 
+  // Resolve before the gate, so classification, the approval window, the audit
+  // line and the channel below all see the same string (AC-J5).
+  const format: OutputFormat = args.format ?? 'text';
+  const resolved = resolveCommand(args.command, format);
+
   const decision = await approveCommand({
     toolName: 'exec',
     host,
-    command: args.command,
+    command: resolved.command,
     sessionId: null,
     confirmationToken: args.confirmation_token,
     ctx,
@@ -79,7 +98,7 @@ async function handler(
   const started = Date.now();
   let output: CommandOutput;
   try {
-    output = await execOnce(conn, args.command, {
+    output = await execOnce(conn, resolved.command, {
       timeoutMs: timeoutMsFor(host, args.timeout_sec),
       maxOutputBytes: host.maxOutputBytes,
     });
@@ -109,6 +128,10 @@ async function handler(
     duration_ms: output.duration_ms,
     background_job: output.background_job,
     coverage: observedCoverage(host.alias),
+    stdout_retention: output.stdout_retention,
+    stderr_retention: output.stderr_retention,
+    resolved,
+    maxOutputBytes: host.maxOutputBytes,
   });
 }
 

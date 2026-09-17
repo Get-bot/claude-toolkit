@@ -18,7 +18,12 @@ import { ERROR_CODES } from '../../src/errors.js';
 import { clearTokens } from '../../src/safety/tokens.js';
 import { closeAll } from '../../src/ssh/pool.js';
 import { resetSessions } from '../../src/ssh/session.js';
-import { authorizeKey, hostEntryFor, startEndpoint } from '../fixtures/endpoints.js';
+import {
+  authorizeKeyOverSsh,
+  hostEntryFor,
+  startEndpoint,
+  writeRemoteFile,
+} from '../fixtures/endpoints.js';
 import type { TestEndpoint } from '../fixtures/endpoints.js';
 import { generateClientKey } from '../fixtures/hostKeys.js';
 import {
@@ -98,7 +103,11 @@ beforeAll(async () => {
   home = createTmpHome('ssh-mcp-audit-');
   endpoint = await startEndpoint();
   const clientKey = generateClientKey();
-  authorizeKey(endpoint, clientKey.publicKey);
+  // 픽스처에서는 로컬 `fs`로, sshd 티어에서는 실제 SSH 설치 경로로 심습니다
+  // (`tests/fixtures/endpoints.ts:338`). 이 파일은 A7/A8 이후에 쓰였는데도
+  // 예전 모양인 `authorizeKey`를 그대로 물려받아, sshd 티어에서 훅 전체가
+  // throw 하고 이 파일의 테스트가 한 줄도 돌지 않았습니다.
+  await authorizeKeyOverSsh(endpoint, clientKey.publicKey);
   keyPath = path.join(ensureKeysDir(), 'fixture');
   fs.writeFileSync(keyPath, clientKey.privateKey, { encoding: 'utf8', mode: 0o600 });
   localDir = fs.mkdtempSync(path.join(endpoint.localSandboxDir, 'local-'));
@@ -122,6 +131,13 @@ beforeAll(async () => {
     approvalFallback: 'token',
     privateKeyPath: keyPath,
   });
+  // Small enough that a few kilobytes of output is excerpted, which is what
+  // gives a stream an `output_ref` to keep out of the audit file (D9, AC-O5).
+  const tight = hostEntryFor(endpoint, {
+    alias: 'tight',
+    privateKeyPath: keyPath,
+    maxOutputBytes: 1024,
+  });
   const metadataOnly: HostEntry & { alias?: string } = {
     ...hostEntryFor(endpoint, {
       alias: 'meta-only',
@@ -137,6 +153,7 @@ beforeAll(async () => {
     'ask-token': askToken,
     'ask-closed': askClosed,
     deny: denyHost,
+    tight,
     'meta-only': metadataOnly,
   });
 });
@@ -158,7 +175,7 @@ afterEach(() => {
 });
 
 describe('one line per call (AC20.1, AC20.2)', () => {
-  it('writes exactly seven lines for the seven tools', async () => {
+  it('writes exactly one line per tool, for every tool', async () => {
     const uploadSource = path.join(localDir, 'upload-src.txt');
     fs.writeFileSync(uploadSource, 'audit-payload\n', 'utf8');
     const remote = remotePath('audit-upload.txt');
@@ -199,10 +216,15 @@ describe('one line per call (AC20.1, AC20.2)', () => {
       expect((await harness.callTool('close_session', { session_id: sessionId })).isError).toBe(
         false
       );
+      // The two v1.1 readers are audited like everything else (AC-H5, AC-O6).
+      expect((await harness.callTool('history', { limit: 1 })).isError).toBe(false);
+      // An unknown reference is the one `fetch_output` call that needs no prior
+      // truncated command; a failed call still leaves its line (AC20.3).
+      expect((await harness.callTool('fetch_output', { output_ref: 'absent' })).isError).toBe(true);
     });
 
     const lines = readAudit();
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(TOOL_NAMES.length);
     expect(lines.map((line) => line.tool)).toEqual([
       'list_hosts',
       'exec',
@@ -211,8 +233,32 @@ describe('one line per call (AC20.1, AC20.2)', () => {
       'open_session',
       'run_in_session',
       'close_session',
+      'history',
+      'fetch_output',
     ]);
     expect(new Set(lines.map((line) => line.tool))).toEqual(new Set(TOOL_NAMES));
+  });
+
+  it('records the two readers with no command attached (AC-H5, AC-O6)', async () => {
+    await withClient({ elicitation: 'none' }, async (harness) => {
+      expect((await harness.callTool('history', { limit: 5 })).isError).toBe(false);
+      await harness.callTool('fetch_output', { output_ref: 'no-such-reference' });
+    });
+
+    const lines = readAudit();
+    expect(lines).toHaveLength(2);
+    expect(lines.map((line) => line.tool)).toEqual(['history', 'fetch_output']);
+    expect(lines[1]?.error_code).toBe(ERROR_CODES.output_expired);
+    for (const line of lines) {
+      expect(line.command).toBeNull();
+      expect(line.normalized_command).toBeNull();
+      expect(line.segments).toBeNull();
+      expect(line.command_grade).toBeNull();
+      expect(line.host).toBeNull();
+      // No approval was asked for and none was skipped.
+      expect(line.approval_outcome).toBe('not-required');
+      expect(line.server_cannot_verify_human_approval).toBe(false);
+    }
   });
 
   it('carries every required field on every line', async () => {
@@ -510,9 +556,11 @@ describe('what the file must not contain (AC20.5)', () => {
     // The sentinel lives in a file, so it appears in the output and nowhere in
     // the command: a hit in the audit file could only have come from stdout.
     const sentinel = 'AUDIT-OUTPUT-SENTINEL-8f21c';
-    const payload = path.join(endpoint.remoteHomeDir, 'audit-sentinel.txt');
-    fs.writeFileSync(payload, `${sentinel}\n`, 'utf8');
-    const command = `cat ${payload.replace(/\\/g, '/')}`;
+    // 원격에 있어야 `cat`이 읽습니다. 로컬 `fs`로 `remoteHomeDir`에 쓰면 sshd
+    // 티어에서는 러너 쪽 엉뚱한 경로가 되고, 단언은 stdout을 한 번도 보지
+    // 못한 채 초록이 됩니다.
+    await writeRemoteFile(endpoint, 'audit-sentinel.txt', `${sentinel}\n`);
+    const command = `cat ${remotePath('audit-sentinel.txt')}`;
 
     await withClient({ elicitation: 'none' }, async (harness) => {
       const result = await harness.callTool('exec', { host: 'auto', command });
@@ -524,6 +572,33 @@ describe('what the file must not contain (AC20.5)', () => {
     expect(line?.command).toBe(command);
     expect(line?.stdout_bytes).toBe(sentinel.length + 1);
     expect(line?.stderr_bytes).toBe(0);
+  });
+
+  it('keeps output_ref out of the audit line (D9, AC-O5)', async () => {
+    // 60 lines of 35 bytes: over the host's 1 KiB cap so the stream is
+    // excerpted, and under `retainCapFor(1024)` = 4 KiB so it is also retained.
+    // The response therefore carries a reference, which is the thing that must
+    // appear in the response and nowhere else.
+    const command = 'awk \'BEGIN{for(i=0;i<60;i++) print "ssh-mcp-output-ref-audit-line-0000"}\'';
+
+    const ref = await withClient({ elicitation: 'none' }, async (harness) => {
+      const result = await harness.callTool('exec', { host: 'tight', command });
+      expect(result.isError, result.text).toBe(false);
+      const meta = result.body.stdout_meta as Record<string, unknown>;
+      expect(meta.truncated).toBe(true);
+      expect(typeof meta.output_ref).toBe('string');
+      return meta.output_ref as string;
+    });
+
+    // The audit schema is `.strict()` (`src/audit.ts`), so a record carrying
+    // `output_ref` would be rejected outright and no line would be written.
+    // Both halves are asserted: the field is absent, and the value never
+    // appears anywhere in the file.
+    const lines = readAudit();
+    expect(lines).toHaveLength(1);
+    expect(Object.prototype.hasOwnProperty.call(lines[0] ?? {}, 'output_ref')).toBe(false);
+    expect(lines[0]?.truncated).toBe(true);
+    expect(fs.readFileSync(auditFilePath(), 'utf8')).not.toContain(ref);
   });
 });
 

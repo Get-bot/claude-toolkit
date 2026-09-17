@@ -12,12 +12,15 @@
 // The stdio plumbing (spawn, line-delimited JSON-RPC framing, child-fate reporting) lives in
 // tests/fixtures/stdioServer.ts, shared with realHost.test.ts.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TOOL_NAMES } from '../../src/audit.js';
 import {
   MCP_PROTOCOL_VERSION,
+  RESPONSE_TIMEOUT_MS,
   launchStdioServer,
   npxLaunch,
   sendFrame,
@@ -34,15 +37,19 @@ const PKG_ROOT = resolve(__dirname, '..', '..');
 /** The package's only `bin` entry (package.json → bin). */
 const BIN_NAME = 'ssh-mcp';
 
-const EXPECTED_TOOLS = [
-  'list_hosts',
-  'exec',
-  'upload',
-  'download',
-  'open_session',
-  'run_in_session',
-  'close_session',
-].sort();
+/**
+ * The tool surface, taken from the canonical list in `src/audit.ts` instead of
+ * retyped here.
+ *
+ * The retyped copy was wrong within one release: v1.1 added `history` and
+ * `fetch_output`, and a hardcoded seven names plus `toHaveLength(7)` turns that
+ * into a red package-smoke job that says nothing about packaging. Deriving it
+ * sharpens the claim rather than weakening it — "the packed tarball exposes
+ * exactly the surface the source declares" is what this leg is for, and a
+ * server and a `TOOL_NAMES` that disagree is precisely the bug worth catching.
+ * The count stays visible in the test name, which cannot go stale either.
+ */
+const EXPECTED_TOOLS = [...TOOL_NAMES].sort();
 
 function resolveEntrypoint(): Launch {
   const tgz = process.env.SSH_MCP_TGZ;
@@ -71,24 +78,33 @@ function resolveEntrypoint(): Launch {
   );
 }
 
+// Every spawn in this file gets the same throwaway home. The server writes state.json on
+// `initialize` (last-client record) and would do so into the real ~/.ssh-mcp if left unpointed —
+// on purpose in the smoke test below, and by regression in the help tests, whose failure mode is
+// exactly "dropped into server mode". createTmpHome() redirects SSH_MCP_HOME (and HOME/USERPROFILE)
+// on process.env *before* any spawn, and each spawn's explicit `env` still pins the child to it
+// even if something upstream changes process.env later in the run.
+let home: TmpHome;
+
+beforeAll(() => {
+  home = createTmpHome('ssh-mcp-e2e-package-');
+});
+
+afterAll(() => {
+  // Must run before home.cleanup() (which restores process.env) — see tmpHome.ts.
+  assertNoWritesOutside(home);
+  home.cleanup();
+});
+
 describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
   let server: StdioServer;
-  let home: TmpHome;
 
   beforeAll(() => {
-    // The spawned server writes state.json on `initialize` (last-client record) and would do so
-    // into the real ~/.ssh-mcp if left unpointed. createTmpHome() redirects SSH_MCP_HOME (and
-    // HOME/USERPROFILE) on process.env *before* the spawn below, and the explicit `env` still
-    // pins the child to it even if something upstream changes process.env later in the run.
-    home = createTmpHome('ssh-mcp-e2e-package-');
     server = launchStdioServer(resolveEntrypoint(), { ...process.env, SSH_MCP_HOME: home.dir });
   });
 
   afterAll(() => {
     server?.child.kill();
-    // Must run before home.cleanup() (which restores process.env) — see tmpHome.ts.
-    assertNoWritesOutside(home);
-    home.cleanup();
   });
 
   it("responds to initialize with serverInfo.name === 'ssh-mcp'", async () => {
@@ -107,7 +123,7 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
     expect(response.result?.serverInfo?.name).toBe('ssh-mcp');
   });
 
-  it('accepts notifications/initialized and then lists exactly the 7 spec tools', async () => {
+  it(`accepts notifications/initialized and then lists exactly the ${String(EXPECTED_TOOLS.length)} spec tools`, async () => {
     // Notifications carry no `id` and expect no response frame.
     sendFrame(server, { jsonrpc: '2.0', method: 'notifications/initialized' } as JsonRpcRequest);
 
@@ -115,7 +131,7 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
     const response = await waitForResponse(server, 2);
 
     const names = (response.result?.tools ?? []).map((t) => t.name).sort();
-    expect(names).toHaveLength(7);
+    expect(names).toHaveLength(EXPECTED_TOOLS.length);
     expect(names).toEqual(EXPECTED_TOOLS);
   });
 
@@ -124,5 +140,75 @@ describe('package e2e — npm pack / npx smoke (AC1, AC2)', () => {
   // banner, a deprecation warning or a stray console.log on the wrong stream all land here.
   it('put nothing but JSON-RPC frames on stdout (AC2.3)', () => {
     expect(server.nonJsonStdoutLines).toEqual([]);
+  });
+});
+
+// The routing in index.ts has no unit test — importing that module runs the CLI — so the only
+// place "the help token actually reaches the help code" can be checked is here, against the
+// real entrypoint. It is worth checking: all three tokens used to fall through into server mode,
+// where the process printed nothing and waited on stdin until it was killed. A regression would
+// look exactly like that again, which is why these assert termination as much as output.
+//
+// Under SSH_MCP_TGZ every spawn is an npx round-trip, so the cases are only what a real process
+// can prove: each help spelling is routed; a forwarded command's *default* writer is stdout
+// (`install` and `host add` used to put their usage on stderr, and the unit tests only see
+// injected writers); words after the command are forwarded; a usage error's exit code reaches
+// the process. Which commands are routable is settled by the `COMMANDS` table and the compiler,
+// and `help <command>` forwarding for every entry is covered in tests/unit/helpCommand.test.ts.
+describe('package e2e — top-level help reaches the terminal, not the server', () => {
+  function runHelpBinary(extra: string[]): SpawnSyncReturns<string> {
+    const { cmd, args } = resolveEntrypoint();
+    return spawnSync(cmd, [...args, ...extra], {
+      encoding: 'utf8',
+      // Closed stdin, so a server-mode regression ends instead of hanging the suite. The timeout
+      // is the backstop for a build that ignores EOF, and it is the fixture's measured npx budget
+      // rather than a smaller guess — under SSH_MCP_TGZ every one of these goes through npx.
+      input: '',
+      timeout: RESPONSE_TIMEOUT_MS,
+      env: { ...process.env, SSH_MCP_HOME: home.dir },
+    });
+  }
+
+  it.each(['--help', '-h', 'help'])('`%s` prints the command list and exits 0', (token) => {
+    const result = runHelpBinary([token]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: ssh-mcp');
+    for (const command of ['install', 'host add', 'host list', 'doctor']) {
+      expect(result.stdout).toContain(command);
+    }
+    // Server mode announces itself on stderr; help mode has nothing to say there.
+    expect(result.stderr).not.toContain('server ready');
+  });
+
+  // `install --help` used to write its usage to stderr, so `ssh-mcp help install > out.txt`
+  // produced an empty file with exit 0 while `help doctor` did not — same verb, opposite behavior.
+  it('`help install` forwards to that command, on stdout', () => {
+    const result = runHelpBinary(['help', 'install']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: ssh-mcp install');
+    // Not `toBe('')`: under npx the wrapper may add its own stderr noise. What must not be
+    // there is the usage itself.
+    expect(result.stderr).not.toContain('Usage:');
+  });
+
+  // `host add` is the other command whose usage moved to stdout, and the group usage with `add`
+  // silently dropped is not what anyone typing this meant.
+  it('`help host add` reaches `host add`, not the host group, on stdout', () => {
+    const result = runHelpBinary(['help', 'host', 'add']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: ssh-mcp host add');
+    expect(result.stderr).not.toContain('Usage:');
+  });
+
+  it('refuses a command it does not have, on stderr', () => {
+    const result = runHelpBinary(['help', 'bogus']);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('bogus');
   });
 });

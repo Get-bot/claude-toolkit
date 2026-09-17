@@ -222,10 +222,16 @@ function backupFiles(): string[] {
 }
 
 describe('argument parsing', () => {
-  it('prints usage and exits 0 for --help, with no client given', async () => {
+  it('prints usage to stdout and exits 0 for --help, with no client given', async () => {
     const { deps, probe } = harness();
-    expect(await runInstall(['--help'], deps)).toBe(EXIT_OK);
-    expect(probe.text()).toContain('Usage: ssh-mcp install [claude-code|claude-desktop]');
+    const out: string[] = [];
+    const code = await runInstall(['--help'], { ...deps, out: (text) => void out.push(text) });
+    expect(code).toBe(EXIT_OK);
+    // Help that was asked for is not an error: it goes to stdout so that
+    // `install --help | less` has something to show. Everything else this
+    // command prints stays on the stderr writer, which must not carry it.
+    expect(out.join('\n')).toContain('Usage: ssh-mcp install [claude-code|claude-desktop]');
+    expect(probe.text()).not.toContain('Usage:');
     expect(probe.calls).toHaveLength(0);
   });
 
