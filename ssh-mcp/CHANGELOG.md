@@ -2,7 +2,7 @@
 
 사용자에게 보이는 변경만 적습니다. 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르고, 버전은 [SemVer](https://semver.org/lang/ko/)를 따릅니다. **0.x 동안은 minor 올림이 호환성을 깰 수 있습니다.** `npx -y @get-bot/ssh-mcp`처럼 버전을 지정하지 않고 등록한 클라이언트는 다음 세션부터 자동으로 새 버전을 받으므로, 호환성에 영향이 있는 항목은 아래에서 **굵게** 표시합니다.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-09-17
 
 ### Added
 
@@ -94,7 +94,7 @@
 - append-only JSONL 감사 로그(호출당 1줄, 10 MiB × 4 회전, 출력 본문 미기록).
 - 원격 셸 지원: `bash`, `zsh`, `sh`/`dash`, busybox `ash`. `fish`·`cmd`·PowerShell은 `open_session` 미지원(`exec`는 동작).
 
-[0.3.0]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.1...HEAD
+[0.3.0]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.1...ssh-mcp-v0.3.0
 [0.2.1]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.2.0...ssh-mcp-v0.2.1
 [0.2.0]: https://github.com/Get-bot/claude-toolkit/compare/ssh-mcp-v0.1.0...ssh-mcp-v0.2.0
 [0.1.0]: https://github.com/Get-bot/claude-toolkit/releases/tag/ssh-mcp-v0.1.0
